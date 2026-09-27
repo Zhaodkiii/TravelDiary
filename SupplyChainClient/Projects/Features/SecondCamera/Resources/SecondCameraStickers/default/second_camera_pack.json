@@ -1,0 +1,37 @@
+{
+  "id": "second-camera-default",
+  "title": "SecondCamera 默认贴纸",
+  "author": "SecondCamera",
+  "items": [
+    {
+      "id": "sticker_001",
+      "name": "Sticker 1",
+      "file": "second_camera_sticker_001.png"
+    },
+    {
+      "id": "sticker_002",
+      "name": "Sticker 2",
+      "file": "second_camera_sticker_002.png"
+    },
+    {
+      "id": "sticker_003",
+      "name": "Sticker 3",
+      "file": "second_camera_sticker_003.png"
+    },
+    {
+      "id": "sticker_004",
+      "name": "Sticker 4",
+      "file": "second_camera_sticker_004.png"
+    },
+    {
+      "id": "sticker_005",
+      "name": "Sticker 5",
+      "file": "second_camera_sticker_005.png"
+    },
+    {
+      "id": "sticker_006",
+      "name": "Sticker 6",
+      "file": "second_camera_sticker_006.png"
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+//
+//  Public+CustomCameraTime.swift of Timer
+//
+//  Created by Tomasz Kurylik
+//    - Twitter: https://twitter.com/tkurylik
+//    - Mail: tomasz.kurylik@mijick.com
+//    - GitHub: https://github.com/FulcrumOne
+//
+//  Copyright ©2023 Mijick. All rights reserved.
+
+
+
+// MARK: - Initialisation
+
+import Combine
+import Foundation
+
+extension CustomCameraTime {
+    internal init(hours: Double = 0, minutes: Double = 0, seconds: Double = 0, milliseconds: Int = 0) {
+        let hoursInterval = hours * 60 * 60
+        let minutesInterval = minutes * 60
+        let secondsInterval = seconds
+        let millisecondsInterval = Double(milliseconds) / 1000
+        
+        let timeInterval = hoursInterval + minutesInterval + secondsInterval + millisecondsInterval
+        self.init(timeInterval: timeInterval)
+    }
+    internal init(timeInterval: TimeInterval) {
+        let millisecondsInt = timeInterval == .infinity ? Self.maxMilliseconds : Int(timeInterval * 1000)
+
+        let hoursDiv = 1000 * 60 * 60
+        let minutesDiv = 1000 * 60
+        let secondsDiv = 1000
+        let millisecondsDiv = 1
+
+        hours = millisecondsInt / hoursDiv
+        minutes = (millisecondsInt % hoursDiv) / minutesDiv
+        seconds = (millisecondsInt % hoursDiv % minutesDiv) / secondsDiv
+        milliseconds = (millisecondsInt % hoursDiv % minutesDiv % secondsDiv) / millisecondsDiv
+    }
+    internal static var zero: CustomCameraTime { .init() }
+    internal static var max: CustomCameraTime { .init(hours: 60 * 60 * 24 * 365 * 100) }
+}
+private extension CustomCameraTime {
+    static var maxMilliseconds: Int { Int(max.toTimeInterval() * 1000) }
+}
+
+// MARK: - Converting to TimeInterval
+extension CustomCameraTime {
+    /// Converts CustomCameraTime values to TimeInterval
+    internal func toTimeInterval() -> TimeInterval {
+        let hoursAsTimeInterval = 60 * 60 * TimeInterval(hours)
+        let minutesAsTimeInterval = 60 * TimeInterval(minutes)
+        let secondsAsTimeInterval = 1 * TimeInterval(seconds)
+        let millisecondsAsTimeInterval = 0.001 * TimeInterval(milliseconds)
+
+        return hoursAsTimeInterval + minutesAsTimeInterval + secondsAsTimeInterval + millisecondsAsTimeInterval
+    }
+}
+
+// MARK: - Converting To String
+extension CustomCameraTime {
+    /// Converts the object to a string representation. Output can be customized by modifying the formatter block.
+    /// - Parameters:
+    ///     - formatter:  A formatter that creates string representations of quantities of time
+    internal func toString(_ formatter: (DateComponentsFormatter) -> DateComponentsFormatter = { $0 }) -> String {
+        formatter(defaultTimeFormatter).string(from: toTimeInterval()) ?? ""
+    }
+}

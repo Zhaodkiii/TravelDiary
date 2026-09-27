@@ -1,0 +1,5 @@
+/* 隐私权限用途说明 */
+"NSCameraUsageDescription" = "允许访问相机后，可以拍摄照片和视频。";
+"NSMicrophoneUsageDescription" = "允许访问麦克风后，可以录制带声音的视频。";
+"NSPhotoLibraryUsageDescription" = "允许访问相册后，可以选择照片和视频进行预览与编辑。";
+"NSPhotoLibraryAddUsageDescription" = "允许保存到相册后，可以把拍摄和编辑结果保存到本机相册。";

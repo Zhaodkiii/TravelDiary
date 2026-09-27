@@ -1,0 +1,162 @@
+//
+//  CustomCameraManager+VideoOutput.swift of MijickCamera
+//
+//  Created by Tomasz Kurylik. Sending ❤️ from Kraków!
+//    - Mail: tomasz.kurylik@mijick.com
+//    - GitHub: https://github.com/FulcrumOne
+//    - Medium: https://medium.com/@mijick
+//
+//  Copyright ©2024 Mijick. All rights reserved.
+
+
+
+import AVFoundation
+import Combine
+import MetalKit
+import SwiftUI
+
+@preconcurrency import AVKit
+
+@MainActor class CustomCameraManagerVideoOutput: NSObject {
+    private(set) var parent: CustomCameraManager!
+    private(set) var output: AVCaptureMovieFileOutput = .init()
+    private(set) var timer: CustomCameraTimer = .init(.camera)
+    private(set) var recordingTime: CustomCameraTime = .zero
+    private(set) var firstRecordedFrame: UIImage?
+}
+
+// MARK: Setup
+extension CustomCameraManagerVideoOutput {
+    func setup(parent: CustomCameraManager) throws(CustomCameraError) {
+        self.parent = parent
+        try parent.captureSession.add(output: output)
+    }
+}
+
+// MARK: Reset
+extension CustomCameraManagerVideoOutput {
+    func reset() {
+        timer.reset()
+    }
+}
+
+
+// MARK: - CAPTURE VIDEO
+
+
+
+// MARK: Toggle
+extension CustomCameraManagerVideoOutput {
+    func toggleRecording() { switch output.isRecording {
+        case true: stopRecording()
+        case false: startRecording()
+    }}
+}
+
+// MARK: Start Recording
+private extension CustomCameraManagerVideoOutput {
+    func startRecording() {
+        guard let url = prepareUrlForVideoRecording() else { return }
+
+        configureOutput()
+        storeLastFrame()
+        output.startRecording(to: url, recordingDelegate: self)
+        startRecordingTimer()
+        parent.objectWillChange.send()
+    }
+}
+private extension CustomCameraManagerVideoOutput {
+    func prepareUrlForVideoRecording() -> URL? {
+        FileManager.prepareURLForVideoOutput()
+    }
+    func configureOutput() {
+        guard let connection = output.connection(with: .video), connection.isVideoMirroringSupported else { return }
+
+        connection.isVideoMirrored = parent.attributes.mirrorOutput ? parent.attributes.cameraPosition != .front : parent.attributes.cameraPosition == .front
+        connection.videoOrientation = parent.attributes.deviceOrientation
+    }
+    func storeLastFrame() {
+        guard let texture = parent.cameraMetalView.currentDrawable?.texture,
+              let ciImage = CIImage(mtlTexture: texture, options: nil),
+              let cgImage = parent.cameraMetalView.ciContext.createCGImage(ciImage, from: ciImage.extent)
+        else { return }
+
+        firstRecordedFrame = UIImage(cgImage: cgImage, scale: 1.0, orientation: parent.attributes.deviceOrientation.toImageOrientation())
+    }
+    func startRecordingTimer() { try? timer
+        .publish(every: 1) { [self] in
+            recordingTime = $0
+            parent.objectWillChange.send()
+        }
+        .start()
+    }
+}
+
+// MARK: Stop Recording
+private extension CustomCameraManagerVideoOutput {
+    func stopRecording() {
+        presentLastFrame()
+        output.stopRecording()
+        timer.reset()
+    }
+}
+private extension CustomCameraManagerVideoOutput {
+    func presentLastFrame() {
+        guard let firstRecordedFrame = CustomCameraMedia(data: firstRecordedFrame) else { return }
+        parent.presentCapturedMedia(firstRecordedFrame)
+    }
+}
+
+// MARK: Receive Data
+extension CustomCameraManagerVideoOutput: @preconcurrency AVCaptureFileOutputRecordingDelegate {
+    func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: (any Error)?) { Task {
+        let videoURL = try await prepareVideo(outputFileURL: outputFileURL, cameraFilters: parent.attributes.cameraFilters)
+        guard let capturedVideo = CustomCameraMedia(data: videoURL) else { return }
+
+        await Task.sleep(seconds: Animation.duration)
+        parent.replacePresentedCapturedMedia(capturedVideo)
+    }}
+}
+private extension CustomCameraManagerVideoOutput {
+    func prepareVideo(outputFileURL: URL, cameraFilters: [CIFilter]) async throws -> URL {
+        if cameraFilters.isEmpty { return outputFileURL }
+
+        let asset = AVAsset(url: outputFileURL)
+        let videoComposition = try await AVVideoComposition.applyFilters(to: asset) { self.applyFiltersToVideo($0, cameraFilters) }
+        let fileUrl = FileManager.prepareURLForVideoOutput()
+        let exportSession = prepareAssetExportSession(asset, fileUrl, videoComposition)
+
+        try await exportVideo(exportSession, fileUrl)
+        return fileUrl ?? outputFileURL
+    }
+}
+private extension CustomCameraManagerVideoOutput {
+    nonisolated func applyFiltersToVideo(_ request: AVAsynchronousCIImageFilteringRequest, _ filters: [CIFilter]) {
+        let videoFrame = prepareVideoFrame(request, filters)
+        request.finish(with: videoFrame, context: nil)
+    }
+    nonisolated func exportVideo(_ exportSession: AVAssetExportSession?, _ fileUrl: URL?) async throws { if let fileUrl {
+        if #available(iOS 18, *) { try await exportSession?.export(to: fileUrl, as: .mov) }
+        else { await exportSession?.export() }
+    }}
+}
+private extension CustomCameraManagerVideoOutput {
+    nonisolated func prepareVideoFrame(_ request: AVAsynchronousCIImageFilteringRequest, _ filters: [CIFilter]) -> CIImage { request
+        .sourceImage
+        .clampedToExtent()
+        .applyingFilters(filters)
+    }
+    nonisolated func prepareAssetExportSession(_ asset: AVAsset, _ fileUrl: URL?, _ composition: AVVideoComposition?) -> AVAssetExportSession? {
+        let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1920x1080)
+        export?.outputFileType = .mov
+        export?.outputURL = fileUrl
+        export?.videoComposition = composition
+        return export
+    }
+}
+
+
+// MARK: - HELPERS
+fileprivate extension CustomCameraTimerID {
+    static let camera: CustomCameraTimerID = .init(rawValue: "mijick-camera")
+}

@@ -1,0 +1,554 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A1OSS0012FFB252D00137E68 /* CoreTelephony.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1OSS0112FFB252D00137E68 /* CoreTelephony.framework */; };
+		A1OSS0022FFB252D00137E68 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1OSS0122FFB252D00137E68 /* SystemConfiguration.framework */; };
+		A1OSS0032FFB252D00137E68 /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A1OSS0132FFB252D00137E68 /* libresolv.tbd */; };
+		A1TEST0D2FFB401000137E68 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1TEST0C2FFB401000137E68 /* XCTest.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A1TEST082FFB401000137E68 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 85EA7EEA2FFB252D00137E68 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 85EA7EF12FFB252D00137E68;
+			remoteInfo = SupplyChainClient;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		85EA7EF22FFB252D00137E68 /* SupplyChainClient.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SupplyChainClient.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1OSS0112FFB252D00137E68 /* CoreTelephony.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreTelephony.framework; path = System/Library/Frameworks/CoreTelephony.framework; sourceTree = SDKROOT; };
+		A1OSS0122FFB252D00137E68 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
+		A1OSS0132FFB252D00137E68 /* libresolv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libresolv.tbd; path = usr/lib/libresolv.tbd; sourceTree = SDKROOT; };
+		A1TEST012FFB401000137E68 /* SupplyChainClientTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SupplyChainClientTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1TEST0C2FFB401000137E68 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/iPhoneOS.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		85EA7F632FFB34EA00137E68 /* Exceptions for "SupplyChainClient" folder in "SupplyChainClient" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"Core/Utilities/Objective-C/PureLayout/LICENSE",
+				Info.plist,
+			);
+			target = 85EA7EF12FFB252D00137E68 /* SupplyChainClient */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		85EA7EF42FFB252D00137E68 /* SupplyChainClient */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				85EA7F632FFB34EA00137E68 /* Exceptions for "SupplyChainClient" folder in "SupplyChainClient" target */,
+			);
+			path = SupplyChainClient;
+			sourceTree = "<group>";
+		};
+		A1TEST062FFB401000137E68 /* SupplyChainClientTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SupplyChainClientTests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		85EA7EEF2FFB252D00137E68 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1OSS0022FFB252D00137E68 /* SystemConfiguration.framework in Frameworks */,
+				A1OSS0012FFB252D00137E68 /* CoreTelephony.framework in Frameworks */,
+				A1OSS0032FFB252D00137E68 /* libresolv.tbd in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1TEST042FFB401000137E68 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1TEST0D2FFB401000137E68 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		85EA7EE92FFB252D00137E68 = {
+			isa = PBXGroup;
+			children = (
+				85EA7EF42FFB252D00137E68 /* SupplyChainClient */,
+				A1TEST062FFB401000137E68 /* SupplyChainClientTests */,
+				85EA7EF32FFB252D00137E68 /* Products */,
+				A1OSS0202FFB252D00137E68 /* Frameworks */,
+			);
+			sourceTree = "<group>";
+		};
+		85EA7EF32FFB252D00137E68 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				85EA7EF22FFB252D00137E68 /* SupplyChainClient.app */,
+				A1TEST012FFB401000137E68 /* SupplyChainClientTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A1OSS0202FFB252D00137E68 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A1OSS0132FFB252D00137E68 /* libresolv.tbd */,
+				A1OSS0122FFB252D00137E68 /* SystemConfiguration.framework */,
+				A1OSS0112FFB252D00137E68 /* CoreTelephony.framework */,
+				A1TEST0C2FFB401000137E68 /* XCTest.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		85EA7EF12FFB252D00137E68 /* SupplyChainClient */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 85EA7F022FFB252E00137E68 /* Build configuration list for PBXNativeTarget "SupplyChainClient" */;
+			buildPhases = (
+				85EA7EEE2FFB252D00137E68 /* Sources */,
+				85EA7EEF2FFB252D00137E68 /* Frameworks */,
+				85EA7EF02FFB252D00137E68 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				85EA7EF42FFB252D00137E68 /* SupplyChainClient */,
+			);
+			name = SupplyChainClient;
+			packageProductDependencies = (
+			);
+			productName = SupplyChainClient;
+			productReference = 85EA7EF22FFB252D00137E68 /* SupplyChainClient.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A1TEST022FFB401000137E68 /* SupplyChainClientTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1TEST0B2FFB401000137E68 /* Build configuration list for PBXNativeTarget "SupplyChainClientTests" */;
+			buildPhases = (
+				A1TEST032FFB401000137E68 /* Sources */,
+				A1TEST042FFB401000137E68 /* Frameworks */,
+				A1TEST052FFB401000137E68 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A1TEST072FFB401000137E68 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A1TEST062FFB401000137E68 /* SupplyChainClientTests */,
+			);
+			name = SupplyChainClientTests;
+			packageProductDependencies = (
+			);
+			productName = SupplyChainClientTests;
+			productReference = A1TEST012FFB401000137E68 /* SupplyChainClientTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		85EA7EEA2FFB252D00137E68 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					85EA7EF12FFB252D00137E68 = {
+						CreatedOnToolsVersion = 26.6;
+					};
+					A1TEST022FFB401000137E68 = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = 85EA7EF12FFB252D00137E68;
+					};
+				};
+			};
+			buildConfigurationList = 85EA7EED2FFB252D00137E68 /* Build configuration list for PBXProject "SupplyChainClient" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				"zh-Hans",
+			);
+			mainGroup = 85EA7EE92FFB252D00137E68;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 85EA7EF32FFB252D00137E68 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				85EA7EF12FFB252D00137E68 /* SupplyChainClient */,
+				A1TEST022FFB401000137E68 /* SupplyChainClientTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		85EA7EF02FFB252D00137E68 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1TEST052FFB401000137E68 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		85EA7EEE2FFB252D00137E68 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1TEST032FFB401000137E68 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A1TEST072FFB401000137E68 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 85EA7EF12FFB252D00137E68 /* SupplyChainClient */;
+			targetProxy = A1TEST082FFB401000137E68 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		85EA7F002FFB252E00137E68 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 4AN6PV98G7;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		85EA7F012FFB252E00137E68 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 4AN6PV98G7;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		85EA7F032FFB252E00137E68 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = SupplyChainClient/SupplyChainClient.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4AN6PV98G7;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C",
+					"$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/AliyunOSSSDK",
+					"$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/AliyunOSSSDK/OSSTask",
+					"$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/AliyunOSSSDK/OSSFileLog",
+					"$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/AliyunOSSSDK/OSSIPv6",
+					"$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/PureLayout",
+				);
+				INFOPLIST_FILE = SupplyChainClient/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access to take photos and videos.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow microphone access to record videos with sound.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving to Photos so captured and edited media can be stored on this device.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow photo library access to choose photos and videos for preview and editing.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/Modules/PureLayout/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/Modules/AliyunOSSSDK/module.modulemap";
+				PRODUCT_BUNDLE_IDENTIFIER = cn.zhaodk.SupplyChainClient;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "SupplyChainClient/Core/Utilities/Objective-C/SupplyChainClient-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		85EA7F042FFB252E00137E68 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = SupplyChainClient/SupplyChainClient.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4AN6PV98G7;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C",
+					"$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/AliyunOSSSDK",
+					"$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/AliyunOSSSDK/OSSTask",
+					"$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/AliyunOSSSDK/OSSFileLog",
+					"$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/AliyunOSSSDK/OSSIPv6",
+					"$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/PureLayout",
+				);
+				INFOPLIST_FILE = SupplyChainClient/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access to take photos and videos.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow microphone access to record videos with sound.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving to Photos so captured and edited media can be stored on this device.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow photo library access to choose photos and videos for preview and editing.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/Modules/PureLayout/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/Modules/AliyunOSSSDK/module.modulemap";
+				PRODUCT_BUNDLE_IDENTIFIER = cn.zhaodk.SupplyChainClient;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "SupplyChainClient/Core/Utilities/Objective-C/SupplyChainClient-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		A1TEST092FFB401000137E68 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4AN6PV98G7;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/Modules/PureLayout/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/Modules/AliyunOSSSDK/module.modulemap";
+				PRODUCT_BUNDLE_IDENTIFIER = cn.zhaodk.SupplyChainClientTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SupplyChainClient.app/SupplyChainClient";
+			};
+			name = Debug;
+		};
+		A1TEST0A2FFB401000137E68 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4AN6PV98G7;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/Modules/PureLayout/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/SupplyChainClient/Core/Utilities/Objective-C/Modules/AliyunOSSSDK/module.modulemap";
+				PRODUCT_BUNDLE_IDENTIFIER = cn.zhaodk.SupplyChainClientTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SupplyChainClient.app/SupplyChainClient";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		85EA7EED2FFB252D00137E68 /* Build configuration list for PBXProject "SupplyChainClient" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				85EA7F002FFB252E00137E68 /* Debug */,
+				85EA7F012FFB252E00137E68 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		85EA7F022FFB252E00137E68 /* Build configuration list for PBXNativeTarget "SupplyChainClient" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				85EA7F032FFB252E00137E68 /* Debug */,
+				85EA7F042FFB252E00137E68 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1TEST0B2FFB401000137E68 /* Build configuration list for PBXNativeTarget "SupplyChainClientTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1TEST092FFB401000137E68 /* Debug */,
+				A1TEST0A2FFB401000137E68 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 85EA7EEA2FFB252D00137E68 /* Project object */;
+}

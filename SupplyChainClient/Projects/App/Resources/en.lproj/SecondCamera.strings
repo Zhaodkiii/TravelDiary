@@ -1,0 +1,48 @@
+/* SecondCamera */
+"second_camera.home.title" = "Camera";
+"second_camera.home.open" = "Open Camera";
+"second_camera.home.subtitle" = "Based on Camera-main / SparkClient CustomCamera. Supports photo and video capture.";
+"second_camera.tab.title" = "Camera";
+
+"second_camera.preview.back" = "Back";
+"second_camera.preview.done" = "Done";
+"second_camera.preview.save" = "Save";
+"second_camera.preview.saved" = "Saved to Photos";
+"second_camera.preview.save_failed" = "Couldn't save";
+
+"second_camera.editor.draw" = "Draw";
+"second_camera.editor.crop" = "Crop";
+"second_camera.editor.cancel" = "Cancel";
+"second_camera.editor.confirm" = "Confirm";
+"second_camera.editor.discard_changes_title" = "Discard changes?";
+"second_camera.editor.discard_changes_message" = "Your current edits will not be saved.";
+"second_camera.editor.discard" = "Discard";
+"second_camera.sticker.title" = "Stickers";
+
+"second_camera.quality.title" = "Image Quality";
+"second_camera.quality.original" = "Original";
+"second_camera.quality.high" = "High";
+"second_camera.quality.standard" = "Standard";
+"second_camera.quality.compressed" = "Compressed";
+
+"second_camera.error.no_media" = "No media available";
+"second_camera.error.load_failed" = "Couldn't load media";
+"second_camera.error.editor_init_failed" = "Couldn't start the image editor";
+"second_camera.error.editor_generic" = "Editing Error";
+"second_camera.error.no_image_to_save" = "No image to save";
+"second_camera.error.ok" = "OK";
+
+"second_camera.multi.add_more" = "Add";
+"second_camera.multi.continue_capture" = "Continue Capturing";
+"second_camera.multi.pick_from_library" = "Choose from Library";
+"second_camera.multi.delete" = "Delete";
+"second_camera.multi.delete_confirm_title" = "Delete this photo?";
+"second_camera.multi.delete_confirm_message" = "It can't be restored in this preview session.";
+"second_camera.multi.delete_confirm_action" = "Delete";
+"second_camera.multi.max_count_message" = "You can select up to %d items";
+"second_camera.multi.processing_progress" = "Processing %d/%d";
+"second_camera.multi.delete_last_title" = "Delete the last photo?";
+"second_camera.multi.delete_last_message" = "You'll return to the camera after deleting.";
+"second_camera.multi.discard_all_title" = "Discard all photos?";
+"second_camera.multi.discard_all_message" = "Captured photos will not be saved.";
+"second_camera.multi.discard_action" = "Discard";

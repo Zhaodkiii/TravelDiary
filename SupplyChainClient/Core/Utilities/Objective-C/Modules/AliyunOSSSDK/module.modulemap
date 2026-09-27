@@ -1,0 +1,13 @@
+module AliyunOSSSDK {
+    umbrella header "../../AliyunOSSSDK/OSSService.h"
+    exclude header "../../AliyunOSSSDK/OSSCompat.h"
+    exclude header "../../AliyunOSSSDK/OSSInputStreamHelper.h"
+    exclude header "../../AliyunOSSSDK/OSSXMLDictionary.h"
+    exclude header "../../AliyunOSSSDK/aos_crc64.h"
+    exclude header "../../AliyunOSSSDK/OSSHttpdns.h"
+    exclude header "../../AliyunOSSSDK/OSSIPv6/OSSIPv6Adapter.h"
+    exclude header "../../AliyunOSSSDK/OSSIPv6/OSSIPv6PrefixResolver.h"
+    exclude header "../../AliyunOSSSDK/OSSFileLog/OSSReachability.h"
+    export *
+    requires objc
+}

@@ -1,0 +1,48 @@
+/* SecondCamera */
+"second_camera.home.title" = "相机";
+"second_camera.home.open" = "打开相机";
+"second_camera.home.subtitle" = "基于 Camera-main / SparkClient CustomCamera 封装，支持照片与视频拍摄。";
+"second_camera.tab.title" = "相机";
+
+"second_camera.preview.back" = "返回";
+"second_camera.preview.done" = "完成";
+"second_camera.preview.save" = "保存";
+"second_camera.preview.saved" = "已保存到相册";
+"second_camera.preview.save_failed" = "保存失败";
+
+"second_camera.editor.draw" = "画笔";
+"second_camera.editor.crop" = "裁剪";
+"second_camera.editor.cancel" = "取消";
+"second_camera.editor.confirm" = "确认";
+"second_camera.editor.discard_changes_title" = "放弃更改？";
+"second_camera.editor.discard_changes_message" = "当前编辑内容不会保存。";
+"second_camera.editor.discard" = "放弃";
+"second_camera.sticker.title" = "贴纸";
+
+"second_camera.quality.title" = "图片质量";
+"second_camera.quality.original" = "原图";
+"second_camera.quality.high" = "高清";
+"second_camera.quality.standard" = "标准";
+"second_camera.quality.compressed" = "压缩";
+
+"second_camera.error.no_media" = "没有可用的媒体内容";
+"second_camera.error.load_failed" = "无法读取媒体内容";
+"second_camera.error.editor_init_failed" = "无法初始化图片编辑器";
+"second_camera.error.editor_generic" = "编辑错误";
+"second_camera.error.no_image_to_save" = "没有可保存的图片";
+"second_camera.error.ok" = "好";
+
+"second_camera.multi.add_more" = "添加";
+"second_camera.multi.continue_capture" = "继续拍摄";
+"second_camera.multi.pick_from_library" = "从相册选择";
+"second_camera.multi.delete" = "删除";
+"second_camera.multi.delete_confirm_title" = "删除这张照片？";
+"second_camera.multi.delete_confirm_message" = "删除后无法在本次预览中恢复。";
+"second_camera.multi.delete_confirm_action" = "删除";
+"second_camera.multi.max_count_message" = "最多可选择 %d 张";
+"second_camera.multi.processing_progress" = "正在处理 %d/%d";
+"second_camera.multi.delete_last_title" = "删除最后一张？";
+"second_camera.multi.delete_last_message" = "删除后将返回相机。";
+"second_camera.multi.discard_all_title" = "放弃所有照片？";
+"second_camera.multi.discard_all_message" = "已拍摄的照片不会保存。";
+"second_camera.multi.discard_action" = "放弃";

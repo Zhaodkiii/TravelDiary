@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="24512" systemVersion="25D2128" minimumToolsVersion="Automatic" sourceLanguage="Swift" userDefinedModelVersionIdentifier="">
+    <entity name="AIModelEntity" representedClassName="AIModelEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="aiToolScenariosData" optional="YES" attributeType="Binary"/>
+        <attribute name="baseModelName" optional="YES" attributeType="String"/>
+        <attribute name="briefDescription" attributeType="String" defaultValueString=""/>
+        <attribute name="characterDesign" attributeType="String" defaultValueString=""/>
+        <attribute name="company" attributeType="String" defaultValueString=""/>
+        <attribute name="displayName" attributeType="String" defaultValueString=""/>
+        <attribute name="icon" attributeType="String" defaultValueString=""/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="identity" attributeType="String" defaultValueString="model"/>
+        <attribute name="isEnabled" attributeType="Boolean" defaultValueString="YES" usesScalarValueType="YES"/>
+        <attribute name="localFilename" optional="YES" attributeType="String"/>
+        <attribute name="name" attributeType="String" defaultValueString=""/>
+        <attribute name="ownerAccountID" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="position" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="price" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="providerID" attributeType="String" defaultValueString=""/>
+        <attribute name="relatedTaskCodesData" optional="YES" attributeType="Binary"/>
+        <attribute name="source" attributeType="String" defaultValueString="system"/>
+        <attribute name="supportReasoningChange" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="supportsImageGen" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="supportsMultimodal" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="supportsReasoning" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="supportsSearch" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="supportsTextGen" attributeType="Boolean" defaultValueString="YES" usesScalarValueType="YES"/>
+        <attribute name="supportsToolUse" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="supportsVoiceGen" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="systemProvision" attributeType="String" defaultValueString=""/>
+        <attribute name="timestamp" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="AIProviderEntity" representedClassName="AIProviderEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="company" attributeType="String" defaultValueString=""/>
+        <attribute name="from" attributeType="String" defaultValueString="system"/>
+        <attribute name="help" attributeType="String" defaultValueString=""/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="isEnabled" attributeType="Boolean" defaultValueString="YES" usesScalarValueType="YES"/>
+        <attribute name="key" attributeType="String" defaultValueString=""/>
+        <attribute name="name" attributeType="String" defaultValueString=""/>
+        <attribute name="ownerAccountID" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="privacyPolicyAccepted" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="privacyPolicyAcceptedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="privacyPolicyURL" attributeType="String" defaultValueString=""/>
+        <attribute name="providerID" attributeType="String" defaultValueString=""/>
+        <attribute name="requestURL" attributeType="String" defaultValueString=""/>
+        <attribute name="source" attributeType="String" defaultValueString="system"/>
+        <attribute name="timestamp" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="AISearchProviderEntity" representedClassName="AISearchProviderEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="authType" attributeType="String" defaultValueString="bearer"/>
+        <attribute name="company" attributeType="String" defaultValueString=""/>
+        <attribute name="enabledScopesData" optional="YES" attributeType="Binary"/>
+        <attribute name="help" attributeType="String" defaultValueString=""/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="isUsing" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="key" attributeType="String" defaultValueString=""/>
+        <attribute name="name" attributeType="String" defaultValueString=""/>
+        <attribute name="ownerAccountID" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="priority" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="requestURL" attributeType="String" defaultValueString=""/>
+        <attribute name="revision" attributeType="Integer 32" defaultValueString="1" usesScalarValueType="YES"/>
+        <attribute name="searchClass" attributeType="String" defaultValueString="web"/>
+        <attribute name="source" attributeType="String" defaultValueString="system"/>
+        <attribute name="timestamp" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="AIScenarioBundleCacheEntity" representedClassName="AIScenarioBundleCacheEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="ownerAccountID" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="payloadData" optional="YES" attributeType="Binary"/>
+        <attribute name="updatedAt" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="AIScenarioModelBindingEntity" representedClassName="AIScenarioModelBindingEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="aiToolScenariosData" optional="YES" attributeType="Binary"/>
+        <attribute name="briefDescription" attributeType="String" defaultValueString=""/>
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="identity" attributeType="String" defaultValueString="model"/>
+        <attribute name="isActive" attributeType="Boolean" defaultValueString="YES" usesScalarValueType="YES"/>
+        <attribute name="isDefault" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="maxTokens" attributeType="Integer 32" usesScalarValueType="YES"/>
+        <attribute name="modelID" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="ownerAccountID" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="position" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="relatedTaskCodesData" optional="YES" attributeType="Binary"/>
+        <attribute name="scenario" attributeType="String" defaultValueString="chat"/>
+        <attribute name="systemProvision" attributeType="String" defaultValueString=""/>
+        <attribute name="temperature" attributeType="Double" defaultValueString="0.2" usesScalarValueType="YES"/>
+        <attribute name="updatedAt" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="AISettingsSeedStateEntity" representedClassName="AISettingsSeedStateEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="catalogVersion" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="ownerAccountID" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="updatedAt" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="AISmallTaskEntity" representedClassName="AISmallTaskEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="brief" attributeType="String" defaultValueString=""/>
+        <attribute name="code" attributeType="String" defaultValueString=""/>
+        <attribute name="icon" attributeType="String" defaultValueString=""/>
+        <attribute name="id" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="name" attributeType="String" defaultValueString=""/>
+        <attribute name="ownerAccountID" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="prompt" attributeType="String" defaultValueString=""/>
+        <attribute name="source" attributeType="String" defaultValueString="Local"/>
+        <attribute name="timestamp" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="toolListData" optional="YES" attributeType="Binary"/>
+    </entity>
+    <entity name="PromptRepoEntity" representedClassName="PromptRepoEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="content" attributeType="String" defaultValueString=""/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="isSystem" attributeType="Boolean" defaultValueString="YES" usesScalarValueType="YES"/>
+        <attribute name="localizationKey" optional="YES" attributeType="String"/>
+        <attribute name="ownerAccountID" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="position" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="timestamp" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="title" attributeType="String" defaultValueString=""/>
+    </entity>
+    <entity name="MemoryRecordEntity" representedClassName="MemoryRecordEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="content" attributeType="String" defaultValueString=""/>
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="ownerAccountID" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="pinned" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="title" attributeType="String" defaultValueString=""/>
+        <attribute name="updatedAt" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <elements>
+        <element name="AIModelEntity" positionX="-63" positionY="9" width="128" height="359"/>
+        <element name="AIProviderEntity" positionX="117" positionY="9" width="128" height="224"/>
+        <element name="AISearchProviderEntity" positionX="297" positionY="9" width="128" height="239"/>
+        <element name="AIScenarioBundleCacheEntity" positionX="477" positionY="9" width="128" height="74"/>
+        <element name="AIScenarioModelBindingEntity" positionX="-63" positionY="396" width="128" height="269"/>
+        <element name="AISettingsSeedStateEntity" positionX="117" positionY="396" width="128" height="74"/>
+        <element name="AISmallTaskEntity" positionX="297" positionY="396" width="128" height="179"/>
+        <element name="PromptRepoEntity" positionX="477" positionY="396" width="128" height="149"/>
+        <element name="MemoryRecordEntity" positionX="-63" positionY="693" width="128" height="134"/>
+    </elements>
+</model>

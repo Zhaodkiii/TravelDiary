@@ -1,0 +1,6 @@
+module PureLayout {
+    umbrella header "../../PureLayout/PureLayout.h"
+    exclude header "../../PureLayout/PureLayout+Internal.h"
+    export *
+    requires objc
+}
