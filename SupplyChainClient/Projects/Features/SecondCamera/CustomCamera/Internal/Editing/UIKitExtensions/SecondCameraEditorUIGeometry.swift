@@ -157,10 +157,12 @@ extension CGPoint {
 
     nonisolated static let unitMidpoint: CGPoint = CGPoint(x: 0.5, y: 0.5)
 
+#if swift(<6.2)
     nonisolated static func +(left: CGPoint, right: CGPoint) -> CGPoint { left.plus(right) }
     nonisolated static func +=(left: inout CGPoint, right: CGPoint) { left.x += right.x; left.y += right.y }
     nonisolated static func -(left: CGPoint, right: CGPoint) -> CGPoint { CGPoint(x: left.x - right.x, y: left.y - right.y) }
     nonisolated static func *(left: CGPoint, right: CGFloat) -> CGPoint { CGPoint(x: left.x * right, y: left.y * right) }
+#endif
 }
 
 extension CGSize {

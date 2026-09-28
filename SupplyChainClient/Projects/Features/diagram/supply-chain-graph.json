@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "1.0.0",
+  "generatedAt": "2026-09-28T00:00:00Z",
+  "sourceWorkbook": "新能源汽车供应链整合数据模型_品牌关联.xlsx",
+  "rootProductID": "PRD-00001",
+  "nodes": [
+    {"id":"PRD-00001","parentID":null,"kind":"vehicle","title":"小米 SU7","subtitle":"纯电轿车 · 2024款","imageAssetName":"xiaomi-su7","evidence":"A","metadata":{}},
+    {"id":"SYS-BATTERY","parentID":"PRD-00001","kind":"system","title":"动力电池","subtitle":"电芯 · 电池包 · BMS","imageAssetName":"battery","evidence":"A","metadata":{}},
+    {"id":"SYS-DRIVE","parentID":"PRD-00001","kind":"system","title":"电驱系统","subtitle":"电机 · 电控 · 减速器","imageAssetName":"drive","evidence":"B","metadata":{}},
+    {"id":"SYS-ADAS","parentID":"PRD-00001","kind":"system","title":"智能驾驶","subtitle":"芯片 · 传感器 · 算法","imageAssetName":"adas","evidence":"B","metadata":{}},
+    {"id":"SYS-BODY","parentID":"PRD-00001","kind":"system","title":"车身系统","subtitle":"车身 · 内外饰 · 轻量化","imageAssetName":"body","evidence":"B","metadata":{}},
+    {"id":"SYS-COCKPIT","parentID":"PRD-00001","kind":"system","title":"电子座舱","subtitle":"智能座舱 · 屏幕 · 车机","imageAssetName":"cockpit","evidence":"B","metadata":{}},
+    {"id":"SYS-CHASSIS","parentID":"PRD-00001","kind":"system","title":"底盘系统","subtitle":"悬架 · 转向 · 制动","imageAssetName":"chassis","evidence":"B","metadata":{}},
+    {"id":"ENT-CATL","parentID":"SYS-BATTERY","kind":"company","title":"宁德时代","subtitle":"动力电池 / 电芯","imageAssetName":"catl","evidence":"A","metadata":{"relationship":"核心供应商"}},
+    {"id":"ENT-BYD","parentID":"SYS-BATTERY","kind":"company","title":"弗迪电池","subtitle":"动力电池","imageAssetName":"byd","evidence":"B","metadata":{"relationship":"主要供应商"}},
+    {"id":"PRD-CELL","parentID":"ENT-CATL","kind":"component","title":"动力电芯","subtitle":"高能量密度核心单元","imageAssetName":"cell","evidence":"A","metadata":{}},
+    {"id":"PRD-PACK","parentID":"ENT-CATL","kind":"component","title":"电池包 / CTB","subtitle":"高集成 · 高安全","imageAssetName":"pack","evidence":"A","metadata":{}},
+    {"id":"PRD-BMS","parentID":"ENT-CATL","kind":"component","title":"BMS","subtitle":"智能管理电池全生命周期","imageAssetName":"bms","evidence":"B","metadata":{}},
+    {"id":"MAT-CATHODE","parentID":"PRD-CELL","kind":"material","title":"三元正极材料","subtitle":"支撑电池能量密度","imageAssetName":"cathode","evidence":"B","metadata":{}},
+    {"id":"MAT-ANODE","parentID":"PRD-CELL","kind":"material","title":"负极材料 · 人造石墨","subtitle":"提升充放电性能","imageAssetName":"anode","evidence":"A","metadata":{"sharedRelation":"true"}},
+    {"id":"MAT-ELECTROLYTE","parentID":"PRD-CELL","kind":"material","title":"隔膜 / 电解液","subtitle":"保障电池安全与循环性能","imageAssetName":"separator","evidence":"B","metadata":{}}
+  ],
+  "edges": [
+    {"id":"REL-001","sourceID":"PRD-00001","targetID":"SYS-BATTERY","relationKind":"核心系统","evidence":"A","vehicleScope":["PRD-00001"],"sharedRelation":false,"sourceIDs":[]},
+    {"id":"REL-002","sourceID":"PRD-00001","targetID":"SYS-DRIVE","relationKind":"核心系统","evidence":"A","vehicleScope":["PRD-00001"],"sharedRelation":false,"sourceIDs":[]},
+    {"id":"REL-003","sourceID":"PRD-00001","targetID":"SYS-ADAS","relationKind":"核心系统","evidence":"B","vehicleScope":["PRD-00001"],"sharedRelation":false,"sourceIDs":[]},
+    {"id":"REL-004","sourceID":"PRD-00001","targetID":"SYS-BODY","relationKind":"核心系统","evidence":"B","vehicleScope":["PRD-00001"],"sharedRelation":false,"sourceIDs":[]},
+    {"id":"REL-005","sourceID":"PRD-00001","targetID":"SYS-COCKPIT","relationKind":"核心系统","evidence":"B","vehicleScope":["PRD-00001"],"sharedRelation":false,"sourceIDs":[]},
+    {"id":"REL-006","sourceID":"PRD-00001","targetID":"SYS-CHASSIS","relationKind":"核心系统","evidence":"B","vehicleScope":["PRD-00001"],"sharedRelation":false,"sourceIDs":[]},
+    {"id":"REL-007","sourceID":"SYS-BATTERY","targetID":"ENT-CATL","relationKind":"供应企业","evidence":"A","vehicleScope":["PRD-00001"],"sharedRelation":false,"sourceIDs":[]},
+    {"id":"REL-008","sourceID":"SYS-BATTERY","targetID":"ENT-BYD","relationKind":"供应企业","evidence":"B","vehicleScope":["PRD-00001"],"sharedRelation":false,"sourceIDs":[]},
+    {"id":"REL-009","sourceID":"ENT-CATL","targetID":"PRD-CELL","relationKind":"供应产品","evidence":"A","vehicleScope":["PRD-00001"],"sharedRelation":false,"sourceIDs":[]},
+    {"id":"REL-010","sourceID":"ENT-CATL","targetID":"PRD-PACK","relationKind":"供应产品","evidence":"A","vehicleScope":["PRD-00001"],"sharedRelation":false,"sourceIDs":[]},
+    {"id":"REL-011","sourceID":"ENT-CATL","targetID":"PRD-BMS","relationKind":"供应产品","evidence":"B","vehicleScope":["PRD-00001"],"sharedRelation":false,"sourceIDs":[]},
+    {"id":"REL-012","sourceID":"PRD-CELL","targetID":"MAT-CATHODE","relationKind":"原料","evidence":"B","vehicleScope":["PRD-00001"],"sharedRelation":false,"sourceIDs":[]},
+    {"id":"REL-013","sourceID":"PRD-CELL","targetID":"MAT-ANODE","relationKind":"原料","evidence":"A","vehicleScope":[],"sharedRelation":true,"sourceIDs":[]},
+    {"id":"REL-014","sourceID":"PRD-CELL","targetID":"MAT-ELECTROLYTE","relationKind":"原料","evidence":"B","vehicleScope":["PRD-00001"],"sharedRelation":false,"sourceIDs":[]}
+  ]
+}
