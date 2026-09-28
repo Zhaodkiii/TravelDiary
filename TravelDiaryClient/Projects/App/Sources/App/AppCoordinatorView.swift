@@ -80,7 +80,7 @@ struct SupportMainCoordinatorView: View {
     @StateObject private var aiSettingsViewModel: AISettingsViewModel
     @StateObject private var upgradeLoginViewModel: LoginViewModel
     @State private var showsDeviceAccountUpgradeSheet = false
-    @State private var selectedTab: SupportRootTab = .supplyChain
+    @State private var selectedTab: SupportRootTab = .photoEditor
     @State private var path = NavigationPath()
 
     init(session: UserSession, dependencies: AppCoordinatorDependencies) {
@@ -103,11 +103,11 @@ struct SupportMainCoordinatorView: View {
                 }
                 .tag(SupportRootTab.healthHome)
 
-                SupplyChainDiagramHomeView()
+                PhotoEditorHomeView()
                     .tabItem {
-                        Label("供应链", systemImage: "point.3.connected.trianglepath.dotted")
+                        Label("照片编辑", systemImage: "photo.badge.pencil")
                     }
-                    .tag(SupportRootTab.supplyChain)
+                    .tag(SupportRootTab.photoEditor)
 
                 SecondCameraHomeView()
                     .tabItem {
@@ -158,9 +158,9 @@ struct SupportMainCoordinatorView: View {
             ToolbarItem(placement: .principal) {
                 tabTitle(L10n.tr("home.title", fallback: "首页"))
             }
-        case .supplyChain:
+        case .photoEditor:
             ToolbarItem(placement: .principal) {
-                tabTitle("供应链图谱")
+                tabTitle("照片编辑")
             }
         case .secondCamera:
             // The camera deliberately presents an immersive, navigation-bar-free surface.
@@ -191,7 +191,7 @@ struct SupportMainCoordinatorView: View {
 
 private enum SupportRootTab: Hashable {
     case healthHome
-    case supplyChain
+    case photoEditor
     case secondCamera
     case settings
 }

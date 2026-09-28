@@ -33,7 +33,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		85EA7F632FFB34EA00137E68 /* Exceptions for "TravelDiary" folder in "TravelDiary" target */ = {
+		85EA7F632FFB34EA00137E68 /* Exceptions for "TravelDiaryClient" folder in "TravelDiary" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				"Core/Utilities/Objective-C/PureLayout/LICENSE",
@@ -125,10 +125,10 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		85EA7EF42FFB252D00137E68 /* TravelDiary */ = {
+		85EA7EF42FFB252D00137E68 /* TravelDiaryClient */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				85EA7F632FFB34EA00137E68 /* Exceptions for "TravelDiary" folder in "TravelDiary" target */,
+				85EA7F632FFB34EA00137E68 /* Exceptions for "TravelDiaryClient" folder in "TravelDiary" target */,
 			);
 			path = TravelDiaryClient;
 			sourceTree = "<group>";
@@ -165,7 +165,7 @@
 		85EA7EE92FFB252D00137E68 = {
 			isa = PBXGroup;
 			children = (
-				85EA7EF42FFB252D00137E68 /* TravelDiary */,
+				85EA7EF42FFB252D00137E68 /* TravelDiaryClient */,
 				A1TEST062FFB401000137E68 /* TravelDiaryTests */,
 				85EA7EF32FFB252D00137E68 /* Products */,
 				A1OSS0202FFB252D00137E68 /* Frameworks */,
@@ -208,7 +208,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				85EA7EF42FFB252D00137E68 /* TravelDiary */,
+				85EA7EF42FFB252D00137E68 /* TravelDiaryClient */,
 			);
 			name = TravelDiary;
 			packageProductDependencies = (
