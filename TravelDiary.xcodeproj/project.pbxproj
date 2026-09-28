@@ -130,7 +130,7 @@
 			exceptions = (
 				85EA7F632FFB34EA00137E68 /* Exceptions for "TravelDiary" folder in "TravelDiary" target */,
 			);
-			path = TravelDiary;
+			path = TravelDiaryClient;
 			sourceTree = "<group>";
 		};
 		A1TEST062FFB401000137E68 /* TravelDiaryTests */ = {
