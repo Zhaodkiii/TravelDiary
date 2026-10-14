@@ -80,6 +80,7 @@ struct SupportMainCoordinatorView: View {
     @StateObject private var aiSettingsViewModel: AISettingsViewModel
     @StateObject private var upgradeLoginViewModel: LoginViewModel
     @State private var showsDeviceAccountUpgradeSheet = false
+    @State private var showsCreateDiaryBookForm = false
     @State private var selectedTab: SupportRootTab = .diaryEditor
     @State private var path = NavigationPath()
 
@@ -109,7 +110,7 @@ struct SupportMainCoordinatorView: View {
 //                    }
 //                    .tag(SupportRootTab.photoEditor)
 
-                DiaryEditorHomeView(ownerID: String(session.accountID), path: $path)
+                DiaryEditorHomeView(ownerID: String(session.accountID), path: $path, creating: $showsCreateDiaryBookForm)
                     .id(session.accountID)
                     .tabItem {
                         Label("手帐", systemImage: "book.pages")
@@ -179,6 +180,12 @@ struct SupportMainCoordinatorView: View {
         case .diaryEditor:
             ToolbarItem(placement: .principal) {
                 tabTitle("我的")
+            }
+            if path.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showsCreateDiaryBookForm = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("新建手帐本")
+                }
             }
         case .diaryPresets:
             ToolbarItem(placement: .principal) {

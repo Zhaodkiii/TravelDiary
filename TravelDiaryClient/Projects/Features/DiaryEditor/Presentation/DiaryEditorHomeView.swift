@@ -4,8 +4,8 @@ import SwiftUI
 struct DiaryEditorHomeView: View {
     let ownerID: String
     @Binding var path: NavigationPath
+    @Binding var creating: Bool
     @State private var books: [DiaryBook] = []
-    @State private var creating = false
     @State private var title = "未命名手帐"
     @State private var pagePreset: DiaryPagePreset = .a5
     @State private var busy = false
@@ -35,17 +35,8 @@ struct DiaryEditorHomeView: View {
                         }.buttonStyle(.plain)
                     }
                 }.padding()
-                Button { pagePreset = .a5; creating = true } label: { Label("新建手帐本", systemImage: "plus") }
-                    .buttonStyle(.borderedProminent).padding(.bottom)
         }
-        .toolbar(.visible, for: .navigationBar)
-        .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { pagePreset = .a5; creating = true } label: { Image(systemName: "plus") }
-                        .accessibilityLabel("新建手帐本")
-                }
-        }
-        .navigationTitle("我的")
+        .onChange(of: creating) { _, presented in if presented { pagePreset = .a5 } }
         .navigationDestination(for: UUID.self) { id in
                 if let book = books.first(where: { $0.id == id }) {
                     DiaryBookScreen(ownerID: ownerID, book: book)

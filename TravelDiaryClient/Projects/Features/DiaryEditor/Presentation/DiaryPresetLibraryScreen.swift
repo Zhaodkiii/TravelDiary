@@ -56,7 +56,7 @@ struct DiaryPresetLibraryScreen: View {
             } else if let error { VStack { Text(error); Button("重试") { reload += 1 } } }
             else { ProgressView("正在读取预设…") }
         }
-        .navigationTitle("预设手帐").searchable(text: $search, prompt: "搜索预设本")
+        .searchable(text: $search, prompt: "搜索预设本")
         .sheet(item: $resuming) { intent in
             if let package = catalog?.books.first(where: { $0.id == intent.templateID && $0.manifest.packageVersion == intent.version }) {
                 DiaryPresetImportSheet(ownerID: ownerID, package: package, pageIDs: intent.pageIDs, defaultTarget: nil,
