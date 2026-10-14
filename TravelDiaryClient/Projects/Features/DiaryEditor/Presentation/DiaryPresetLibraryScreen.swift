@@ -2,9 +2,7 @@ import SwiftUI
 
 /// 预设浏览全程只读；只有“添加”成功后才进入用户自己的本子。
 struct DiaryPresetLibraryScreen: View {
-    @Environment(\.dismiss) private var dismiss
     let ownerID: String
-    var isFullScreen = false
     var targetBook: DiaryBook? = nil
     var targetAfterPageID: UUID? = nil
     @State private var pending: DiaryPresetImportIntent?
@@ -59,13 +57,6 @@ struct DiaryPresetLibraryScreen: View {
             else { ProgressView("正在读取预设…") }
         }
         .navigationTitle("预设手帐").searchable(text: $search, prompt: "搜索预设本")
-        .toolbar {
-            if isFullScreen {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("关闭") { dismiss() }
-                }
-            }
-        }
         .sheet(item: $resuming) { intent in
             if let package = catalog?.books.first(where: { $0.id == intent.templateID && $0.manifest.packageVersion == intent.version }) {
                 DiaryPresetImportSheet(ownerID: ownerID, package: package, pageIDs: intent.pageIDs, defaultTarget: nil,

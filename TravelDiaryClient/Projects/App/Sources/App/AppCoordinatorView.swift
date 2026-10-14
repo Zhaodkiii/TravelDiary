@@ -80,7 +80,6 @@ struct SupportMainCoordinatorView: View {
     @StateObject private var aiSettingsViewModel: AISettingsViewModel
     @StateObject private var upgradeLoginViewModel: LoginViewModel
     @State private var showsDeviceAccountUpgradeSheet = false
-    @State private var showsDiaryPresetLibrary = false
     @State private var selectedTab: SupportRootTab = .diaryEditor
     @State private var path = NavigationPath()
 
@@ -110,12 +109,21 @@ struct SupportMainCoordinatorView: View {
 //                    }
 //                    .tag(SupportRootTab.photoEditor)
 
-                DiaryEditorHomeView(ownerID: String(session.accountID), showingPresets: $showsDiaryPresetLibrary)
+                DiaryEditorHomeView(ownerID: String(session.accountID))
                     .id(session.accountID)
                     .tabItem {
                         Label("手帐", systemImage: "book.pages")
                     }
                     .tag(SupportRootTab.diaryEditor)
+
+                NavigationStack {
+                    DiaryPresetLibraryScreen(ownerID: String(session.accountID))
+                }
+                .id(session.accountID)
+                .tabItem {
+                    Label("预设", systemImage: "books.vertical")
+                }
+                .tag(SupportRootTab.diaryPresets)
 
 //                SecondCameraHomeView()
 //                    .tabItem {
@@ -171,11 +179,12 @@ struct SupportMainCoordinatorView: View {
                 tabTitle("照片编辑")
             }
         case .diaryEditor:
-            ToolbarItem(placement: .topBarLeading) {
-                Button("预设") { showsDiaryPresetLibrary = true }
-            }
             ToolbarItem(placement: .principal) {
                 tabTitle("我的")
+            }
+        case .diaryPresets:
+            ToolbarItem(placement: .principal) {
+                tabTitle("预设")
             }
         case .secondCamera:
             // The camera deliberately presents an immersive, navigation-bar-free surface.
@@ -208,6 +217,7 @@ private enum SupportRootTab: Hashable {
     case healthHome
     case photoEditor
     case diaryEditor
+    case diaryPresets
     case secondCamera
     case settings
 }

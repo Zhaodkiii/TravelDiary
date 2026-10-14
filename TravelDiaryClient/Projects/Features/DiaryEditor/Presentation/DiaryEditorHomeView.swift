@@ -3,7 +3,6 @@ import SwiftUI
 /// 手帐入口改为书架。这里只读取本目录和封面，不提前加载整本编辑数据。
 struct DiaryEditorHomeView: View {
     let ownerID: String
-    @Binding var showingPresets: Bool
     @State private var books: [DiaryBook] = []
     @State private var path: [UUID] = []
     @State private var creating = false
@@ -56,11 +55,6 @@ struct DiaryEditorHomeView: View {
                 }
             }
             .task { await reload(); _ = try? await Task.detached { try BundleDiaryPresetProvider().catalog() }.value }
-            .fullScreenCover(isPresented: $showingPresets, onDismiss: { Task { await reload() } }) {
-                NavigationStack {
-                    DiaryPresetLibraryScreen(ownerID: ownerID, isFullScreen: true)
-                }
-            }
             .onChange(of: path) { _, value in if value.isEmpty { Task { await reload() } } }
             .refreshable { await reload() }
             .sheet(isPresented: $creating) {
