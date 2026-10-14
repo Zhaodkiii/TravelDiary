@@ -143,6 +143,11 @@ struct SupportMainCoordinatorView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { tabToolbar }
+            // 路由在 TabView 外注册，所有标签中的链接都能由根导航栈解析。
+            .navigationDestination(for: DiaryBookRoute.self) { route in
+                DiaryBookDestination(ownerID: String(session.accountID), bookID: route.bookID)
+                    .id(route.bookID)
+            }
             .navigationDestination(for: AccountRoute.self) { _ in
                 AccountManagementView(viewModel: accountViewModel, session: session)
             }

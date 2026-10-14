@@ -6,6 +6,7 @@ struct DiaryEditorHomeView: View {
     @Binding var path: NavigationPath
     @Binding var creating: Bool
     @State private var books: [DiaryBook] = []
+    @State private var createdBookID: UUID?
     @State private var title = "未命名手帐"
     @State private var pagePreset: DiaryPagePreset = .a5
     @State private var busy = false
@@ -19,7 +20,7 @@ struct DiaryEditorHomeView: View {
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150))], spacing: 20) {
                     ForEach(books) { book in
-                        NavigationLink(value: book.id) {
+                        NavigationLink(value: DiaryBookRoute(bookID: book.id)) {
                             VStack(alignment: .leading, spacing: 8) {
                                 if let cover = book.effectiveCover {
                                     DiaryPagePreview(page: cover, store: DiaryDocumentStore(ownerID: ownerID, bookID: book.id))
@@ -37,17 +38,16 @@ struct DiaryEditorHomeView: View {
                 }.padding()
         }
         .onChange(of: creating) { _, presented in if presented { pagePreset = .a5 } }
-        .navigationDestination(for: UUID.self) { id in
-                if let book = books.first(where: { $0.id == id }) {
-                    DiaryBookScreen(ownerID: ownerID, book: book)
-                } else {
-                    ContentUnavailableView("手帐暂不可用", systemImage: "book.closed", description: Text("请返回书架刷新后重试。"))
-                }
-        }
         .task { await reload(); _ = try? await Task.detached { try BundleDiaryPresetProvider().catalog() }.value }
         .onAppear { Task { await reload() } }
         .refreshable { await reload() }
-        .sheet(isPresented: $creating) {
+        .sheet(isPresented: $creating, onDismiss: {
+            // 等表单关闭后，才向应用唯一的导航栈推入详情。
+            if let id = createdBookID {
+                createdBookID = nil
+                path.append(DiaryBookRoute(bookID: id))
+            }
+        }) {
                 NavigationStack {
                     Form {
                         TextField("手帐名称", text: $title)
@@ -87,7 +87,7 @@ struct DiaryEditorHomeView: View {
         defer { busy = false }
         do {
             let book = try await DiaryDocumentStore(ownerID: ownerID).createBook(title: title, preset: pagePreset)
-            books.insert(book, at: 0); creating = false; path.append(book.id)
+            books.insert(book, at: 0); createdBookID = book.id; creating = false
             title = "未命名手帐"; pagePreset = .a5
         } catch { message = error.localizedDescription }
     }
