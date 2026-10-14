@@ -19,7 +19,8 @@ nonisolated struct PresetTransform: Decodable, Sendable {
     let pivot: PresetPoint
     let scale: Double
     let rotationDegrees: Double
-    var value: DiaryTransform { DiaryTransform(position: position.cg, pivot: pivot.cg, scale: scale, rotationDegrees: rotationDegrees) }
+    let stretch: PresetSize?
+    var value: DiaryTransform { DiaryTransform(position: position.cg, pivot: pivot.cg, scale: scale, rotationDegrees: rotationDegrees, stretch: stretch?.cg) }
 }
 nonisolated struct PresetNode: Decodable, Sendable {
     let id: String

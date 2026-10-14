@@ -33,7 +33,6 @@ final class DiaryCanvasSurface: UIView {
     }
     private var activeHandle: Handle?
     private var initialLayer: DiaryLayer?
-    private var initialContent: DiaryObjectContent?
     private var initialBounds = CGRect.zero
     private var initialTouch = CGPoint.zero
     private var rotationLast: CGFloat = 0
@@ -127,7 +126,6 @@ final class DiaryCanvasSurface: UIView {
             if let handle = activeHandle, [.delete, .edit, .duplicate].contains(handle) { return }
             guard activeHandle != nil || hit(touchOrigin) == layer.id else { return }
             initialLayer = layer
-            initialContent = layer.contentID.flatMap { session.document.objects[$0] }
             initialBounds = DiaryPageRenderer.bounds(layer, document: session.document, siblings: session.scopeLayers)
             initialTouch = designPoint(touchOrigin)
             let center = CGPoint(x: initialBounds.midX, y: initialBounds.midY).applying(layer.transform.matrix)
@@ -152,11 +150,11 @@ final class DiaryCanvasSurface: UIView {
                                             y: startPosition.y + shifted.y - origin.y))
         case .ended:
             if draggingID != nil { session.finishInteraction() }
-            startPosition = nil; draggingID = nil; activeHandle = nil; initialLayer = nil; initialContent = nil
+            startPosition = nil; draggingID = nil; activeHandle = nil; initialLayer = nil
             setNeedsDisplay()
         case .cancelled, .failed:
             if draggingID != nil { session.cancelInteraction() }
-            startPosition = nil; draggingID = nil; activeHandle = nil; initialLayer = nil; initialContent = nil
+            startPosition = nil; draggingID = nil; activeHandle = nil; initialLayer = nil
             setNeedsDisplay()
         default: break
         }
@@ -189,7 +187,7 @@ final class DiaryCanvasSurface: UIView {
         } else {
             points += [(.top, CGPoint(x:b.midX,y:b.minY)), (.bottom, CGPoint(x:b.midX,y:b.maxY)),
                        (.left, CGPoint(x:b.minX,y:b.midY)), (.right, CGPoint(x:b.maxX,y:b.midY)),
-                       (.rotate, CGPoint(x:b.maxX + 44 / max(0.01, fit * viewportZoom * layer.transform.scale),y:b.midY))]
+                       (.rotate, CGPoint(x:b.maxX + 44 / max(0.01, fit * viewportZoom * layer.transform.scale * layer.transform.stretchX),y:b.midY))]
         }
         if layer.id == session.content.primaryLayerID { points.removeAll { $0.0 == .delete } }
         return points.map { ($0.0, screenPoint($0.1.applying(m))) }
@@ -254,31 +252,28 @@ final class DiaryCanvasSurface: UIView {
             let moved = center.applying(layer.transform.matrix)
             layer.transform.position.x += fixed.x-moved.x; layer.transform.position.y += fixed.y-moved.y
         } else {
-            var rect = b
-            let dx = local.x-localStart.x, dy = local.y-localStart.y
+            // 边中点只改变一个轴的比例，不裁剪照片、不重排文字、不改内部图层。
+            // 投影到手势开始时的局部坐标，避免素材旋转后手柄偏离自身方向。
+            let dx = local.x - localStart.x, dy = local.y - localStart.y
+            let horizontal: Bool
+            let ratio: CGFloat
+            let anchor: CGPoint
             switch handle {
-            case .left: let x = min(b.maxX-24,b.minX+dx); rect.origin.x=x; rect.size.width=b.maxX-x
-            case .right: rect.size.width=max(24,b.width+dx)
-            case .top: let y = min(b.maxY-24,b.minY+dy); rect.origin.y=y; rect.size.height=b.maxY-y
-            case .bottom: rect.size.height=max(24,b.height+dy)
+            case .left:
+                horizontal = true; ratio = 1 - dx / max(1, b.width)
+                anchor = CGPoint(x: b.maxX, y: b.midY)
+            case .right:
+                horizontal = true; ratio = 1 + dx / max(1, b.width)
+                anchor = CGPoint(x: b.minX, y: b.midY)
+            case .top:
+                horizontal = false; ratio = 1 - dy / max(1, b.height)
+                anchor = CGPoint(x: b.midX, y: b.maxY)
+            case .bottom:
+                horizontal = false; ratio = 1 + dy / max(1, b.height)
+                anchor = CGPoint(x: b.midX, y: b.minY)
             default: return
             }
-            if layer.kind == .object || layer.kind == .sticker {
-                // 智能对象调整可见框，内部元素保持比例和独立编辑能力。
-                layer.displayBounds = rect
-                if layer.kind == .object, let original = initialContent {
-                    session.previewObjectFrame(layer, original: original, from: b, to: rect)
-                    return
-                }
-            } else {
-                // 照片改变框并重新 cover；文字宽度变化重新排版，高度变化裁切文本框。
-                let shift = CGPoint(x:rect.minX-b.minX,y:rect.minY-b.minY)
-                let origin = CGPoint.zero.applying(oldMatrix), shifted = shift.applying(oldMatrix)
-                layer.transform.position.x += shifted.x-origin.x; layer.transform.position.y += shifted.y-origin.y
-                layer.size = rect.size
-                layer.displayBounds = layer.kind == .text ? CGRect(origin:.zero,size:rect.size) : nil
-                if layer.kind == .text && (handle == .left || handle == .right) { layer.displayBounds = nil }
-            }
+            layer.transform.stretchAxis(horizontal: horizontal, ratio: ratio, anchor: anchor)
         }
         session.previewLayer(layer)
     }

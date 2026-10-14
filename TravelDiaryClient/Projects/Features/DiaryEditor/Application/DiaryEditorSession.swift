@@ -357,29 +357,6 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         document.update(value.id) { $0 = value }
     }
 
-    /// 外框修改也应用到未旋转的照片/文字主体，装饰与笔画保持原坐标。
-    /// 使用手势开始时的内容，避免连续预览把内部尺寸重复累加。
-    func previewObjectFrame(_ layer: DiaryLayer, original: DiaryObjectContent, from before: CGRect, to after: CGRect) {
-        guard selectedID == layer.id, !layer.locked else { return }
-        var content = original
-        if let index = content.layers.firstIndex(where: { $0.id == content.primaryLayerID }) {
-            var primary = content.layers[index]
-            let scale = primary.transform.scale
-            if [.photo, .text].contains(primary.kind), !primary.locked,
-               abs(primary.transform.rotationDegrees.truncatingRemainder(dividingBy: 360)) < 0.001 {
-                let originalSize = DiaryPageRenderer.bounds(primary).size
-                primary.size.width = max(24, originalSize.width + (after.width - before.width) / scale)
-                primary.size.height = max(24, originalSize.height + (after.height - before.height) / scale)
-                primary.transform.position.x += after.minX - before.minX
-                primary.transform.position.y += after.minY - before.minY
-                primary.displayBounds = primary.kind == .text ? CGRect(origin: .zero, size: primary.size) : nil
-                content.layers[index] = primary
-            }
-        }
-        document.objects[content.id] = content
-        previewLayer(layer)
-    }
-
     /// 复制对象时递归复制内容和内部 ID；图片字节可共享，编辑内容彼此独立。
     func duplicateSelected() {
         guard let source = selected, !source.locked, source.kind != .frame else { return }

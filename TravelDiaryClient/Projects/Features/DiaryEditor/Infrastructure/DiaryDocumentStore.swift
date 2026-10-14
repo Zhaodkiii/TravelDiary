@@ -340,6 +340,9 @@ nonisolated final class DiaryDocumentStore: Sendable {
                 guard nodeIDs.insert(node.id).inserted, numbers.allSatisfy(\.isFinite), node.size.width > 0,
                       node.size.height > 0, (0.05...20).contains(node.transform.scale),
                       (1...10).contains(node.crop.zoom), (1...300).contains(node.fontSize) else { throw DiaryEditorError.invalidDocument.logged() }
+                guard [node.transform.stretchX, node.transform.stretchY].allSatisfy({ $0.isFinite && (0.05...20).contains($0) }) else {
+                    throw DiaryEditorError.invalidDocument.logged()
+                }
                 if let rect = node.displayBounds {
                     guard [rect.minX, rect.minY, rect.width, rect.height].allSatisfy(\.isFinite),
                           rect.width > 0, rect.height > 0 else { throw DiaryEditorError.invalidDocument.logged() }

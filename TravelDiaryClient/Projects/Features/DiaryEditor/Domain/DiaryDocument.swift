@@ -37,12 +37,28 @@ nonisolated struct DiaryTransform: Codable, Equatable, Sendable {
     var pivot: CGPoint
     var scale: CGFloat = 1
     var rotationDegrees: CGFloat = 0
+    /// 四边手柄的单轴拉伸；旧存档没有此字段时，两轴都按 1 显示。
+    var stretch: CGSize? = nil
+    var stretchX: CGFloat { stretch?.width ?? 1 }
+    var stretchY: CGFloat { stretch?.height ?? 1 }
+
+    /// 沿素材自己的坐标轴拉伸，并补偿位置使对边锚点固定；旋转后也成立。
+    mutating func stretchAxis(horizontal: Bool, ratio: CGFloat, anchor: CGPoint) {
+        let fixed = anchor.applying(matrix)
+        var value = CGSize(width: stretchX, height: stretchY)
+        if horizontal { value.width = min(20, max(0.05, value.width * ratio)) }
+        else { value.height = min(20, max(0.05, value.height * ratio)) }
+        stretch = value
+        let moved = anchor.applying(matrix)
+        position.x += fixed.x - moved.x
+        position.y += fixed.y - moved.y
+    }
 
     /// 先移到锚点，再缩放旋转，最后放到父坐标；不能保存屏幕拖动像素作为位置。
     var matrix: CGAffineTransform {
         CGAffineTransform(translationX: position.x, y: position.y)
             .rotated(by: rotationDegrees * .pi / 180)
-            .scaledBy(x: scale, y: scale)
+            .scaledBy(x: scale * stretchX, y: scale * stretchY)
             .translatedBy(x: -pivot.x, y: -pivot.y)
     }
 }
