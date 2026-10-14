@@ -15,6 +15,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     weak var parent: DiaryEditorSession?
     private var childOpen = false
     private var closing = false
+    private let parentStateBeforeOpen: Snapshot?
     let store: DiaryDocumentStore
     @Published private(set) var document: DiaryDocument
     @Published private(set) var images: [UUID: UIImage]
@@ -33,10 +34,11 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
 
     /// 主画布和子对象共享会话类型；子会话持有值拷贝，取消时不会污染父文档。
     init(document: DiaryDocument, images: [UUID: UIImage], store: DiaryDocumentStore,
-         contentID: UUID? = nil, parent: DiaryEditorSession? = nil) {
+         contentID: UUID? = nil, parent: DiaryEditorSession? = nil, parentStateBeforeOpen: Snapshot? = nil) {
         self.document = document; self.images = images; self.store = store
         self.contentID = contentID ?? document.rootContentID
         self.parent = parent
+        self.parentStateBeforeOpen = parentStateBeforeOpen
         let content = document.objects[self.contentID]!
         baseRevision = content.revision
         let reference = CGRect(origin: .zero, size: content.referenceSize)
@@ -53,11 +55,34 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     /// 打开新的全屏编辑页面；每一级都复用本类和同一个编辑视图。
     func openObject() -> DiaryEditorSession? {
         guard !childOpen, !closing, let layer = selected, !layer.locked, let target = layer.contentID else { return nil }
+        let parentState = snapshot
         finishInteraction()
         saveTask?.cancel()
         childOpen = true
-        return DiaryEditorSession(document: document, images: images, store: store, contentID: target, parent: self)
+        return DiaryEditorSession(document: document, images: images, store: store, contentID: target,
+                                  parent: self, parentStateBeforeOpen: parentState)
     }
+
+    /// 组内贴纸通过铅笔进入自己的智能对象，避免涂鸦落到整张照片组上。
+    func openSelectedStickerObject() -> DiaryEditorSession? {
+        guard !childOpen, !closing, let selected, selected.kind == .sticker, !selected.locked else { return nil }
+        let before = snapshot
+        var sticker = selected
+        sticker.kind = .object
+        sticker.assetID = nil
+        let childID = UUID()
+        var primary = selected
+        primary.id = UUID()
+        primary.transform = DiaryTransform(position: selected.transform.pivot, pivot: selected.transform.pivot)
+        document.objects[childID] = DiaryObjectContent(role: .sticker, primaryLayerID: primary.id,
+            referenceSize: selected.size, layers: [primary])
+        document.update(selected.id) { $0 = sticker; $0.contentID = childID }
+        childOpen = true
+        saveTask?.cancel()
+        return DiaryEditorSession(document: document, images: images, store: store, contentID: childID,
+                                  parent: self, parentStateBeforeOpen: before)
+    }
+
     /// 子页面完成才提交为父页面的一次修改，外部位置、缩放和角度保持原样。
     func commitToParent() async -> Bool {
         guard !closing, !busy else { return false }
@@ -72,7 +97,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             closing = false
             errorMessage = DiaryEditorError.staleObject.logged().localizedDescription; return false
         }
-        let before = parent.snapshot
+        let before = parentStateBeforeOpen ?? parent.snapshot
         let oldUndo = parent.undoStack
         let oldRedo = parent.redoStack
         let oldRevision = parent.revision
@@ -107,8 +132,11 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         saveTask?.cancel()
         if let saveTask { await saveTask.value }
         try? await store.discardDraft(contentID: contentID, documentID: document.id)
-        parent?.childOpen = false
-        parent?.scheduleSave()
+        if let parent {
+            if let parentStateBeforeOpen { parent.document = parentStateBeforeOpen.document }
+            parent.childOpen = false
+            parent.scheduleSave()
+        }
     }
     func setBackground(_ color: DiaryColor?) { edit { document.objects[contentID]?.background = color } }
     func addFrame() {
@@ -323,9 +351,85 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         if let data = image.pngData() { await importPhoto(data, asSticker: true) }
     }
 
+    /// 手柄使用手势开始的完整状态计算，避免每帧累加导致缩放漂移。
+    func previewLayer(_ value: DiaryLayer) {
+        guard selectedID == value.id, selected?.locked == false else { return }
+        document.update(value.id) { $0 = value }
+    }
+
+    /// 外框修改也应用到未旋转的照片/文字主体，装饰与笔画保持原坐标。
+    /// 使用手势开始时的内容，避免连续预览把内部尺寸重复累加。
+    func previewObjectFrame(_ layer: DiaryLayer, original: DiaryObjectContent, from before: CGRect, to after: CGRect) {
+        guard selectedID == layer.id, !layer.locked else { return }
+        var content = original
+        if let index = content.layers.firstIndex(where: { $0.id == content.primaryLayerID }) {
+            var primary = content.layers[index]
+            let scale = primary.transform.scale
+            if [.photo, .text].contains(primary.kind), !primary.locked,
+               abs(primary.transform.rotationDegrees.truncatingRemainder(dividingBy: 360)) < 0.001 {
+                let originalSize = DiaryPageRenderer.bounds(primary).size
+                primary.size.width = max(24, originalSize.width + (after.width - before.width) / scale)
+                primary.size.height = max(24, originalSize.height + (after.height - before.height) / scale)
+                primary.transform.position.x += after.minX - before.minX
+                primary.transform.position.y += after.minY - before.minY
+                primary.displayBounds = primary.kind == .text ? CGRect(origin: .zero, size: primary.size) : nil
+                content.layers[index] = primary
+            }
+        }
+        document.objects[content.id] = content
+        previewLayer(layer)
+    }
+
+    /// 复制对象时递归复制内容和内部 ID；图片字节可共享，编辑内容彼此独立。
+    func duplicateSelected() {
+        guard let source = selected, !source.locked, source.kind != .frame else { return }
+        let linkedFrames = content.layers.filter { $0.frameTargetID == source.id }
+        guard content.layers.count + 1 + linkedFrames.count <= 200 else {
+            errorMessage = "当前对象的图层数量已达上限。"; return
+        }
+        edit {
+            @MainActor func clone(_ original: DiaryLayer) -> DiaryLayer {
+                var copy = original
+                copy.id = UUID()
+                if let contentID = original.contentID, var object = document.objects[contentID] {
+                    object.id = UUID()
+                    var mapping: [UUID: UUID] = [:]
+                    object.layers = object.layers.map { layer in
+                        let result = clone(layer); mapping[layer.id] = result.id; return result
+                    }
+                    for index in object.layers.indices {
+                        if let target = object.layers[index].frameTargetID {
+                            object.layers[index].frameTargetID = mapping[target]
+                        }
+                    }
+                    object.primaryLayerID = object.primaryLayerID.flatMap { mapping[$0] }
+                    document.objects[object.id] = object
+                    copy.contentID = object.id
+                }
+                return copy
+            }
+            var copy = clone(source)
+            copy.name += " 副本"
+            copy.transform.position.x += 24; copy.transform.position.y += 24
+            let index = content.layers.firstIndex { $0.id == source.id } ?? 0
+            var copies = [copy]
+            for frame in linkedFrames {
+                var duplicate = frame
+                duplicate.id = UUID(); duplicate.frameTargetID = copy.id
+                copies.append(duplicate)
+            }
+            document.objects[contentID]?.layers.insert(contentsOf: copies, at: index + 1)
+            selectedID = copy.id
+        }
+    }
+
     func removeSelected() {
         guard let layer = selected, !layer.locked, layer.id != content.primaryLayerID else { return }
-        edit { document.objects[contentID]?.layers.removeAll { $0.id == layer.id || $0.frameTargetID == layer.id }; selectedID = nil }
+        edit {
+            document.objects[contentID]?.layers.removeAll { $0.id == layer.id || $0.frameTargetID == layer.id }
+            if content.primaryLayerID == layer.id { document.objects[contentID]?.primaryLayerID = nil }
+            selectedID = nil
+        }
     }
     func reorderSelected(forward: Bool) {
         guard let id = selectedID, selected?.locked == false, selected?.kind != .frame else { return }

@@ -4,21 +4,45 @@ import PencilKit
 
 struct DiaryCanvasView: UIViewRepresentable {
     @ObservedObject var session: DiaryEditorSession
+    var onEdit: () -> Void = {}
     func makeUIView(context: Context) -> DiaryCanvasSurface {
-        let view = DiaryCanvasSurface(); view.session = session; return view
+        let view = DiaryCanvasSurface(); view.session = session; view.onEdit = onEdit; return view
     }
     func updateUIView(_ view: DiaryCanvasSurface, context: Context) {
-        view.session = session; view.setNeedsDisplay()
+        view.session = session; view.onEdit = onEdit; view.setNeedsDisplay()
     }
 }
 
 /// 每个对象使用独立设计坐标；视口可包含负坐标，装饰伸出照片时仍保留原位置。
 final class DiaryCanvasSurface: UIView {
     weak var session: DiaryEditorSession?
+    var onEdit: () -> Void = {}
+    private enum Handle: CaseIterable {
+        case delete, edit, duplicate, scale, top, bottom, left, right, rotate
+        var symbol: String {
+            switch self {
+            case .delete: "xmark"
+            case .edit: "pencil"
+            case .duplicate: "plus.square.on.square"
+            case .scale: "arrow.up.left.and.arrow.down.right"
+            case .rotate: "arrow.clockwise"
+            case .left, .right: "minus"
+            default: "minus"
+            }
+        }
+    }
+    private var activeHandle: Handle?
+    private var initialLayer: DiaryLayer?
+    private var initialContent: DiaryObjectContent?
+    private var initialBounds = CGRect.zero
+    private var initialTouch = CGPoint.zero
+    private var rotationLast: CGFloat = 0
+    private var rotationTotal: CGFloat = 0
     private var startPosition: CGPoint?
     private var draggingID: UUID?
     private var parentAtStart = CGAffineTransform.identity
-    private var fit: CGFloat { bounds.width / (session?.canvasBounds.width ?? 1000) }
+    static let controlMargin: CGFloat = 56
+    private var fit: CGFloat { (bounds.width - Self.controlMargin * 2) / (session?.canvasBounds.width ?? 1000) }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -35,6 +59,7 @@ final class DiaryCanvasSurface: UIView {
     override func draw(_ rect: CGRect) {
         guard let session, let context = UIGraphicsGetCurrentContext(), fit > 0 else { return }
         context.saveGState()
+        context.translateBy(x: Self.controlMargin, y: Self.controlMargin)
         context.scaleBy(x: fit, y: fit)
         context.translateBy(x: -session.canvasBounds.minX, y: -session.canvasBounds.minY)
         // 棋盘格只用于显示透明区域，不写入导出图片。
@@ -53,15 +78,16 @@ final class DiaryCanvasSurface: UIView {
         if !session.inkMode, let layer = session.selected, layer.visible {
             context.concatenate(DiaryPageRenderer.matrix(layer, siblings: session.scopeLayers))
             context.setStrokeColor(UIColor.systemBlue.cgColor)
-            context.setLineWidth(2 / max(0.01, fit * layer.transform.scale))
+            context.setLineWidth(2 / max(0.01, fit * viewportZoom * layer.transform.scale))
             context.stroke(DiaryPageRenderer.bounds(layer, document: session.document, siblings: session.scopeLayers).insetBy(dx: -3, dy: -3))
         }
         context.restoreGState()
+        drawHandles(in: context)
     }
 
     private func hit(_ screen: CGPoint) -> UUID? {
         guard let session, fit > 0 else { return nil }
-        let pagePoint = CGPoint(x: screen.x / fit + session.canvasBounds.minX, y: screen.y / fit + session.canvasBounds.minY)
+        let pagePoint = designPoint(screen)
         let parentPoint = pagePoint
         // 从上到下命中；组内编辑时只检查当前组的直接子层。
         for node in session.scopeLayers.reversed() where node.visible && !node.locked {
@@ -72,7 +98,18 @@ final class DiaryCanvasSurface: UIView {
     }
     @objc private func tapped(_ gesture: UITapGestureRecognizer) {
         guard let session, !session.inkMode, !session.busy else { return }
-        session.select(hit(gesture.location(in: self)))
+        if let handle = handleHit(gesture.location(in: self)) {
+            switch handle {
+            case .delete: session.removeSelected()
+            case .duplicate: session.duplicateSelected()
+            case .edit: onEdit()
+            default: break
+            }
+            return
+        }
+        let target = hit(gesture.location(in: self))
+        // 再次单击当前素材取消选中；选择状态仅影响编辑，不改变作品数据。
+        session.select(target == session.selectedID ? nil : target)
     }
     @objc private func panned(_ gesture: UIPanGestureRecognizer) {
         guard let session, !session.inkMode, !session.busy, fit > 0 else { return }
@@ -85,8 +122,17 @@ final class DiaryCanvasSurface: UIView {
             let location = gesture.location(in: self)
             let translation = gesture.translation(in: self)
             let touchOrigin = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
-            guard let layer = session.selected, layer.visible, !layer.locked,
-                  hit(touchOrigin) == layer.id else { return }
+            guard let layer = session.selected, layer.visible, !layer.locked else { return }
+            activeHandle = handleHit(touchOrigin)
+            if let handle = activeHandle, [.delete, .edit, .duplicate].contains(handle) { return }
+            guard activeHandle != nil || hit(touchOrigin) == layer.id else { return }
+            initialLayer = layer
+            initialContent = layer.contentID.flatMap { session.document.objects[$0] }
+            initialBounds = DiaryPageRenderer.bounds(layer, document: session.document, siblings: session.scopeLayers)
+            initialTouch = designPoint(touchOrigin)
+            let center = CGPoint(x: initialBounds.midX, y: initialBounds.midY).applying(layer.transform.matrix)
+            rotationLast = atan2(initialTouch.y - center.y, initialTouch.x - center.x)
+            rotationTotal = 0
             session.beginInteraction()
             draggingID = layer.id
             startPosition = layer.transform.position
@@ -94,6 +140,10 @@ final class DiaryCanvasSurface: UIView {
         case .changed:
             guard let startPosition, let draggingID, session.selectedID == draggingID,
                   let layer = session.selected, layer.visible, !layer.locked else { return }
+            if let handle = activeHandle {
+                updateHandle(handle, point: designPoint(gesture.location(in: self)))
+                return
+            }
             let translation = gesture.translation(in: self)
             let inverse = parentAtStart.inverted()
             let origin = CGPoint.zero.applying(inverse)
@@ -102,13 +152,137 @@ final class DiaryCanvasSurface: UIView {
                                             y: startPosition.y + shifted.y - origin.y))
         case .ended:
             if draggingID != nil { session.finishInteraction() }
-            startPosition = nil; draggingID = nil
+            startPosition = nil; draggingID = nil; activeHandle = nil; initialLayer = nil; initialContent = nil
+            setNeedsDisplay()
         case .cancelled, .failed:
             if draggingID != nil { session.cancelInteraction() }
-            startPosition = nil; draggingID = nil
+            startPosition = nil; draggingID = nil; activeHandle = nil; initialLayer = nil; initialContent = nil
+            setNeedsDisplay()
         default: break
         }
     }
+    // 控制点按屏幕点设置大小，画布放大时仍维持可点击尺寸。
+    private var viewportZoom: CGFloat {
+        var ancestor = superview
+        while let view = ancestor {
+            if let scroll = view as? UIScrollView { return scroll.zoomScale }
+            ancestor = view.superview
+        }
+        return 1
+    }
+    private func designPoint(_ p: CGPoint) -> CGPoint {
+        CGPoint(x: (p.x - Self.controlMargin) / fit + (session?.canvasBounds.minX ?? 0),
+                y: (p.y - Self.controlMargin) / fit + (session?.canvasBounds.minY ?? 0))
+    }
+    private func screenPoint(_ p: CGPoint) -> CGPoint {
+        CGPoint(x: (p.x - (session?.canvasBounds.minX ?? 0)) * fit + Self.controlMargin,
+                y: (p.y - (session?.canvasBounds.minY ?? 0)) * fit + Self.controlMargin)
+    }
+    private func handles() -> [(Handle, CGPoint)] {
+        guard let session, !session.inkMode, let layer = session.selected, layer.visible, !layer.locked else { return [] }
+        let b = DiaryPageRenderer.bounds(layer, document: session.document, siblings: session.scopeLayers)
+        let m = DiaryPageRenderer.matrix(layer, siblings: session.scopeLayers)
+        var points: [(Handle, CGPoint)] = [(.delete, CGPoint(x:b.minX,y:b.minY)), (.edit, CGPoint(x:b.maxX,y:b.minY)),
+            (.duplicate, CGPoint(x:b.minX,y:b.maxY)), (.scale, CGPoint(x:b.maxX,y:b.maxY))]
+        if layer.kind == .frame {
+            points = [(.delete, CGPoint(x:b.minX,y:b.minY))]
+        } else {
+            points += [(.top, CGPoint(x:b.midX,y:b.minY)), (.bottom, CGPoint(x:b.midX,y:b.maxY)),
+                       (.left, CGPoint(x:b.minX,y:b.midY)), (.right, CGPoint(x:b.maxX,y:b.midY)),
+                       (.rotate, CGPoint(x:b.maxX + 44 / max(0.01, fit * viewportZoom * layer.transform.scale),y:b.midY))]
+        }
+        if layer.id == session.content.primaryLayerID { points.removeAll { $0.0 == .delete } }
+        return points.map { ($0.0, screenPoint($0.1.applying(m))) }
+    }
+    private func handleHit(_ p: CGPoint) -> Handle? {
+        // 控制点优先于素材命中；相邻触摸区重叠时选择最近的中心。
+        handles().map { ($0.0, hypot(p.x-$0.1.x, p.y-$0.1.y)) }
+            .filter { $0.1 <= 22 / viewportZoom }.min { $0.1 < $1.1 }?.0
+    }
+    private func drawHandles(in context: CGContext) {
+        let radius: CGFloat = 12 / viewportZoom
+        for (handle, point) in handles() {
+            let rect = CGRect(x:point.x-radius,y:point.y-radius,width:radius*2,height:radius*2)
+            context.setFillColor(UIColor.white.cgColor); context.fillEllipse(in:rect)
+            context.setStrokeColor(UIColor.systemBlue.cgColor); context.setLineWidth(1 / viewportZoom); context.strokeEllipse(in:rect)
+            context.saveGState()
+            if handle == .left || handle == .right {
+                context.translateBy(x: point.x, y: point.y)
+                context.rotate(by: .pi / 2)
+                context.translateBy(x: -point.x, y: -point.y)
+            }
+            UIImage(systemName:handle.symbol)?.withTintColor(.systemBlue, renderingMode:.alwaysOriginal)
+                .draw(in:rect.insetBy(dx:5 / viewportZoom,dy:5 / viewportZoom))
+            context.restoreGState()
+        }
+        if activeHandle == .rotate, let layer = session?.selected {
+            let point = handles().first { $0.0 == .rotate }?.1 ?? .zero
+            (String(format:"%.0f°", layer.transform.rotationDegrees) as NSString).draw(
+                at:CGPoint(x:point.x+18 / viewportZoom,y:point.y),
+                withAttributes:[.font:UIFont.systemFont(ofSize:14 / viewportZoom),.foregroundColor:UIColor.systemBlue])
+        }
+    }
+    private func updateHandle(_ handle: Handle, point: CGPoint) {
+        guard var layer = initialLayer, let session, layer.kind != .frame else { return }
+        let b = initialBounds
+        let oldMatrix = layer.transform.matrix
+        let localStart = initialTouch.applying(oldMatrix.inverted())
+        let local = point.applying(oldMatrix.inverted())
+        if handle == .scale {
+            // 左上角固定，以对角线投影决定等比倍率，反向拖过锚点时停止于最小尺寸。
+            let diagonal = CGPoint(x:b.width,y:b.height)
+            let delta = CGPoint(x:local.x-localStart.x,y:local.y-localStart.y)
+            let ratio = max(0.05, 1 + (delta.x*diagonal.x+delta.y*diagonal.y) / max(1,diagonal.x*diagonal.x+diagonal.y*diagonal.y))
+            let anchor = CGPoint(x:b.minX,y:b.minY)
+            let fixed = anchor.applying(oldMatrix)
+            layer.transform.scale = min(20,max(0.05,layer.transform.scale*ratio))
+            let moved = anchor.applying(layer.transform.matrix)
+            layer.transform.position.x += fixed.x-moved.x; layer.transform.position.y += fixed.y-moved.y
+        } else if handle == .rotate {
+            let center = CGPoint(x:b.midX,y:b.midY)
+            let fixed = center.applying(oldMatrix)
+            let angle = atan2(point.y-fixed.y,point.x-fixed.x)
+            var step = angle-rotationLast
+            if step > .pi { step -= 2 * .pi }; if step < -.pi { step += 2 * .pi }
+            rotationTotal += step; rotationLast = angle
+            var degrees = layer.transform.rotationDegrees + rotationTotal * 180 / .pi
+            let snap = (degrees / 90).rounded() * 90
+            if abs(degrees-snap) < 4 { degrees = snap }
+            layer.transform.rotationDegrees = (degrees + 180).truncatingRemainder(dividingBy:360)
+            if layer.transform.rotationDegrees < 0 { layer.transform.rotationDegrees += 360 }
+            layer.transform.rotationDegrees -= 180
+            let moved = center.applying(layer.transform.matrix)
+            layer.transform.position.x += fixed.x-moved.x; layer.transform.position.y += fixed.y-moved.y
+        } else {
+            var rect = b
+            let dx = local.x-localStart.x, dy = local.y-localStart.y
+            switch handle {
+            case .left: let x = min(b.maxX-24,b.minX+dx); rect.origin.x=x; rect.size.width=b.maxX-x
+            case .right: rect.size.width=max(24,b.width+dx)
+            case .top: let y = min(b.maxY-24,b.minY+dy); rect.origin.y=y; rect.size.height=b.maxY-y
+            case .bottom: rect.size.height=max(24,b.height+dy)
+            default: return
+            }
+            if layer.kind == .object || layer.kind == .sticker {
+                // 智能对象调整可见框，内部元素保持比例和独立编辑能力。
+                layer.displayBounds = rect
+                if layer.kind == .object, let original = initialContent {
+                    session.previewObjectFrame(layer, original: original, from: b, to: rect)
+                    return
+                }
+            } else {
+                // 照片改变框并重新 cover；文字宽度变化重新排版，高度变化裁切文本框。
+                let shift = CGPoint(x:rect.minX-b.minX,y:rect.minY-b.minY)
+                let origin = CGPoint.zero.applying(oldMatrix), shifted = shift.applying(oldMatrix)
+                layer.transform.position.x += shifted.x-origin.x; layer.transform.position.y += shifted.y-origin.y
+                layer.size = rect.size
+                layer.displayBounds = layer.kind == .text ? CGRect(origin:.zero,size:rect.size) : nil
+                if layer.kind == .text && (handle == .left || handle == .right) { layer.displayBounds = nil }
+            }
+        }
+        session.previewLayer(layer)
+    }
+
 }
 
 /// 原生绘画画布以设计尺寸布局，再整体缩放显示，保存的笔画始终是页面坐标。

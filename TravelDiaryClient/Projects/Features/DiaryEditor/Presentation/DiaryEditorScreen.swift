@@ -105,27 +105,38 @@ struct DiaryEditorScreen: View {
     private var editorContent: some View {
             VStack(spacing: 0) {
                 HStack {
-                    Text(session.inkMode ? "涂鸦属于当前对象，返回后跟随对象移动" : "选中对象后打开独立编辑页面")
+                    Text(session.inkMode ? "单指绘画，双指缩放或移动画布" : "单击选择，再点取消；双指缩放或移动画布")
                     Spacer()
                     Text(session.saveStatus).foregroundStyle(.secondary)
                 }
                 .font(.caption).padding(.horizontal).padding(.vertical, 8)
                 GeometryReader { geometry in
                     let size = session.canvasBounds.size
-                    let scale = max(0.01, min((geometry.size.width - 24) / size.width, (geometry.size.height - 24) / size.height))
-                    ZStack(alignment: .topLeading) {
-                        DiaryCanvasView(session: session)
-                            .frame(width: size.width * scale, height: size.height * scale)
+                    // 给边缘按钮预留真实的命中空间，选框贴近页面边界时仍可操作。
+                    let margin = DiaryCanvasSurface.controlMargin
+                    let scale = max(0.01, min((geometry.size.width - margin * 2 - 24) / size.width, (geometry.size.height - margin * 2 - 24) / size.height))
+                    DiaryZoomableCanvas(contentSize: CGSize(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)) {
+                      ZStack(alignment: .topLeading) {
+                        DiaryCanvasView(session: session, onEdit: {
+                            guard let layer = session.selected else { return }
+                            if layer.kind == .object { childEditor = session.openObject() }
+                            else if layer.kind == .text { openText() }
+                            else if layer.kind == .photo { showCrop = true }
+                            else if layer.kind == .sticker { childEditor = session.openSelectedStickerObject() }
+                        })
+                            .frame(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)
                         if session.inkMode {
                             DiaryDrawingCanvasView(session: session)
                                 .frame(width: size.width, height: size.height)
                                 .scaleEffect(scale, anchor: .topLeading)
                                 .frame(width: size.width * scale, height: size.height * scale, alignment: .topLeading)
                                 .clipped()
+                                .offset(x: margin, y: margin)
                         }
+                      }
+                      .frame(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)
                     }
-                    .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
                 }
                 .background(Color(uiColor: .systemGroupedBackground))
                 controls

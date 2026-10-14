@@ -23,6 +23,7 @@ enum DiaryPageRenderer {
     }
 
     static func bounds(_ layer: DiaryLayer, document: DiaryDocument? = nil, siblings: [DiaryLayer] = []) -> CGRect {
+        if let rect = layer.displayBounds { return rect }
         if layer.kind == .object, let id = layer.contentID, let content = document?.objects[id] {
             return objectBounds(content, document: document!)
         }
@@ -88,9 +89,14 @@ enum DiaryPageRenderer {
             case .linearBurn: context.setBlendMode(.plusDarker)
             case .lighten: context.setBlendMode(.lighten)
             }
+            if let rect = layer.displayBounds { context.clip(to: rect) }
             switch layer.kind {
             case .object:
                 if let id = layer.contentID, let content = document.objects[id] {
+                    if let frame = layer.displayBounds, let background = content.background {
+                        context.setFillColor(color(background).cgColor)
+                        context.fill(frame)
+                    }
                     if cacheObjects {
                         let rect = objectBounds(content, document: document)
                         // 同一版本在撤销分支可能有不同内容，因此缓存还纳入内容与绘画指纹。
