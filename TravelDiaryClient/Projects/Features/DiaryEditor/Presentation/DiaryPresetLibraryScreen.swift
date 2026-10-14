@@ -33,8 +33,11 @@ struct DiaryPresetLibraryScreen: View {
                             (selectedSeries.isEmpty || book.manifest.seriesID == selectedSeries) &&
                             (search.isEmpty || (book.manifest.title + (book.manifest.tags ?? []).joined()).localizedCaseInsensitiveContains(search))
                         }) { package in
+                            // 书库既可位于根 Tab，也可从手帐详情进入。
+                            // 直接提供目的地，避免 Tab 子树中的值路由注册对外层导航栈不可见。
                             NavigationLink {
-                                DiaryPresetDetailScreen(ownerID: ownerID, package: package, targetBook: targetBook, targetAfterPageID: targetAfterPageID)
+                                DiaryPresetDetailScreen(ownerID: ownerID, package: package, targetBook: targetBook,
+                                                        targetAfterPageID: targetAfterPageID) { book in recovered = book }
                             } label: {
                                 VStack(alignment: .leading) {
                                     DiaryPresetCover(package: package)
@@ -119,7 +122,7 @@ private struct DiaryPresetDetailScreen: View {
     @State private var previewPage: String?
     @State private var showingPreview = false
     @State private var selection: PresetSelection?
-    @State private var imported: DiaryBook?
+    let onImported: (DiaryBook) -> Void
     @State private var error: String?
     @State private var validated = false
     @State private var photoSlots = 0
@@ -129,6 +132,10 @@ private struct DiaryPresetDetailScreen: View {
             VStack(alignment: .leading, spacing: 16) {
                 Text("\(pages.count) 页 · \(Int(package.manifest.pageSize.width)) × \(Int(package.manifest.pageSize.height))")
                 Text("可替换照片 \(photoSlots) 处 · 可编辑文字 \(textSlots) 处。图片文字保持为装饰。").font(.caption).foregroundStyle(.secondary)
+                if (package.manifest.requiredFonts ?? []).contains(where: { !DiaryFontCatalog.shared.available($0) }) {
+                    Text("此预设的部分字体暂不可用，导入后将临时使用系统字体，排版可能与预览不同。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Button("整本添加到我的") { selection = PresetSelection(pageIDs: pages.map(\.id), wholeBook: true) }
                     .buttonStyle(.borderedProminent).disabled(pages.isEmpty || !validated)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150))]) {
@@ -186,11 +193,8 @@ private struct DiaryPresetDetailScreen: View {
             .sheet(item: $selection) { value in
                 DiaryPresetImportSheet(ownerID: ownerID, package: package, pageIDs: value.pageIDs,
                                        defaultTarget: value.wholeBook ? nil : targetBook, wholeBook: value.wholeBook, defaultAfterPageID: targetAfterPageID) { book in
-                    selection = nil; imported = book
+                    selection = nil; onImported(book)
                 }
-            }
-            .navigationDestination(isPresented: Binding(get: { imported != nil }, set: { if !$0 { imported = nil } })) {
-                if let imported { DiaryBookScreen(ownerID: ownerID, book: imported) }
             }
     }
 }

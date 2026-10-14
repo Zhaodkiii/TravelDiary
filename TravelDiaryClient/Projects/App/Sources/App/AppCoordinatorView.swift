@@ -124,11 +124,11 @@ struct SupportMainCoordinatorView: View {
                 }
                 .tag(SupportRootTab.diaryPresets)
 
-//                SecondCameraHomeView()
-//                    .tabItem {
-//                        Label(SecondCameraEditorL10n.Home.tabTitle, systemImage: "camera.fill")
-//                    }
-//                    .tag(SupportRootTab.secondCamera)
+                SecondCameraHomeView()
+                    .tabItem {
+                        Label(SecondCameraEditorL10n.Home.tabTitle, systemImage: "camera.fill")
+                    }
+                    .tag(SupportRootTab.secondCamera)
 
                 SettingsView(
                     accountManagementViewModel: accountViewModel,

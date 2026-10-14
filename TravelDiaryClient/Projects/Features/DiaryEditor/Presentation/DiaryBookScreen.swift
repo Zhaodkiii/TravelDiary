@@ -70,7 +70,7 @@ struct DiaryBookScreen: View {
                 guard !busy else { return }
                 busy = true
                 do {
-                    guard let data = try await value.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage }
+                    guard let data = try await value.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage.logged() }
                     busy = false
                     await createPage(data: data)
                 } catch { message = error.localizedDescription }

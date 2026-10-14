@@ -16,6 +16,7 @@ struct DiaryCanvasView: UIViewRepresentable {
 final class DiaryCanvasSurface: UIView {
     weak var session: DiaryEditorSession?
     private var startPosition: CGPoint?
+    private var draggingID: UUID?
     private var parentAtStart = CGAffineTransform.identity
     private var fit: CGFloat { bounds.width / (session?.canvasBounds.width ?? 1000) }
 
@@ -77,13 +78,22 @@ final class DiaryCanvasSurface: UIView {
         guard let session, !session.inkMode, !session.busy, fit > 0 else { return }
         switch gesture.state {
         case .began:
-            session.select(hit(gesture.location(in: self)))
-            guard let layer = session.selected else { return }
+            startPosition = nil
+            draggingID = nil
+            // 拖动不能顺便选中素材：必须先单击得到蓝色选框，再从该素材上开始拖动。
+            // began 回调已越过手势识别阈值，用位移还原按下点，避免跨入另一素材后误命中。
+            let location = gesture.location(in: self)
+            let translation = gesture.translation(in: self)
+            let touchOrigin = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
+            guard let layer = session.selected, layer.visible, !layer.locked,
+                  hit(touchOrigin) == layer.id else { return }
             session.beginInteraction()
+            draggingID = layer.id
             startPosition = layer.transform.position
             parentAtStart = .identity
         case .changed:
-            guard let startPosition else { return }
+            guard let startPosition, let draggingID, session.selectedID == draggingID,
+                  let layer = session.selected, layer.visible, !layer.locked else { return }
             let translation = gesture.translation(in: self)
             let inverse = parentAtStart.inverted()
             let origin = CGPoint.zero.applying(inverse)
@@ -91,9 +101,11 @@ final class DiaryCanvasSurface: UIView {
             session.previewPosition(CGPoint(x: startPosition.x + shifted.x - origin.x,
                                             y: startPosition.y + shifted.y - origin.y))
         case .ended:
-            session.finishInteraction(); startPosition = nil
+            if draggingID != nil { session.finishInteraction() }
+            startPosition = nil; draggingID = nil
         case .cancelled, .failed:
-            session.cancelInteraction(); startPosition = nil
+            if draggingID != nil { session.cancelInteraction() }
+            startPosition = nil; draggingID = nil
         default: break
         }
     }

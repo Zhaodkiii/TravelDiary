@@ -13,9 +13,10 @@ struct DiaryEditorScreen: View {
     @State private var showText = false
     @State private var showCrop = false
     @State private var showLayers = false
+    @State private var showStickers = false
     @State private var exportURL: URL?
-    @State private var textDraft = ""
-    @State private var fontSize: CGFloat = 36
+    @State private var confirmFontFallbackExport = false
+    @State private var textLayer: DiaryLayer?
 
     var body: some View {
         NavigationStack {
@@ -31,7 +32,7 @@ struct DiaryEditorScreen: View {
                 let target = replacementID
                 Task {
                     do {
-                        guard let data = try await item.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage }
+                        guard let data = try await item.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage.logged() }
                         await session.importPhoto(data, replacing: target)
                     } catch { session.errorMessage = error.localizedDescription }
                     photoItem = nil
@@ -40,10 +41,15 @@ struct DiaryEditorScreen: View {
             .fullScreenCover(item: $childEditor) { child in
                 AnyView(DiaryEditorScreen(session: child))
             }
-            .sheet(isPresented: $showText) { textEditor }
+            .confirmationDialog("部分文字的字体暂不可用，使用系统字体导出可能改变排版。", isPresented: $confirmFontFallbackExport, titleVisibility: .visible) {
+                Button("使用替代字体导出") { Task { exportURL = await session.export() } }
+                Button("取消", role: .cancel) { }
+            }
+            .sheet(isPresented: $showText) { DiaryTextEditorSheet(session: session, layer: textLayer) }
             .fullScreenCover(isPresented: $showCrop) {
                 if let layer = session.selected { DiaryCropSheet(session: session, layer: layer) }
             }
+            .sheet(isPresented: $showStickers) { DiaryStickerPickerSheet(session: session) }
             .sheet(isPresented: $showLayers) { layerPanel }
             .sheet(isPresented: Binding(get: { exportURL != nil }, set: { if !$0 { exportURL = nil } })) {
                 if let exportURL {
@@ -85,7 +91,13 @@ struct DiaryEditorScreen: View {
                 .disabled(session.undoStack.isEmpty || session.busy).accessibilityLabel("撤销")
             Button { session.redo() } label: { Image(systemName: "arrow.uturn.forward") }
                 .disabled(session.redoStack.isEmpty || session.busy).accessibilityLabel("重做")
-            Button { Task { exportURL = await session.export() } } label: { Image(systemName: "square.and.arrow.up") }
+            Button {
+                let missingFont = session.document.objects.values.flatMap(\.layers).contains {
+                    $0.kind == .text && !DiaryFontCatalog.shared.available($0.font)
+                }
+                if missingFont { confirmFontFallbackExport = true }
+                else { Task { exportURL = await session.export() } }
+            } label: { Image(systemName: "square.and.arrow.up") }
                 .disabled(session.busy).accessibilityLabel("导出图片")
         }
     }
@@ -155,11 +167,7 @@ struct DiaryEditorScreen: View {
                     } else {
                         Button { replacementID = nil; showPhotoPicker = true } label: { Label("照片", systemImage: "photo") }
                         Button { session.select(nil); openText() } label: { Label("文字", systemImage: "textformat") }
-                        Menu {
-                            Button("爱心") { Task { await session.addSticker(symbol: "heart.fill") } }
-                            Button("星星") { Task { await session.addSticker(symbol: "star.fill") } }
-                            Button("太阳") { Task { await session.addSticker(symbol: "sun.max.fill") } }
-                        } label: { Label("贴纸", systemImage: "face.smiling") }
+                        Button { showStickers = true } label: { Label("贴纸", systemImage: "face.smiling") }
                         Button { session.select(nil); session.inkMode = true } label: { Label("画笔", systemImage: "pencil.tip") }
                         Menu {
                             Button("透明") { session.setBackground(nil) }
@@ -179,26 +187,8 @@ struct DiaryEditorScreen: View {
         if editing { session.beginInteraction() } else { session.finishInteraction() }
     }
     private func openText() {
-        textDraft = session.selected?.kind == .text ? session.selected?.text ?? "" : ""
-        fontSize = session.selected?.kind == .text ? session.selected?.fontSize ?? 36 : 36
+        textLayer = session.selected?.kind == .text ? session.selected : nil
         showText = true
-    }
-    private var textEditor: some View {
-        NavigationStack {
-            Form {
-                TextEditor(text: $textDraft).frame(minHeight: 160)
-                Slider(value: $fontSize, in: 18...90) { Text("字号") }
-                Text("字号 \(Int(fontSize))")
-            }
-            .navigationTitle("文字")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { showText = false } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { session.applyText(textDraft, fontSize: fontSize); showText = false }
-                        .disabled(textDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-        }
     }
     private var layerPanel: some View {
         NavigationStack {
@@ -247,7 +237,7 @@ private struct DiaryCropSheet: View {
         .task {
             do {
                 guard let id = layer.photoCrop?.originalAssetID ?? layer.assetID,
-                      let asset = session.document.assets[id] else { throw DiaryEditorError.missingResource }
+                      let asset = session.document.assets[id] else { throw DiaryEditorError.missingResource.logged() }
                 let image = try await session.store.loadOriginalImage(asset, documentID: session.document.id)
                 try Task.checkCancellation()
                 editor = try ImageCropEditor(image: image, parameters: layer.photoCrop?.parameters,

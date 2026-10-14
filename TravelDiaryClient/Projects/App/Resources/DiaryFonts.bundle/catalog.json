@@ -1,0 +1,92 @@
+[
+  {
+    "id": "handwriting.lxgw.wenkai",
+    "version": "1.522",
+    "displayName": "霞鹜文楷",
+    "category": "handwriting",
+    "postScriptName": "LXGWWenKai-Regular",
+    "relativePath": "fonts/LXGWWenKai-Regular.ttf",
+    "sha256": "39ad71264b588165b469e35e6afb162a378dacd1f95348160240ba9038ac3009"
+  },
+  {
+    "id": "calligraphy.ma-shan-zheng",
+    "version": "2.003",
+    "displayName": "马善政毛笔楷书",
+    "category": "calligraphy",
+    "postScriptName": "MaShanZheng-Regular",
+    "relativePath": "fonts/MaShanZheng-Regular.ttf",
+    "sha256": "6d2546bb189c732a8ca29af9e22457b152387d158aa459e4ac2ce1e51788b7fb"
+  },
+  {
+    "id": "calligraphy.long-cang",
+    "version": "2.001",
+    "displayName": "龙藏体",
+    "category": "calligraphy",
+    "postScriptName": "LongCang-Regular",
+    "relativePath": "fonts/LongCang-Regular.ttf",
+    "sha256": "e5bf2c3f24ef2327c6f136d8f73e2f9dfdf44896fdbeb35a9515f44777bb91bc"
+  },
+  {
+    "id": "calligraphy.liu-jian-mao-cao",
+    "version": "1.003",
+    "displayName": "钟齐流江毛草",
+    "category": "calligraphy",
+    "postScriptName": "LiuJianMaoCao-Regular",
+    "relativePath": "fonts/LiuJianMaoCao-Regular.ttf",
+    "sha256": "cab396b91a5b7c0b4005a35891180d06e6751f5ac261fe680aec65c1ae209033"
+  },
+  {
+    "id": "calligraphy.lxgw-zhenkai-gb",
+    "version": "0.800.2",
+    "displayName": "霞鹜臻楷 GB",
+    "category": "calligraphy",
+    "postScriptName": "LXGWZhenKaiGB",
+    "relativePath": "fonts/LXGWZhenKaiGB-Regular.ttf",
+    "sha256": "63424dcfd6482d8f3ee8b29981648a07f791560fd41d8bdf0e825bfb3de0c800"
+  },
+  {
+    "id": "handwriting.lxgw-wenkai-lite",
+    "version": "1.522",
+    "displayName": "霞鹜文楷轻便版",
+    "category": "handwriting",
+    "postScriptName": "LXGWWenKaiLite-Regular",
+    "relativePath": "fonts/LXGWWenKaiLite-Regular.ttf",
+    "sha256": "140c99ba4e28e817cec49bf82a0c5fcdc4fe633fb9dfda16d0ee8d59a8545f15"
+  },
+  {
+    "id": "handwriting.lxgw-wenkai-gb-lite",
+    "version": "1.522",
+    "displayName": "霞鹜文楷 GB 轻便版",
+    "category": "handwriting",
+    "postScriptName": "LXGWWenKaiGBLite-Regular",
+    "relativePath": "fonts/LXGWWenKaiGBLite-Regular.ttf",
+    "sha256": "1675c708cce181871d9a8adc987f35a0cabc6ff980685cd99f05d2655ea08c4c"
+  },
+  {
+    "id": "handwriting.yozai",
+    "version": "0.868",
+    "displayName": "悠哉字体",
+    "category": "handwriting",
+    "postScriptName": "Yozai-Regular",
+    "relativePath": "fonts/Yozai-Regular.ttf",
+    "sha256": "25071998a0fe6a72f54c235e714986d259633e5ff670b1a2b5e264387f3316ac"
+  },
+  {
+    "id": "handwriting.xiaolai",
+    "version": "3.126",
+    "displayName": "小赖字体",
+    "category": "handwriting",
+    "postScriptName": "Xiaolai",
+    "relativePath": "fonts/Xiaolai-Regular.ttf",
+    "sha256": "e2f68daf0e72777a8cf58bc83de1b98634b251e537ddbfca24b0ae50d1802da2"
+  },
+  {
+    "id": "display.lxgw-marker-gothic",
+    "version": "1.004",
+    "displayName": "霞鹜漫黑",
+    "category": "display",
+    "postScriptName": "LXGWMarkerGothic-Regular",
+    "relativePath": "fonts/LXGWMarkerGothic-Regular.ttf",
+    "sha256": "b26c5a81a7a0bb06ed417474e0be6880c7558ec7ccb5b914dba2eb61a96de1ed"
+  }
+]

@@ -27,6 +27,7 @@ extension ImageCropParameters {
 }
 
 /// 通用入口只接收照片与参数，完成返回新位图；不会混入调用方的贴纸、文字或画笔。
+@MainActor
 struct ImageCropEditor: UIViewControllerRepresentable {
     let model: SecondCameraImageEditorModel
     let image: UIImage
@@ -37,6 +38,9 @@ struct ImageCropEditor: UIViewControllerRepresentable {
     init(image: UIImage, parameters: ImageCropParameters?,
          onComplete: @escaping (UIImage, ImageCropParameters) -> Void,
          onCancel: @escaping () -> Void, onError: @escaping (String) -> Void) throws {
+        // 手帐可直接打开裁剪，必须在创建素材与模型之前初始化编辑环境。
+        // 模型的贴纸缓存会立即读取 AppContext；初始化方法支持重复调用。
+        SecondCameraEditorAppContextImplBootstrap.bootstrapIfNeeded()
         guard let data = image.pngData() else { throw CocoaError(.fileReadCorruptFile) }
         // 直接构造原尺寸资源，避免相机附件发送流程对图片再次缩小。
         let source = try SecondCameraEditorDataSourcePath(writingTempFileData: data, fileExtension: "png")

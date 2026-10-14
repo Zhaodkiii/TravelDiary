@@ -78,10 +78,13 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
     var frameWidth: CGFloat?
     var text = ""
     var fontSize: CGFloat = 36
+    var font: DiaryFontReference?
     var photoCrop: DiaryPhotoCrop?
     var crop = DiaryCrop()
     var visible = true
     var locked = false
+    /// PSD 混合效果。旧作品缺少该字段时按 normal 绘制。
+    var blendMode: DiaryBlendMode? = nil
     static func photo(asset: DiaryAsset, center: CGPoint) -> DiaryLayer {
         let factor = min(800 / asset.pixelSize.width, 900 / asset.pixelSize.height)
         let size = CGSize(width: asset.pixelSize.width * factor, height: asset.pixelSize.height * factor)
@@ -89,6 +92,10 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
                           transform: DiaryTransform(position: center, pivot: CGPoint(x: size.width / 2, y: size.height / 2)),
                           size: size, assetID: asset.id)
     }
+}
+
+nonisolated enum DiaryBlendMode: String, Codable, Sendable {
+    case normal, multiply, darken, linearBurn, lighten
 }
 
 extension DiaryDocument {

@@ -35,6 +35,7 @@ enum LogModule: String, Sendable, CaseIterable {
     case ocr = "OCR"
     case routing = "ROUTING"
     case camera = "CAMERA"
+    case diaryEditor = "DIARY_EDITOR"
     case aiChat = "AI_CHAT"
     case general = "GENERAL"
 }

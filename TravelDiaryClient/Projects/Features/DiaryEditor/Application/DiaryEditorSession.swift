@@ -70,7 +70,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         if let saveTask { await saveTask.value }
         guard parent.document.objects[contentID]?.revision == baseRevision else {
             closing = false
-            errorMessage = DiaryEditorError.staleObject.localizedDescription; return false
+            errorMessage = DiaryEditorError.staleObject.logged().localizedDescription; return false
         }
         let before = parent.snapshot
         let oldUndo = parent.undoStack
@@ -217,7 +217,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         busy = true
         defer { busy = false }
         do {
-            guard let data = image.pngData() else { throw DiaryEditorError.invalidImage }
+            guard let data = image.pngData() else { throw DiaryEditorError.invalidImage.logged() }
             let (asset, preview) = try await store.importImage(data, documentID: document.id)
             var state = layer.photoCrop ?? DiaryPhotoCrop(originalAssetID: sourceID, originalSize: layer.size,
                 originalPivot: layer.transform.pivot, originalCrop: layer.crop, parameters: parameters)
@@ -251,6 +251,24 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         guard let id = selectedID, selected?.locked == false, selected?.kind != .frame else { return }
         edit { document.update(id) { $0.crop = crop } }
     }
+    /// 目标 ID 在打开弹窗时固定，避免提交时修改其他选中层。
+    func applyTextEdit(targetID: UUID?, text: String, fontSize: CGFloat, font: DiaryFontReference?) -> Bool {
+        guard !busy, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              fontSize.isFinite, (1...300).contains(fontSize) else { return false }
+        if let targetID {
+            guard let layer = scopeLayers.first(where: { $0.id == targetID }), layer.kind == .text, !layer.locked else {
+                errorMessage = "文字图层已不可编辑"; return false
+            }
+            edit { document.update(targetID) { $0.text = text; $0.fontSize = fontSize; $0.font = font } }
+        } else {
+            let layer = DiaryLayer(name: "文字", kind: .text,
+                transform: DiaryTransform(position: scopeCenter, pivot: CGPoint(x: 200, y: 0)),
+                size: CGSize(width: 400, height: 60), text: text, fontSize: fontSize, font: font)
+            edit { document.appendObject(containing: layer, to: contentID); selectedID = layer.id }
+        }
+        return true
+    }
+
     func applyText(_ text: String, fontSize: CGFloat) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         if let layer = selected, layer.kind == .text {
@@ -265,22 +283,25 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     }
     var scopeCenter: CGPoint { CGPoint(x: content.referenceSize.width / 2, y: content.referenceSize.height / 2) }
 
-    func importPhoto(_ data: Data, replacing: UUID? = nil, asSticker: Bool = false) async {
-        guard !busy else { return }
+    @discardableResult
+    func importPhoto(_ data: Data, replacing: UUID? = nil, asSticker: Bool = false, stickerName: String = "贴纸") async -> Bool {
+        guard !busy else { return false }
         busy = true
         defer { busy = false }
         do {
             let (asset, image) = try await store.importImage(data, documentID: document.id)
-            guard replacing == nil || document.layer(replacing) != nil else { return }
+            guard replacing == nil || document.layer(replacing) != nil else { return false }
             images[asset.id] = image
             edit {
                 document.assets[asset.id] = asset
                 if let replacing {
                     document.update(replacing) { $0.assetID = asset.id; $0.crop = DiaryCrop(); $0.photoCrop = nil }
                 } else if asSticker {
-                    let size = CGSize(width: 180, height: 180 * asset.pixelSize.height / asset.pixelSize.width)
+                    let edge = min(240, min(content.referenceSize.width, content.referenceSize.height) * 0.25)
+                    let ratio = edge / max(asset.pixelSize.width, asset.pixelSize.height)
+                    let size = CGSize(width: asset.pixelSize.width * ratio, height: asset.pixelSize.height * ratio)
                     let center = scopeCenter
-                    let sticker = DiaryLayer(name: "贴纸", kind: .sticker,
+                    let sticker = DiaryLayer(name: stickerName, kind: .sticker,
                                              transform: DiaryTransform(position: center, pivot: CGPoint(x: size.width / 2, y: size.height / 2)),
                                              size: size, assetID: asset.id)
                     document.appendObject(containing: sticker, to: contentID); selectedID = sticker.id
@@ -289,7 +310,8 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                     document.appendObject(containing: photo, to: contentID); selectedID = photo.id
                 }
             }
-        } catch { errorMessage = error.localizedDescription }
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
     }
 
     func addSticker(symbol: String) async {

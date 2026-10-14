@@ -19,7 +19,7 @@ enum DiaryPageRenderer {
     static func textStyle(_ layer: DiaryLayer) -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center; paragraph.lineHeightMultiple = 1.2
-        return [.font: UIFont.systemFont(ofSize: layer.fontSize), .foregroundColor: UIColor.darkText, .paragraphStyle: paragraph]
+        return [.font: DiaryFontCatalog.shared.font(layer.font, size: layer.fontSize), .foregroundColor: UIColor.darkText, .paragraphStyle: paragraph]
     }
 
     static func bounds(_ layer: DiaryLayer, document: DiaryDocument? = nil, siblings: [DiaryLayer] = []) -> CGRect {
@@ -30,7 +30,7 @@ enum DiaryPageRenderer {
             return CGRect(origin: .zero, size: target.size).insetBy(dx: -(layer.frameWidth ?? 12), dy: -(layer.frameWidth ?? 12))
         }
         if layer.kind == .text {
-            let rect = (layer.text as NSString).boundingRect(with: CGSize(width: layer.size.width, height: 10000),
+            let rect = (layer.text as NSString).boundingRect(with: CGSize(width: layer.size.width, height: CGFloat.greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: textStyle(layer), context: nil)
             return CGRect(x: 0, y: 0, width: layer.size.width, height: max(ceil(rect.height), layer.fontSize * 1.2))
         }
@@ -80,6 +80,14 @@ enum DiaryPageRenderer {
         for layer in layers where layer.visible {
             context.saveGState()
             context.concatenate(matrix(layer, siblings: layers))
+            switch layer.blendMode ?? .normal {
+            case .normal: context.setBlendMode(.normal)
+            case .multiply: context.setBlendMode(.multiply)
+            case .darken: context.setBlendMode(.darken)
+            // Core Graphics 的加深相加模式使用 plusDarker 命名。
+            case .linearBurn: context.setBlendMode(.plusDarker)
+            case .lighten: context.setBlendMode(.lighten)
+            }
             switch layer.kind {
             case .object:
                 if let id = layer.contentID, let content = document.objects[id] {
@@ -140,15 +148,15 @@ enum DiaryPageRenderer {
         let image = UIGraphicsImageRenderer(size: document.root.referenceSize, format: format).image { renderer in
             draw(document, images: images, in: renderer.cgContext, cacheObjects: false)
         }
-        guard let cgImage = image.cgImage else { throw DiaryEditorError.exportFailed }
+        guard let cgImage = image.cgImage else { throw DiaryEditorError.exportFailed.logged() }
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
-            throw DiaryEditorError.exportFailed
+            throw DiaryEditorError.exportFailed.logged()
         }
         // PNG 写入打印分辨率；毫米尺寸换算为像素后存在整数取整误差。
         let properties: [CFString: Any] = isA5 ? [kCGImagePropertyDPIWidth: 300, kCGImagePropertyDPIHeight: 300] : [:]
         CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else { throw DiaryEditorError.exportFailed }
+        guard CGImageDestinationFinalize(destination) else { throw DiaryEditorError.exportFailed.logged() }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("手帐-\(UUID().uuidString).png")
         try (data as Data).write(to: url, options: .atomic)
         return url

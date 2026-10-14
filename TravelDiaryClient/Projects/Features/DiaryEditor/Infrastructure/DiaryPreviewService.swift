@@ -24,7 +24,7 @@ enum DiaryPreviewService {
         let image = UIGraphicsImageRenderer(size: size, format: format).image { renderer in
             DiaryPageRenderer.draw(source.document, images: source.images, in: renderer.cgContext, cacheObjects: false)
         }
-        guard let data = image.pngData() else { throw DiaryEditorError.exportFailed }
+        guard let data = image.pngData() else { throw DiaryEditorError.exportFailed.logged() }
         try? await store.cachePreview(data, page: page, large: large)
         try Task.checkCancellation()
         cache.setObject(image, forKey: key, cost: (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0))
