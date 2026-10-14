@@ -3,17 +3,26 @@ import CoreGraphics
 
 /// 可编辑文档只保存排版和资源引用；图片字节、原生视图和屏幕尺寸不进入模型。
 nonisolated struct DiaryDocument: Codable, Equatable, Sendable {
-    var id = UUID()
-    var title = "我的手帐"
-    var page = DiaryPage()
-    var assets: [UUID: DiaryAsset] = [:]
-}
+    var id: UUID
+    var title: String
+    var bookID: UUID? = nil
+    var rootContentID: UUID
+    var assets: [UUID: DiaryAsset]
+    var objects: [UUID: DiaryObjectContent]
 
-nonisolated struct DiaryPage: Codable, Equatable, Sendable {
-    var id = UUID()
-    var size = CGSize(width: 1000, height: 1400)
-    /// 数组从底到顶绘制；移动层级只改变数组顺序。
-    var layers: [DiaryLayer] = []
+    init() {
+        id = UUID(); title = "我的手帐"; assets = [:]
+        let root = DiaryObjectContent(role: .canvas, referenceSize: DiaryPagePreset.a5.size, layers: [])
+        rootContentID = root.id; objects = [root.id: root]
+    }
+
+    init(id: UUID, title: String, rootContentID: UUID, assets: [UUID: DiaryAsset], objects: [UUID: DiaryObjectContent], bookID: UUID? = nil) {
+        self.id = id; self.title = title; self.rootContentID = rootContentID
+        self.assets = assets; self.objects = objects; self.bookID = bookID
+    }
+
+    /// 最外层同样是一个对象内容，不再维护另一套页面图层和页面画笔数据。
+    var root: DiaryObjectContent { objects[rootContentID]! }
 }
 
 nonisolated struct DiaryAsset: Codable, Equatable, Sendable {
@@ -53,61 +62,59 @@ nonisolated struct DiaryCrop: Codable, Equatable, Sendable {
     }
 }
 
-/// 组是唯一有子图层的节点。size 对组只是稳定的初始坐标范围，不用于裁剪装饰。
+/// 页面上的对象实例只保存外部变换，通过 contentID 打开它自己的内容。
+/// 普通照片/文字是内容的基础绘制层；用户新增的元素始终包装为独立对象。
 nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
-    nonisolated enum Kind: String, Codable, Sendable { case group, photo, sticker, text }
+    nonisolated enum Kind: String, Codable, Sendable { case canvas, photo, sticker, text, object, frame }
     var id = UUID()
     var name: String
     var kind: Kind
     var transform: DiaryTransform
     var size: CGSize
     var assetID: UUID?
+    var contentID: UUID?
+    var frameTargetID: UUID?
+    var frameColor: DiaryColor?
+    var frameWidth: CGFloat?
     var text = ""
     var fontSize: CGFloat = 36
+    var photoCrop: DiaryPhotoCrop?
     var crop = DiaryCrop()
     var visible = true
     var locked = false
-    var children: [DiaryLayer] = []
-
-    static func photoGroup(asset: DiaryAsset) -> DiaryLayer {
+    static func photo(asset: DiaryAsset, center: CGPoint) -> DiaryLayer {
         let factor = min(800 / asset.pixelSize.width, 900 / asset.pixelSize.height)
         let size = CGSize(width: asset.pixelSize.width * factor, height: asset.pixelSize.height * factor)
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let photo = DiaryLayer(name: "照片", kind: .photo,
-                              transform: DiaryTransform(position: center, pivot: center),
-                              size: size, assetID: asset.id)
-        return DiaryLayer(name: "照片组合", kind: .group,
-                          transform: DiaryTransform(position: CGPoint(x: 500, y: 620), pivot: center),
-                          size: size, children: [photo])
+        return DiaryLayer(name: "照片", kind: .photo,
+                          transform: DiaryTransform(position: center, pivot: CGPoint(x: size.width / 2, y: size.height / 2)),
+                          size: size, assetID: asset.id)
     }
 }
 
 extension DiaryDocument {
     func layer(_ id: UUID?) -> DiaryLayer? {
         guard let id else { return nil }
-        func find(_ nodes: [DiaryLayer]) -> DiaryLayer? {
-            for node in nodes {
-                if node.id == id { return node }
-                if let match = find(node.children) { return match }
-            }
-            return nil
-        }
-        return find(page.layers)
+        return objects.values.lazy.compactMap { $0.layers.first { $0.id == id } }.first
     }
 
-    /// 根据稳定 ID 更新节点，不使用会随排序而变化的数组下标作为身份。
+    /// 稳定 ID 定位，不将数组下标当作图层身份。
     mutating func update(_ id: UUID, _ mutation: (inout DiaryLayer) -> Void) {
-        func visit(_ nodes: inout [DiaryLayer]) {
-            for index in nodes.indices {
-                if nodes[index].id == id { mutation(&nodes[index]); return }
-                visit(&nodes[index].children)
-            }
+        for contentID in Array(objects.keys) {
+            guard let index = objects[contentID]?.layers.firstIndex(where: { $0.id == id }) else { continue }
+            mutation(&objects[contentID]!.layers[index]); return
         }
-        visit(&page.layers)
     }
+}
 
-    mutating func editLayers(in groupID: UUID?, _ mutation: (inout [DiaryLayer]) -> Void) {
-        if let groupID { update(groupID) { mutation(&$0.children) } }
-        else { mutation(&page.layers) }
-    }
+/// 保留裁剪前照片和外框，恢复时不改变组合内的其他图层。
+nonisolated struct DiaryPhotoCrop: Codable, Equatable, Sendable {
+    var originalAssetID: UUID
+    var originalSize: CGSize
+    var originalPivot: CGPoint
+    var originalCrop: DiaryCrop
+    var parameters: ImageCropParameters
+}
+
+extension DiaryLayer {
+    nonisolated var referencedAssetIDs: [UUID] { [assetID, photoCrop?.originalAssetID].compactMap { $0 } }
 }

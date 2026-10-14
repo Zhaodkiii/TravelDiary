@@ -1,51 +1,85 @@
 import Foundation
 import UIKit
 import ImageIO
+import PencilKit
 
 nonisolated enum DiaryEditorError: LocalizedError {
-    case invalidImage, invalidDocument, unsupportedVersion, missingResource, exportFailed
+    case invalidImage, invalidDocument, unsupportedVersion, missingResource, exportFailed, staleObject, pageConflict, invalidName
     var errorDescription: String? {
         switch self {
         case .invalidImage: "无法读取这张照片，请重新选择。"
-        case .invalidDocument: "手帐文件损坏或版本不受支持。"
-        case .unsupportedVersion: "这份手帐由更新版本创建，请升级应用后打开。"
+        case .invalidDocument: "手帐文件损坏，无法恢复。"
+        case .unsupportedVersion: "这份手帐的格式不受当前编辑器支持。"
         case .missingResource: "手帐素材缺失，暂时无法打开。"
         case .exportFailed: "图片导出失败，请重试。"
+        case .invalidName: "手帐名称需要 1～60 个字符。"
+        case .pageConflict: "这一页的版本已经变化，请保留当前页面并重新打开，避免覆盖其他修改。"
+        case .staleObject: "上一级内容已改变，请重新打开对象编辑。"
         }
     }
 }
 
-/// 文件操作集中在后台串行队列，避免在主线程解码大图或写入照片。
-/// 每次保存发布一个完整修订，最后原子更新 CURRENT，旧修订保留用于恢复。
+/// 根画布和内层对象使用同一文件协议。每次先写完整对象图，再原子发布提交指针。
+/// 后台串行队列拥有全部文件操作；新协议不包含旧照片分组的兼容/迁移分支。
 nonisolated final class DiaryDocumentStore: Sendable {
     nonisolated struct Loaded: Sendable {
         let document: DiaryDocument
-        let drawing: Data
         let images: [UUID: UIImage]
     }
-    private nonisolated struct Pointer: Codable, Sendable { let manifestPath: String }
+    nonisolated struct Draft: Sendable {
+        let loaded: Loaded
+        let baseRevision: Int
+    }
+    private nonisolated struct Pointer: Codable, Sendable {
+        let manifestPath: String
+        var baseRevision: Int? = nil
+    }
+    private nonisolated struct ObjectReference: Codable, Sendable {
+        let id: UUID
+        let path: String
+        let drawingPath: String
+    }
     private nonisolated struct Manifest: Codable, Sendable {
+        let format: String
         let schemaVersion: Int
         let documentID: UUID
         let title: String
-        let assets: [UUID: DiaryAsset]
-        let pagePath: String
-        let drawingPath: String
+        let rootContentID: UUID
+        let assets: [String: DiaryAsset]
+        let objects: [ObjectReference]
+        var bookID: UUID? = nil
     }
     private let root: URL
-    private let queue = DispatchQueue(label: "TravelDiary.DiaryStorage", qos: .userInitiated)
-
-    init(ownerID: String, baseDirectory: URL? = nil) {
-        let scope = Data(ownerID.utf8).base64EncodedString()
-            .replacingOccurrences(of: "/", with: "_")
-        root = (baseDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
-            .appendingPathComponent("Diaries", isDirectory: true)
-            .appendingPathComponent(scope, isDirectory: true)
+    private let libraryRoot: URL
+    private let bookID: UUID?
+    /// 所有 Store 共用串行发布队列，同一本不能由多个独立队列覆盖目录。
+    private static let fileQueue = DispatchQueue(label: "TravelDiary.DiaryStorage", qos: .userInitiated)
+    private var queue: DispatchQueue { Self.fileQueue }
+    private nonisolated final class RevisionState: @unchecked Sendable {
+        // 只允许 fileQueue 访问，保存时检查本会话打开的基线。
+        var values: [UUID: UUID] = [:]
     }
+    private let opened = RevisionState()
 
+    init(ownerID: String, baseDirectory: URL? = nil, bookID: UUID? = nil) {
+        let scope = Data(ownerID.utf8).base64EncodedString().replacingOccurrences(of: "/", with: "_")
+        let scopeRoot = (baseDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
+            .appendingPathComponent("Diaries", isDirectory: true).appendingPathComponent(scope, isDirectory: true)
+        let booksRoot = scopeRoot.appendingPathComponent("books", isDirectory: true)
+        libraryRoot = booksRoot
+        self.bookID = bookID
+        root = bookID.map { booksRoot.appendingPathComponent($0.uuidString, isDirectory: true) } ?? scopeRoot
+    }
     private func run<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             queue.async { continuation.resume(with: Result { try operation() }) }
+        }
+    }
+    /// 裁剪读取源文件，不能使用编辑器的 1800 像素缓存。
+    func loadOriginalImage(_ asset: DiaryAsset, documentID: UUID) async throws -> UIImage {
+        try await run {
+            let data = try Data(contentsOf: self.resolve(asset.path, in: self.assetDirectory(documentID)))
+            return try Self.decode(data, maximumDimension: Int(ceil(max(asset.pixelSize.width, asset.pixelSize.height))))
         }
     }
 
@@ -66,92 +100,196 @@ nonisolated final class DiaryDocumentStore: Sendable {
             let id = UUID()
             // 保留选择器提供的源字节；预览和导出解码时统一处理 EXIF，不覆盖源照片。
             let asset = DiaryAsset(id: id, path: "assets/\(id.uuidString).image", pixelSize: size)
-            let url = self.directory(documentID).appendingPathComponent(asset.path)
+            let url = self.assetDirectory(documentID).appendingPathComponent(asset.path)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
             return (asset, image)
         }
     }
 
-    func save(_ document: DiaryDocument, drawing: Data) async throws {
+    /// 将应用内预设素材复制到手帐本自己的资源目录，之后页面不再依赖 Bundle 路径。
+    func importTemplateAsset(_ data: Data, documentID: UUID, assetID: UUID) async throws -> DiaryAsset {
         try await run {
-            try Self.validate(document)
-            let directory = self.directory(document.id)
-            let revision = "revisions/\(UUID().uuidString)"
-            let folder = directory.appendingPathComponent(revision, isDirectory: true)
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let manifest = Manifest(schemaVersion: 1, documentID: document.id, title: document.title,
-                                    assets: document.assets, pagePath: "\(revision)/page.json",
-                                    drawingPath: "\(revision)/page.drawing")
-            try encoder.encode(document.page).write(to: folder.appendingPathComponent("page.json"), options: .atomic)
-            try drawing.write(to: folder.appendingPathComponent("page.drawing"), options: .atomic)
-            try encoder.encode(manifest).write(to: folder.appendingPathComponent("manifest.json"), options: .atomic)
-            let currentURL = directory.appendingPathComponent("CURRENT.json")
-            if let old = try? Data(contentsOf: currentURL) {
-                try old.write(to: directory.appendingPathComponent("PREVIOUS.json"), options: .atomic)
-            }
-            let pointer = Pointer(manifestPath: "\(revision)/manifest.json")
-            try encoder.encode(pointer).write(to: currentURL, options: .atomic)
-            // 单独记录最近作品，不影响文档本身的提交一致性。
-            try? Data(document.id.uuidString.utf8).write(to: self.root.appendingPathComponent("latest.txt"), options: .atomic)
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+                  let height = properties[kCGImagePropertyPixelHeight] as? NSNumber,
+                  width.doubleValue > 0, height.doubleValue > 0,
+                  CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 64
+                  ] as CFDictionary) != nil else { throw DiaryEditorError.invalidImage }
+            let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+            let swapsAxes = (5...8).contains(orientation)
+            let size = CGSize(width: swapsAxes ? height.doubleValue : width.doubleValue,
+                              height: swapsAxes ? width.doubleValue : height.doubleValue)
+            let asset = DiaryAsset(id: assetID, path: "assets/\(assetID.uuidString).image", pixelSize: size)
+            let url = self.assetDirectory(documentID).appendingPathComponent(asset.path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: url.path) { try data.write(to: url, options: .atomic) }
+            return asset
         }
     }
 
-    func latestID() async throws -> UUID? {
+
+    func save(_ document: DiaryDocument) async throws {
         try await run {
-            guard let data = try? Data(contentsOf: self.root.appendingPathComponent("latest.txt")),
-                  let string = String(data: data, encoding: .utf8) else { return nil }
-            return UUID(uuidString: string)
+            guard document.bookID == self.bookID else { throw DiaryEditorError.invalidDocument }
+            let directory = self.directory(document.id)
+            let path = try self.writeSnapshot(document, prefix: "revisions", directory: directory)
+            if let bookID = self.bookID {
+                var book = try self.readBook(bookID)
+                guard document.root.referenceSize == book.defaultPageSize else { throw DiaryEditorError.invalidDocument }
+                let revision = UUID(uuidString: path.split(separator: "/")[1].description)!
+                if let index = book.pages.firstIndex(where: { $0.id == document.id }) {
+                    guard self.opened.values[document.id] == book.pages[index].revisionID else { throw DiaryEditorError.pageConflict }
+                    book.pages[index].revisionID = revision
+                    book.pages[index].updatedAt = Date()
+                } else {
+                    guard self.opened.values[document.id] == nil,
+                          !book.trashedPages.contains(where: { $0.id == document.id }) else { throw DiaryEditorError.pageConflict }
+                    book.pages.append(DiaryPageEntry(id: document.id, title: "", revisionID: revision, size: document.root.referenceSize))
+                }
+                try self.publish(book)
+                self.opened.values[document.id] = revision
+            } else {
+                let current = directory.appendingPathComponent("CURRENT.json")
+                if let previous = try? Data(contentsOf: current) {
+                    try previous.write(to: directory.appendingPathComponent("PREVIOUS.json"), options: .atomic)
+                }
+                try JSONEncoder().encode(Pointer(manifestPath: path)).write(to: current, options: .atomic)
+            }
         }
     }
 
     func load(_ id: UUID) async throws -> Loaded {
         try await run {
             let directory = self.directory(id)
-            let decoder = JSONDecoder()
-            // 回退仅限明确保留的前一提交指针，不扫描未提交的修订目录。
-            func read(_ pointerName: String) throws -> (DiaryDocument, Data) {
-                let pointer = try decoder.decode(Pointer.self, from: Data(contentsOf: directory.appendingPathComponent(pointerName)))
-                let manifest = try decoder.decode(Manifest.self, from: Data(contentsOf: try self.resolve(pointer.manifestPath, in: directory)))
-                guard manifest.schemaVersion == 1 else { throw DiaryEditorError.unsupportedVersion }
-                guard manifest.documentID == id else { throw DiaryEditorError.invalidDocument }
-                let page = try decoder.decode(DiaryPage.self, from: Data(contentsOf: try self.resolve(manifest.pagePath, in: directory)))
-                let document = DiaryDocument(id: id, title: manifest.title, page: page, assets: manifest.assets)
-                try Self.validate(document)
-                return (document, try Data(contentsOf: self.resolve(manifest.drawingPath, in: directory)))
+            let path: String
+            if let bookID = self.bookID {
+                let book = try self.readBook(bookID)
+                guard let page = book.pages.first(where: { $0.id == id }) else { throw DiaryEditorError.missingResource }
+                path = "revisions/\(page.revisionID.uuidString)/manifest.json"
+                self.opened.values[id] = page.revisionID
+            } else {
+                let pointer = try self.readPointer(directory.appendingPathComponent("CURRENT.json"))
+                path = pointer.manifestPath
             }
-            let pair: (DiaryDocument, Data)
-            do { pair = try read("CURRENT.json") }
-            catch DiaryEditorError.unsupportedVersion { throw DiaryEditorError.unsupportedVersion }
-            catch { pair = try read("PREVIOUS.json") }
-            var images: [UUID: UIImage] = [:]
-            for asset in pair.0.assets.values {
-                let url = try self.resolve(asset.path, in: directory)
-                images[asset.id] = try Self.decode(Data(contentsOf: url), maximumDimension: 1800)
-            }
-            return Loaded(document: pair.0, drawing: pair.1, images: images)
+            let document = try self.readSnapshot(path, directory: directory, documentID: id)
+            return Loaded(document: document, images: try self.readImages(document, dimension: 1800))
         }
     }
-
-    func exportImages(for document: DiaryDocument) async throws -> [UUID: UIImage] {
+    func latestID() async throws -> UUID? {
         try await run {
-            var images: [UUID: UIImage] = [:]
-            for asset in document.assets.values {
-                let url = try self.resolve(asset.path, in: self.directory(document.id))
-                images[asset.id] = try Self.decode(Data(contentsOf: url), maximumDimension: 4000)
-            }
-            return images
+            guard let data = try? Data(contentsOf: self.root.appendingPathComponent("latest.txt")),
+                  let text = String(data: data, encoding: .utf8) else { return nil }
+            return UUID(uuidString: text)
+        }
+    }
+    func exportImages(for document: DiaryDocument) async throws -> [UUID: UIImage] {
+        try await run { try self.readImages(document, dimension: 4000) }
+    }
+
+    /// 草稿使用与正式作品相同的快照格式，但不会修改主作品 CURRENT。
+    func saveDraft(_ document: DiaryDocument, contentID: UUID, baseRevision: Int) async throws {
+        try await run {
+            let directory = self.directory(document.id)
+            let prefix = "drafts/\(contentID.uuidString)"
+            let path = try self.writeSnapshot(document, prefix: prefix, directory: directory)
+            let pointer = Pointer(manifestPath: path, baseRevision: baseRevision)
+            try JSONEncoder().encode(pointer).write(to: directory.appendingPathComponent(prefix + "/CURRENT.json"), options: .atomic)
+        }
+    }
+    func loadDraft(contentID: UUID, documentID: UUID) async throws -> Draft? {
+        try await run {
+            let directory = self.directory(documentID)
+            let url = directory.appendingPathComponent("drafts/\(contentID.uuidString)/CURRENT.json")
+            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+            let pointer = try self.readPointer(url)
+            let document = try self.readSnapshot(pointer.manifestPath, directory: directory, documentID: documentID)
+            guard let base = pointer.baseRevision, document.objects[contentID] != nil else { throw DiaryEditorError.invalidDocument }
+            return Draft(loaded: Loaded(document: document, images: try self.readImages(document, dimension: 1800)), baseRevision: base)
+        }
+    }
+    func discardDraft(contentID: UUID, documentID: UUID) async throws {
+        try await run {
+            // 仅移除发布指针。未被引用的草稿快照可稍后统一回收，避免与正在读取的任务冲突。
+            let url = self.directory(documentID).appendingPathComponent("drafts/\(contentID.uuidString)/CURRENT.json")
+            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
         }
     }
 
-    private func directory(_ id: UUID) -> URL { root.appendingPathComponent(id.uuidString, isDirectory: true) }
+    private func writeSnapshot(_ document: DiaryDocument, prefix: String, directory: URL) throws -> String {
+        guard document.bookID == bookID else { throw DiaryEditorError.invalidDocument }
+        let reachable = try Self.validate(document)
+        let usedAssets = Set(reachable.flatMap { document.objects[$0]?.layers.flatMap(\.referencedAssetIDs) ?? [] })
+        for id in usedAssets {
+            guard let asset = document.assets[id],
+                  FileManager.default.fileExists(atPath: try resolve(asset.path, in: assetDirectory(document.id)).path) else {
+                throw DiaryEditorError.missingResource
+            }
+        }
+        let relative = prefix + "/" + UUID().uuidString
+        let folder = directory.appendingPathComponent(relative + "/objects", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        var refs: [ObjectReference] = []
+        for id in reachable.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard let content = document.objects[id] else { throw DiaryEditorError.invalidDocument }
+            let name = id.uuidString
+            try encoder.encode(content).write(to: folder.appendingPathComponent(name + ".json"), options: .atomic)
+            try content.drawing.write(to: folder.appendingPathComponent(name + ".drawing"), options: .atomic)
+            refs.append(ObjectReference(id: id, path: relative + "/objects/" + name + ".json", drawingPath: relative + "/objects/" + name + ".drawing"))
+        }
+        let assets = Dictionary(uniqueKeysWithValues: document.assets.map { ($0.key.uuidString, $0.value) })
+        let manifest = Manifest(format: "TravelDiary.SmartCanvas", schemaVersion: 1, documentID: document.id,
+                                title: document.title, rootContentID: document.rootContentID, assets: assets, objects: refs, bookID: bookID)
+        let path = relative + "/manifest.json"
+        try encoder.encode(manifest).write(to: directory.appendingPathComponent(path), options: .atomic)
+        return path
+    }
+
+    private func readPointer(_ url: URL) throws -> Pointer { try JSONDecoder().decode(Pointer.self, from: Data(contentsOf: url)) }
+    private func readSnapshot(_ path: String, directory: URL, documentID: UUID) throws -> DiaryDocument {
+        let decoder = JSONDecoder()
+        let manifest = try decoder.decode(Manifest.self, from: Data(contentsOf: resolve(path, in: directory)))
+        guard manifest.format == "TravelDiary.SmartCanvas", manifest.schemaVersion == 1 else { throw DiaryEditorError.unsupportedVersion }
+        guard manifest.documentID == documentID, manifest.bookID == bookID else { throw DiaryEditorError.invalidDocument }
+        var contents: [UUID: DiaryObjectContent] = [:]
+        for ref in manifest.objects {
+            var content = try decoder.decode(DiaryObjectContent.self, from: Data(contentsOf: resolve(ref.path, in: directory)))
+            guard content.id == ref.id, contents[ref.id] == nil else { throw DiaryEditorError.invalidDocument }
+            content.drawing = try Data(contentsOf: resolve(ref.drawingPath, in: directory))
+            if !content.drawing.isEmpty { _ = try PKDrawing(data: content.drawing) }
+            contents[content.id] = content
+        }
+        var assets: [UUID: DiaryAsset] = [:]
+        for (key, asset) in manifest.assets {
+            guard UUID(uuidString: key) == asset.id else { throw DiaryEditorError.invalidDocument }
+            assets[asset.id] = asset
+        }
+        let document = DiaryDocument(id: documentID, title: manifest.title, rootContentID: manifest.rootContentID, assets: assets, objects: contents, bookID: bookID)
+        _ = try Self.validate(document)
+        return document
+    }
+    private func readImages(_ document: DiaryDocument, dimension: Int) throws -> [UUID: UIImage] {
+        var result: [UUID: UIImage] = [:]
+        let used = Set(document.objects.values.flatMap { $0.layers.flatMap(\.referencedAssetIDs) })
+        for id in used {
+            guard let asset = document.assets[id] else { throw DiaryEditorError.missingResource }
+            result[id] = try Self.decode(Data(contentsOf: resolve(asset.path, in: assetDirectory(document.id))), maximumDimension: dimension)
+        }
+        return result
+    }
+    private func directory(_ id: UUID) -> URL {
+        let parent = bookID == nil ? root : root.appendingPathComponent("pages", isDirectory: true)
+        return parent.appendingPathComponent(id.uuidString, isDirectory: true)
+    }
+    private func assetDirectory(_ id: UUID) -> URL { bookID == nil ? directory(id) : root }
     private func resolve(_ path: String, in directory: URL) throws -> URL {
-        guard !path.hasPrefix("/"), !path.split(separator: "/").contains("..") else { throw DiaryEditorError.invalidDocument }
+        guard !path.isEmpty, !path.hasPrefix("/"), !path.split(separator: "/").contains("..") else { throw DiaryEditorError.invalidDocument }
         return directory.appendingPathComponent(path)
     }
-
     private static func decode(_ data: Data, maximumDimension: Int) throws -> UIImage {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -163,31 +301,312 @@ nonisolated final class DiaryDocumentStore: Sendable {
         return UIImage(cgImage: image)
     }
 
-    private static func validate(_ document: DiaryDocument) throws {
-        guard document.page.size.width == 1000, document.page.size.height == 1400 else { throw DiaryEditorError.invalidDocument }
-        var ids = Set<UUID>()
-        func visit(_ nodes: [DiaryLayer], depth: Int) throws {
-            guard depth <= 1, nodes.count <= 200 else { throw DiaryEditorError.invalidDocument }
-            for node in nodes {
+    /// 任意层级共用同一校验：禁止循环引用与共享可变内容；32 层仅为文件安全上限。
+    @discardableResult
+    static func validate(_ document: DiaryDocument) throws -> Set<UUID> {
+        var visited = Set<UUID>()
+        var nodeIDs = Set<UUID>()
+        func validateColor(_ color: DiaryColor?) throws {
+            guard let color else { return }
+            guard [color.red, color.green, color.blue, color.alpha].allSatisfy({ $0.isFinite && (0...1).contains($0) }) else { throw DiaryEditorError.invalidDocument }
+        }
+        func visit(_ id: UUID, depth: Int) throws {
+            guard depth <= 32, visited.insert(id).inserted, let content = document.objects[id], content.id == id,
+                  content.revision > 0, content.layers.count <= 200,
+                  [.canvas, .photo, .text, .sticker].contains(content.role),
+                  [content.referenceSize.width, content.referenceSize.height].allSatisfy({ $0.isFinite && $0 > 0 && $0 <= 10000 }) else {
+                throw DiaryEditorError.invalidDocument
+            }
+            try validateColor(content.background)
+            if let primaryID = content.primaryLayerID {
+                guard content.layers.contains(where: { $0.id == primaryID && $0.kind == content.role }) else { throw DiaryEditorError.invalidDocument }
+            } else if content.role != .canvas { throw DiaryEditorError.invalidDocument }
+            for node in content.layers {
                 let numbers = [node.size.width, node.size.height, node.transform.position.x, node.transform.position.y,
                                node.transform.pivot.x, node.transform.pivot.y, node.transform.scale,
                                node.transform.rotationDegrees, node.crop.zoom, node.crop.offset.x, node.crop.offset.y, node.fontSize]
-                guard ids.insert(node.id).inserted, numbers.allSatisfy(\.isFinite), node.size.width > 0,
-                      node.size.height > 0, node.transform.scale >= 0.05, node.transform.scale <= 20,
-                      node.crop.zoom >= 1, node.crop.zoom <= 10, node.fontSize > 0, node.fontSize <= 300 else {
-                    throw DiaryEditorError.invalidDocument
+                guard nodeIDs.insert(node.id).inserted, numbers.allSatisfy(\.isFinite), node.size.width > 0,
+                      node.size.height > 0, (0.05...20).contains(node.transform.scale),
+                      (1...10).contains(node.crop.zoom), (1...300).contains(node.fontSize) else { throw DiaryEditorError.invalidDocument }
+                if let crop = node.photoCrop {
+                    guard node.kind == .photo, crop.parameters.isValid,
+                          document.assets[crop.originalAssetID] != nil,
+                          [crop.originalSize.width, crop.originalSize.height].allSatisfy({ $0.isFinite && $0 > 0 }),
+                          [crop.originalPivot.x, crop.originalPivot.y, crop.originalCrop.zoom,
+                           crop.originalCrop.offset.x, crop.originalCrop.offset.y].allSatisfy(\.isFinite),
+                          (1...10).contains(crop.originalCrop.zoom) else { throw DiaryEditorError.invalidDocument }
                 }
-                if node.kind == .group {
-                    guard node.children.filter({ $0.kind == .photo }).count == 1 else { throw DiaryEditorError.invalidDocument }
-                    try visit(node.children, depth: depth + 1)
-                } else if !node.children.isEmpty { throw DiaryEditorError.invalidDocument }
-                if node.kind == .photo || node.kind == .sticker {
+                switch node.kind {
+                case .object:
+                    guard let child = node.contentID else { throw DiaryEditorError.invalidDocument }
+                    try visit(child, depth: depth + 1)
+                case .photo, .sticker:
                     guard let assetID = node.assetID, let asset = document.assets[assetID],
-                          asset.pixelSize.width.isFinite, asset.pixelSize.height.isFinite,
-                          asset.pixelSize.width > 0, asset.pixelSize.height > 0 else { throw DiaryEditorError.missingResource }
+                          [asset.pixelSize.width, asset.pixelSize.height].allSatisfy({ $0.isFinite && $0 > 0 }) else { throw DiaryEditorError.missingResource }
+                case .frame:
+                    guard let target = node.frameTargetID, content.layers.contains(where: { $0.id == target && $0.kind == .photo }),
+                          let width = node.frameWidth, width.isFinite, (1...100).contains(width) else { throw DiaryEditorError.invalidDocument }
+                    try validateColor(node.frameColor)
+                case .text: break
+                case .canvas: throw DiaryEditorError.invalidDocument
                 }
             }
         }
-        try visit(document.page.layers, depth: 0)
+        try visit(document.rootContentID, depth: 0)
+        return visited
     }
+}
+
+extension DiaryDocumentStore {
+    /// 书架只扫描小型目录文件，不读取各页图层和照片。
+    nonisolated func listBooks() async throws -> [DiaryBook] {
+        try await run {
+            guard FileManager.default.fileExists(atPath: self.libraryRoot.path) else { return [] }
+            return try FileManager.default.contentsOfDirectory(at: self.libraryRoot, includingPropertiesForKeys: nil)
+                .filter { UUID(uuidString: $0.lastPathComponent) != nil }
+                .map { try self.readBook(UUID(uuidString: $0.lastPathComponent)!) }
+                .sorted { $0.updatedAt == $1.updatedAt ? $0.id.uuidString < $1.id.uuidString : $0.updatedAt > $1.updatedAt }
+        }
+    }
+    nonisolated func createBook(title: String, preset: DiaryPagePreset = .a5) async throws -> DiaryBook {
+        try await run {
+            let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, name.count <= 60 else { throw DiaryEditorError.invalidName }
+            var book = DiaryBook(title: name)
+            book.defaultPageSize = preset.size
+            return try self.publish(book)
+        }
+    }
+    nonisolated func loadBook() async throws -> DiaryBook {
+        try await run {
+            guard let id = self.bookID else { throw DiaryEditorError.invalidDocument }
+            return try self.readBook(id)
+        }
+    }
+    nonisolated func renameBook(_ title: String) async throws {
+        try await mutateBook { book in
+            let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, name.count <= 60 else { throw DiaryEditorError.invalidName }
+            book.title = name
+        }
+    }
+    nonisolated func setCover(_ id: UUID?) async throws {
+        try await mutateBook { book in
+            guard id == nil || book.pages.contains(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument }
+            book.coverPageID = id
+        }
+    }
+    nonisolated func movePage(_ id: UUID, forward: Bool) async throws {
+        try await mutateBook { book in
+            guard let index = book.pages.firstIndex(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument }
+            let target = index + (forward ? 1 : -1)
+            guard book.pages.indices.contains(target) else { return }
+            book.pages.swapAt(index, target)
+        }
+    }
+    /// 软删除只移动目录引用，资源与完整图层仍保留，供用户恢复。
+    nonisolated func trashPage(_ id: UUID) async throws {
+        try await mutateBook { book in
+            guard let index = book.pages.firstIndex(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument }
+            book.trashedPages.append(DiaryTrashedPage(entry: book.pages.remove(at: index), originalIndex: index))
+            if book.coverPageID == id { book.coverPageID = nil }
+        }
+    }
+    nonisolated func restorePage(_ id: UUID) async throws {
+        try await mutateBook { book in
+            guard let index = book.trashedPages.firstIndex(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument }
+            let record = book.trashedPages.remove(at: index)
+            book.pages.insert(record.entry, at: min(record.originalIndex, book.pages.count))
+        }
+    }
+    private nonisolated func mutateBook(_ change: @escaping @Sendable (inout DiaryBook) throws -> Void) async throws {
+        try await run {
+            guard let id = self.bookID else { throw DiaryEditorError.invalidDocument }
+            var book = try self.readBook(id)
+            let before = book
+            try change(&book)
+            guard book != before else { return }
+            try self.publish(book)
+        }
+    }
+    private nonisolated func readBook(_ id: UUID) throws -> DiaryBook {
+        let url = libraryRoot.appendingPathComponent(id.uuidString).appendingPathComponent("book.json")
+        let book = try JSONDecoder().decode(DiaryBook.self, from: Data(contentsOf: url))
+        guard book.id == id, book.format == "TravelDiary.Book", book.schemaVersion == 1,
+              Set(book.pages.map(\.id)).count == book.pages.count,
+              Set(book.pages.map(\.id)).isDisjoint(with: book.trashedPages.map(\.id)),
+              book.defaultPageSize.width.isFinite, book.defaultPageSize.height.isFinite,
+              book.defaultPageSize.width > 0, book.defaultPageSize.height > 0 else { throw DiaryEditorError.invalidDocument }
+        return book
+    }
+    /// 先写完整页快照，再在同一串行队列原子发布本目录。预览失败不会回滚已提交页面。
+    @discardableResult
+    private nonisolated func publish(_ value: DiaryBook) throws -> DiaryBook {
+        var book = value
+        book.updatedAt = Date(); book.catalogRevision = UUID()
+        let directory = libraryRoot.appendingPathComponent(book.id.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("book.json")
+        if let old = try? Data(contentsOf: url) {
+            try old.write(to: directory.appendingPathComponent("book.previous.json"), options: .atomic)
+        }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(book).write(to: url, options: .atomic)
+        return book
+    }
+
+    /// 预览读取不改变编辑会话的保存基线；浏览一本不会抢占某页编辑状态。
+    nonisolated func loadPreviewSource(_ page: DiaryPageEntry, large: Bool) async throws -> Loaded {
+        try await run {
+            let path = "revisions/\(page.revisionID.uuidString)/manifest.json"
+            let doc = try self.readSnapshot(path, directory: self.directory(page.id), documentID: page.id)
+            return Loaded(document: doc, images: try self.readImages(doc, dimension: large ? 1800 : 480))
+        }
+    }
+    nonisolated func cachedPreview(_ page: DiaryPageEntry, large: Bool) async throws -> Data? {
+        try await run { try? Data(contentsOf: self.previewURL(page, large: large)) }
+    }
+    nonisolated func cachePreview(_ data: Data, page: DiaryPageEntry, large: Bool) async throws {
+        try await run {
+            let url = self.previewURL(page, large: large)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        }
+    }
+    nonisolated var previewScope: String { root.path }
+    private nonisolated func previewURL(_ page: DiaryPageEntry, large: Bool) -> URL {
+        let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let scope = libraryRoot.deletingLastPathComponent().lastPathComponent
+        return cache.appendingPathComponent("DiaryPreviews/\(scope)/\(bookID?.uuidString ?? "single")/\(page.id)/\(page.revisionID)/v1-\(large ? 1800 : 480).png")
+    }
+}
+
+extension DiaryDocumentStore {
+    /// 完整准备页面后一次发布目录。新本以目录移动发布，旧本以 book.json 原子写发布。
+    /// operationID 由一次用户意图产生，错误重试沿用；已发布操作直接返回原结果。
+    func importPreset(_ package: DiaryPresetPackage, pageIDs: [String], title: String,
+                      operationID: UUID, afterPageID: UUID? = nil, expectedRevision: UUID? = nil,
+                      progress: @escaping @Sendable (String) -> Void = { _ in },
+                      cancellation: DiaryPresetCancellation? = nil) async throws -> DiaryBook {
+        try await run {
+            let destinationID = self.bookID ?? operationID
+            if let existing = try? self.readBook(destinationID), existing.presetImports?[operationID.uuidString] != nil { return existing }
+            progress("正在校验预设资源…")
+            try cancellation?.check()
+            try package.validate()
+            let all = try package.pages
+            guard !pageIDs.isEmpty, Set(pageIDs).count == pageIDs.count else { throw DiaryEditorError.invalidDocument }
+            let selected = try pageIDs.map { id -> PresetPage in
+                guard let page = all.first(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument }
+                return page
+            }
+            try FileManager.default.createDirectory(at: self.libraryRoot, withIntermediateDirectories: true)
+            let available = (try? self.libraryRoot.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage
+            let required = Int64(package.manifest.files.reduce(0) { $0 + $1.byteCount }) * 2 + 20_000_000
+            if let available, available < required { throw CocoaError(.fileWriteOutOfSpace) }
+            let journalURL = self.libraryRoot.appendingPathComponent(".import-\(operationID.uuidString).json")
+            // 重试清理未发布的孤立页；已提交请求在函数入口已返回，不会删除有效数据。
+            if let bytes = try? Data(contentsOf: journalURL), let journal = try? JSONDecoder().decode(PresetImportJournal.self, from: bytes), journal.destinationID == destinationID {
+                let published = try? self.readBook(destinationID)
+                let pageIDs = Set((published?.pages.map(\.id) ?? []) + (published?.trashedPages.map(\.id) ?? []))
+                for pageID in journal.pageIDs where !pageIDs.contains(pageID) {
+                    try? FileManager.default.removeItem(at: self.libraryRoot.appendingPathComponent("\(destinationID)/pages/\(pageID)"))
+                }
+                // 资源为本次新 UUID，日志在发布前持久化；未发布的资源不可能被其他页面引用。
+                for id in journal.assetIDs { try? FileManager.default.removeItem(at: self.libraryRoot.appendingPathComponent("\(destinationID)/assets/\(id).image")) }
+            }
+            var journal = PresetImportJournal(destinationID: destinationID, stage: "staging", pageIDs: [], assetIDs: [])
+            func log(_ stage: String) throws {
+                journal.stage = stage
+                try JSONEncoder().encode(journal).write(to: journalURL, options: .atomic)
+            }
+            try log("validated")
+            let isNew = self.bookID == nil
+            var book: DiaryBook
+            if isNew {
+                guard !FileManager.default.fileExists(atPath: self.libraryRoot.appendingPathComponent(destinationID.uuidString).path) else { throw DiaryEditorError.pageConflict }
+                let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty, name.count <= 60 else { throw DiaryEditorError.invalidName }
+                book = DiaryBook(title: name); book.id = destinationID; book.defaultPageSize = package.manifest.pageSize.cg
+            } else {
+                book = try self.readBook(destinationID)
+                if let expectedRevision, expectedRevision != book.catalogRevision { throw DiaryEditorError.pageConflict }
+            }
+            if let afterPageID, !book.pages.contains(where: { $0.id == afterPageID }) { throw DiaryEditorError.pageConflict }
+            // 暂存不使用 UUID 本目录名，因此书架扫描永远不会看到半成品。
+            let staging = self.libraryRoot.appendingPathComponent(".import-\(operationID.uuidString)")
+            try? FileManager.default.removeItem(at: staging)
+            try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: staging) }
+            let target = DiaryDocumentStore(ownerID: "preset-staging", baseDirectory: staging, bookID: destinationID)
+            let assetIDs = Dictionary(uniqueKeysWithValues: package.manifest.assetTable.keys.map { ($0, UUID()) })
+            var copied = Set<UUID>(); var entries: [DiaryPageEntry] = []
+            for (index, page) in selected.enumerated() {
+                try cancellation?.check()
+                progress("正在准备第 \(index + 1) / \(selected.count) 页…")
+                let document = try package.instantiate(page, bookID: destinationID, targetSize: book.defaultPageSize, assetIDs: assetIDs)
+                for (key, source) in package.manifest.assetTable {
+                    guard let id = assetIDs[key], document.assets[id] != nil, copied.insert(id).inserted else { continue }
+                    let data = try Data(contentsOf: package.url(source.path))
+                    // 不信任声明的尺寸；真实解码成功后才允许发布。
+                    guard let imageSource = CGImageSourceCreateWithData(data as CFData, nil),
+                          let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any],
+                          (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue == source.pixelSize.width,
+                          (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue == source.pixelSize.height else { throw DiaryEditorError.invalidImage }
+                    _ = try Self.decode(data, maximumDimension: 64)
+                    let url = target.root.appendingPathComponent("assets/\(id.uuidString).image")
+                    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try data.write(to: url, options: .atomic)
+                }
+                let path = try target.writeSnapshot(document, prefix: "revisions", directory: target.directory(document.id))
+                let revision = UUID(uuidString: String(path.split(separator: "/")[1]))!
+                var entry = DiaryPageEntry(id: document.id, title: page.title, revisionID: revision, size: book.defaultPageSize)
+                entry.presetSource = DiaryPresetSource(bookID: package.id, pageID: page.id, version: package.manifest.packageVersion)
+                entries.append(entry)
+            }
+            let insertion = afterPageID.flatMap { id in book.pages.firstIndex { $0.id == id }.map { $0 + 1 } } ?? book.pages.count
+            book.pages.insert(contentsOf: entries, at: insertion)
+            if isNew {
+                book.coverPageID = entries.first(where: { $0.presetSource?.pageID == package.manifest.coverPageID })?.id ?? entries.first?.id
+            }
+            if book.presetImports == nil { book.presetImports = [:] }
+            book.presetImports?[operationID.uuidString] = entries.map(\.id)
+            journal.pageIDs = entries.map(\.id); journal.assetIDs = Array(copied)
+            try cancellation?.check()
+            try log("publishing")
+            progress("正在保存手帐…")
+            if isNew {
+                let prepared = try target.publish(book)
+                try FileManager.default.moveItem(at: target.root, to: self.libraryRoot.appendingPathComponent(destinationID.uuidString))
+                try? FileManager.default.removeItem(at: journalURL)
+                return prepared
+            }
+            // 素材与页目录均为新 UUID，不覆盖已有资源。异常留下的孤立文件不被目录引用。
+            var moved: [URL] = []
+            do {
+                for name in ["assets", "pages"] {
+                    let from = target.root.appendingPathComponent(name)
+                    let to = self.root.appendingPathComponent(name)
+                    try FileManager.default.createDirectory(at: to, withIntermediateDirectories: true)
+                    for item in (try? FileManager.default.contentsOfDirectory(at: from, includingPropertiesForKeys: nil)) ?? [] {
+                        let dest = to.appendingPathComponent(item.lastPathComponent)
+                        try FileManager.default.moveItem(at: item, to: dest); moved.append(dest)
+                    }
+                }
+                let result = try self.publish(book)
+                try? FileManager.default.removeItem(at: journalURL)
+                return result
+            } catch {
+                for item in moved { try? FileManager.default.removeItem(at: item) }
+                throw error
+            }
+        }
+    }
+}
+
+private nonisolated struct PresetImportJournal: Codable {
+    let destinationID: UUID
+    var stage: String
+    var pageIDs: [UUID]
+    var assetIDs: [UUID]
 }

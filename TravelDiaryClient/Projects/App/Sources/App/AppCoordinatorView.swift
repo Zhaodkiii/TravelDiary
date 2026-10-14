@@ -80,7 +80,8 @@ struct SupportMainCoordinatorView: View {
     @StateObject private var aiSettingsViewModel: AISettingsViewModel
     @StateObject private var upgradeLoginViewModel: LoginViewModel
     @State private var showsDeviceAccountUpgradeSheet = false
-    @State private var selectedTab: SupportRootTab = .photoEditor
+    @State private var showsDiaryPresetLibrary = false
+    @State private var selectedTab: SupportRootTab = .diaryEditor
     @State private var path = NavigationPath()
 
     init(session: UserSession, dependencies: AppCoordinatorDependencies) {
@@ -94,33 +95,33 @@ struct SupportMainCoordinatorView: View {
     var body: some View {
         NavigationStack(path: $path) {
             TabView(selection: $selectedTab) {
-                HomeDashboardView(
-                    session: session,
-                    authRepository: dependencies.authRepository
-                )
-                .tabItem {
-                    Label(L10n.tr("home.title", fallback: "首页"), systemImage: "house")
-                }
-                .tag(SupportRootTab.healthHome)
+//                HomeDashboardView(
+//                    session: session,
+//                    authRepository: dependencies.authRepository
+//                )
+//                .tabItem {
+//                    Label(L10n.tr("home.title", fallback: "首页"), systemImage: "house")
+//                }
+//                .tag(SupportRootTab.healthHome)
+//
+//                PhotoEditorHomeView()
+//                    .tabItem {
+//                        Label("照片编辑", systemImage: "photo.badge.pencil")
+//                    }
+//                    .tag(SupportRootTab.photoEditor)
 
-                PhotoEditorHomeView()
-                    .tabItem {
-                        Label("照片编辑", systemImage: "photo.badge.pencil")
-                    }
-                    .tag(SupportRootTab.photoEditor)
-
-                DiaryEditorHomeView(ownerID: String(session.accountID))
+                DiaryEditorHomeView(ownerID: String(session.accountID), showingPresets: $showsDiaryPresetLibrary)
                     .id(session.accountID)
                     .tabItem {
                         Label("手帐", systemImage: "book.pages")
                     }
                     .tag(SupportRootTab.diaryEditor)
 
-                SecondCameraHomeView()
-                    .tabItem {
-                        Label(SecondCameraEditorL10n.Home.tabTitle, systemImage: "camera.fill")
-                    }
-                    .tag(SupportRootTab.secondCamera)
+//                SecondCameraHomeView()
+//                    .tabItem {
+//                        Label(SecondCameraEditorL10n.Home.tabTitle, systemImage: "camera.fill")
+//                    }
+//                    .tag(SupportRootTab.secondCamera)
 
                 SettingsView(
                     accountManagementViewModel: accountViewModel,
@@ -170,8 +171,11 @@ struct SupportMainCoordinatorView: View {
                 tabTitle("照片编辑")
             }
         case .diaryEditor:
+            ToolbarItem(placement: .topBarLeading) {
+                Button("预设") { showsDiaryPresetLibrary = true }
+            }
             ToolbarItem(placement: .principal) {
-                tabTitle("手帐")
+                tabTitle("我的")
             }
         case .secondCamera:
             // The camera deliberately presents an immersive, navigation-bar-free surface.

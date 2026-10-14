@@ -12,12 +12,12 @@ struct DiaryCanvasView: UIViewRepresentable {
     }
 }
 
-/// 页面始终使用 1000×1400 设计坐标；UIView 只负责将其映射到当前可用屏幕区域。
+/// 每个对象使用独立设计坐标；视口可包含负坐标，装饰伸出照片时仍保留原位置。
 final class DiaryCanvasSurface: UIView {
     weak var session: DiaryEditorSession?
     private var startPosition: CGPoint?
     private var parentAtStart = CGAffineTransform.identity
-    private var fit: CGFloat { bounds.width / 1000 }
+    private var fit: CGFloat { bounds.width / (session?.canvasBounds.width ?? 1000) }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -35,27 +35,37 @@ final class DiaryCanvasSurface: UIView {
         guard let session, let context = UIGraphicsGetCurrentContext(), fit > 0 else { return }
         context.saveGState()
         context.scaleBy(x: fit, y: fit)
-        DiaryPageRenderer.draw(session.document, images: session.images,
-                               drawing: session.inkMode ? nil : session.drawing, in: context)
+        context.translateBy(x: -session.canvasBounds.minX, y: -session.canvasBounds.minY)
+        // 棋盘格只用于显示透明区域，不写入导出图片。
+        let viewport = session.canvasBounds
+        UIColor.white.setFill(); context.fill(viewport)
+        UIColor(white: 0.92, alpha: 1).setFill()
+        for x in stride(from: viewport.minX, to: viewport.maxX, by: 30) {
+            for y in stride(from: viewport.minY, to: viewport.maxY, by: 30) {
+                if (Int((x - viewport.minX) / 30) + Int((y - viewport.minY) / 30)) % 2 == 0 {
+                    context.fill(CGRect(x: x, y: y, width: 30, height: 30).intersection(viewport))
+                }
+            }
+        }
+        DiaryPageRenderer.draw(session.document, contentID: session.contentID, images: session.images,
+                               in: context, viewport: viewport, includeInk: !session.inkMode)
         if !session.inkMode, let layer = session.selected, layer.visible {
-            context.concatenate(session.parentMatrix)
-            context.concatenate(layer.transform.matrix)
+            context.concatenate(DiaryPageRenderer.matrix(layer, siblings: session.scopeLayers))
             context.setStrokeColor(UIColor.systemBlue.cgColor)
-            let parentScale = session.document.layer(session.groupID)?.transform.scale ?? 1
-            context.setLineWidth(2 / max(0.01, fit * parentScale * layer.transform.scale))
-            context.stroke(DiaryPageRenderer.bounds(layer).insetBy(dx: -3, dy: -3))
+            context.setLineWidth(2 / max(0.01, fit * layer.transform.scale))
+            context.stroke(DiaryPageRenderer.bounds(layer, document: session.document, siblings: session.scopeLayers).insetBy(dx: -3, dy: -3))
         }
         context.restoreGState()
     }
 
     private func hit(_ screen: CGPoint) -> UUID? {
         guard let session, fit > 0 else { return nil }
-        let pagePoint = CGPoint(x: screen.x / fit, y: screen.y / fit)
-        let parentPoint = pagePoint.applying(session.parentMatrix.inverted())
+        let pagePoint = CGPoint(x: screen.x / fit + session.canvasBounds.minX, y: screen.y / fit + session.canvasBounds.minY)
+        let parentPoint = pagePoint
         // 从上到下命中；组内编辑时只检查当前组的直接子层。
         for node in session.scopeLayers.reversed() where node.visible && !node.locked {
-            let local = parentPoint.applying(node.transform.matrix.inverted())
-            if DiaryPageRenderer.bounds(node).contains(local) { return node.id }
+            let local = parentPoint.applying(DiaryPageRenderer.matrix(node, siblings: session.scopeLayers).inverted())
+            if DiaryPageRenderer.bounds(node, document: session.document, siblings: session.scopeLayers).contains(local) { return node.id }
         }
         return nil
     }
@@ -71,7 +81,7 @@ final class DiaryCanvasSurface: UIView {
             guard let layer = session.selected else { return }
             session.beginInteraction()
             startPosition = layer.transform.position
-            parentAtStart = session.parentMatrix
+            parentAtStart = .identity
         case .changed:
             guard let startPosition else { return }
             let translation = gesture.translation(in: self)
@@ -104,9 +114,11 @@ struct DiaryDrawingCanvasView: UIViewRepresentable {
     }
     func updateUIView(_ view: PKCanvasView, context: Context) { configure(view, coordinator: context.coordinator) }
     private func configure(_ view: PKCanvasView, coordinator: Coordinator) {
-        if view.drawing != session.drawing {
+        var displayed = session.drawing
+        displayed.transform(using: CGAffineTransform(translationX: -session.canvasBounds.minX, y: -session.canvasBounds.minY))
+        if view.drawing != displayed {
             coordinator.replaying = true
-            view.drawing = session.drawing
+            view.drawing = displayed
             view.undoManager?.removeAllActions()
             coordinator.replaying = false
         }
@@ -119,10 +131,14 @@ struct DiaryDrawingCanvasView: UIViewRepresentable {
         func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { session.beginInteraction() }
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             guard !replaying else { return }
-            session.previewDrawing(canvasView.drawing)
+            var local = canvasView.drawing
+            local.transform(using: CGAffineTransform(translationX: session.canvasBounds.minX, y: session.canvasBounds.minY))
+            session.previewDrawing(local)
         }
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
-            session.previewDrawing(canvasView.drawing)
+            var local = canvasView.drawing
+            local.transform(using: CGAffineTransform(translationX: session.canvasBounds.minX, y: session.canvasBounds.minY))
+            session.previewDrawing(local)
             session.finishInteraction()
             canvasView.undoManager?.removeAllActions()
         }

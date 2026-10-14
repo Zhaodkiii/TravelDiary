@@ -22,6 +22,9 @@ private extension CGFloat {
 // A view for editing text item in image editor.
 class SecondCameraImageEditorCropViewController: SecondCameraEditorViewController {
 
+    /// 通用调用方接收完成操作并负责保存和关闭；相机原有流程继续使用模型提交。
+    var cropCompletionHandler: ((SecondCameraImageEditorTransform) -> Void)?
+
     private let model: SecondCameraImageEditorModel
 
     private let srcImage: UIImage
@@ -1005,6 +1008,7 @@ extension SecondCameraImageEditorCropViewController {
 
     @objc
     private func didTapSecondCameraDone() {
+        if let cropCompletionHandler { cropCompletionHandler(transform); return }
         model.replace(transform: transform)
         transitionSecondCameraEditorUI(toState: .initial, animated: true) { finished in
             guard finished else { return }

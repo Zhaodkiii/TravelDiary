@@ -1,85 +1,142 @@
 import SwiftUI
-import PhotosUI
-import PencilKit
 
-/// 手帐入口：系统选图成功后直接创建文档并进入编辑器，不要求先填写作品信息。
+/// 手帐入口改为书架。这里只读取本目录和封面，不提前加载整本编辑数据。
 struct DiaryEditorHomeView: View {
     let ownerID: String
-    @State private var photoItem: PhotosPickerItem?
-    @State private var editor: DiaryEditorSession?
-    @State private var store: DiaryDocumentStore?
-    @State private var latestID: UUID?
-    @State private var isLoading = false
+    @Binding var showingPresets: Bool
+    @State private var books: [DiaryBook] = []
+    @State private var path: [UUID] = []
+    @State private var creating = false
+    @State private var title = "未命名手帐"
+    @State private var pagePreset: DiaryPagePreset = .a5
+    @State private var busy = false
     @State private var message: String?
 
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            Image(systemName: "book.pages").font(.system(size: 64)).foregroundStyle(.tint)
-            Text("从一张照片开始手帐").font(.title2.bold())
-            Text("选择手机中的照片，添加文字、贴纸和手绘。")
-                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            PhotosPicker(selection: $photoItem, matching: .images) {
-                Label("选择照片，开始编辑", systemImage: "photo.badge.plus")
-                    .frame(maxWidth: .infinity).padding(.vertical, 8)
+        NavigationStack(path: $path) {
+            ScrollView {
+                if books.isEmpty {
+                    ContentUnavailableView("创建第一本手帐", systemImage: "books.vertical", description: Text("一本手帐可以有很多页，记录每一次旅行和日常。"))
+                        .padding(.top, 60)
+                }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150))], spacing: 20) {
+                    ForEach(books) { book in
+                        NavigationLink(value: book.id) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                if let cover = book.effectiveCover {
+                                    DiaryPagePreview(page: cover, store: DiaryDocumentStore(ownerID: ownerID, bookID: book.id))
+                                } else {
+                                    RoundedRectangle(cornerRadius: 12).fill(.orange.opacity(0.12))
+                                        .overlay { Image(systemName: "book.closed").font(.largeTitle).foregroundStyle(.orange) }
+                                        .aspectRatio(book.defaultPageSize.width / book.defaultPageSize.height, contentMode: .fit)
+                                }
+                                Text(book.title).font(.headline).lineLimit(2)
+                                Text("\(book.pages.count) 页 · \(book.updatedAt.formatted(date: .abbreviated, time: .omitted))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.buttonStyle(.plain)
+                    }
+                }.padding()
+                Button { pagePreset = .a5; creating = true } label: { Label("新建手帐本", systemImage: "plus") }
+                    .buttonStyle(.borderedProminent).padding(.bottom)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(isLoading || store == nil)
-            if let latestID {
-                Button("继续上次的手帐") { Task { await reopen(latestID) } }
-                    .disabled(isLoading)
+            .toolbar(.visible, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { pagePreset = .a5; creating = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("新建手帐本")
+                }
             }
-            if isLoading { ProgressView("正在读取照片和准备画布…") }
-            Spacer()
+            .navigationTitle("我的")
+            .navigationDestination(for: UUID.self) { id in
+                if let book = books.first(where: { $0.id == id }) {
+                    DiaryBookScreen(ownerID: ownerID, book: book)
+                } else {
+                    ContentUnavailableView("手帐暂不可用", systemImage: "book.closed", description: Text("请返回书架刷新后重试。"))
+                }
+            }
+            .task { await reload(); _ = try? await Task.detached { try BundleDiaryPresetProvider().catalog() }.value }
+            .fullScreenCover(isPresented: $showingPresets, onDismiss: { Task { await reload() } }) {
+                NavigationStack {
+                    DiaryPresetLibraryScreen(ownerID: ownerID, isFullScreen: true)
+                }
+            }
+            .onChange(of: path) { _, value in if value.isEmpty { Task { await reload() } } }
+            .refreshable { await reload() }
+            .sheet(isPresented: $creating) {
+                NavigationStack {
+                    Form {
+                        TextField("手帐名称", text: $title)
+                        Picker("画布尺寸", selection: $pagePreset) {
+                            ForEach(DiaryPagePreset.allCases) { preset in
+                                Text(preset.title).tag(preset)
+                            }
+                        }
+                        if pagePreset == .a5 {
+                            Text("1748 × 2480 px · 148 × 210 mm · 300 DPI")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Text("默认透明背景；一本内页面保持相同尺寸。名称最多 60 个字符。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .navigationTitle("新建手帐本")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("取消") { creating = false }.disabled(busy) }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("创建") { Task { await create() } }
+                                .disabled(busy || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || title.count > 60)
+                        }
+                    }
+                    .interactiveDismissDisabled(busy)
+                }
+            }
+            .alert("手帐", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
+                Button("确定") { message = nil }
+            } message: { Text(message ?? "") }
         }
-        .padding(28)
-        .task(id: ownerID) {
-            let newStore = DiaryDocumentStore(ownerID: ownerID)
-            store = newStore
-            latestID = try? await newStore.latestID()
-        }
-        .onChange(of: photoItem) { _, item in
-            guard let item, let store else { return }
-            Task { await createEditor(item, store: store) }
-        }
-        .fullScreenCover(item: $editor, onDismiss: {
-            Task { if let store { latestID = try? await store.latestID() } }
-        }) { session in
-            DiaryEditorScreen(session: session)
-        }
-        .alert("手帐", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
-            Button("确定") { message = nil }
-        } message: { Text(message ?? "") }
     }
-
-    @MainActor
-    private func createEditor(_ item: PhotosPickerItem, store: DiaryDocumentStore) async {
-        guard !isLoading else { return }
-        isLoading = true
-        defer { isLoading = false; photoItem = nil }
+    private func reload() async {
+        do { books = try await DiaryDocumentStore(ownerID: ownerID).listBooks() }
+        catch { message = error.localizedDescription }
+    }
+    private func create() async {
+        guard !busy else { return }; busy = true
+        defer { busy = false }
         do {
-            guard let data = try await item.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage }
-            var document = DiaryDocument()
-            let (asset, image) = try await store.importImage(data, documentID: document.id)
-            document.assets[asset.id] = asset
-            document.page.layers = [DiaryLayer.photoGroup(asset: asset)]
-            let drawing = PKDrawing()
-            // 文档首次完整落盘后才展示编辑器，避免选图成功但作品没有可恢复入口。
-            try await store.save(document, drawing: drawing.dataRepresentation())
-            latestID = document.id
-            editor = DiaryEditorSession(document: document, images: [asset.id: image], store: store)
+            let book = try await DiaryDocumentStore(ownerID: ownerID).createBook(title: title, preset: pagePreset)
+            books.insert(book, at: 0); creating = false; path.append(book.id)
+            title = "未命名手帐"; pagePreset = .a5
         } catch { message = error.localizedDescription }
     }
+}
 
-    @MainActor
-    private func reopen(_ id: UUID) async {
-        guard let store, !isLoading else { return }
-        isLoading = true
-        defer { isLoading = false }
-        do {
-            let loaded = try await store.load(id)
-            editor = DiaryEditorSession(document: loaded.document, images: loaded.images,
-                                        drawing: try PKDrawing(data: loaded.drawing), store: store)
-        } catch { message = error.localizedDescription }
+/// 卡片以版本作为任务身份。复用或滚出屏幕后，取消任务不会把旧结果贴到别的页面。
+struct DiaryPagePreview: View {
+    let page: DiaryPageEntry
+    let store: DiaryDocumentStore
+    var large = false
+    @State private var image: UIImage?
+    @State private var failed = false
+    @State private var retry = 0
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8).fill(Color(uiColor: .secondarySystemGroupedBackground))
+            if let image { Image(uiImage: image).resizable().scaledToFit() }
+            else if failed {
+                Button { retry += 1 } label: { Label("重试预览", systemImage: "arrow.clockwise") }.font(.caption)
+            } else { ProgressView() }
+        }
+        .aspectRatio(page.size.width / page.size.height, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .task(id: "\(page.id)-\(page.revisionID)-\(large)-\(retry)") {
+            image = nil; failed = false
+            do {
+                let result = try await DiaryPreviewService.image(page: page, store: store, large: large)
+                try Task.checkCancellation(); image = result
+            } catch is CancellationError { }
+            catch { failed = true }
+        }
+        .accessibilityLabel("页面设计预览")
     }
 }

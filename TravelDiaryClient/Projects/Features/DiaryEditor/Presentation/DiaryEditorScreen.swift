@@ -6,6 +6,7 @@ struct DiaryEditorScreen: View {
     @ObservedObject var session: DiaryEditorSession
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @State private var childEditor: DiaryEditorSession?
     @State private var photoItem: PhotosPickerItem?
     @State private var replacementID: UUID?
     @State private var showPhotoPicker = false
@@ -18,51 +19,11 @@ struct DiaryEditorScreen: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                HStack {
-                    if session.groupID != nil {
-                        Button("完成组合编辑") { session.leaveGroup() }
-                    } else { Text(session.inkMode ? "画笔覆盖整页" : "选择元素后拖动，使用下方工具调整") }
-                    Spacer()
-                    Text(session.saveStatus).foregroundStyle(.secondary)
-                }
-                .font(.caption).padding(.horizontal).padding(.vertical, 8)
-                GeometryReader { geometry in
-                    let scale = max(0.01, min((geometry.size.width - 24) / 1000, (geometry.size.height - 24) / 1400))
-                    ZStack(alignment: .topLeading) {
-                        DiaryCanvasView(session: session)
-                            .frame(width: 1000 * scale, height: 1400 * scale)
-                        if session.inkMode {
-                            DiaryDrawingCanvasView(session: session)
-                                .frame(width: 1000, height: 1400)
-                                .scaleEffect(scale, anchor: .topLeading)
-                                .frame(width: 1000 * scale, height: 1400 * scale, alignment: .topLeading)
-                                .clipped()
-                        }
-                    }
-                    .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .background(Color(uiColor: .systemGroupedBackground))
-                controls
-            }
+            editorContent
             .disabled(session.busy)
-            .navigationTitle("手帐编辑器")
+            .navigationTitle(session.isRoot ? "画布编辑器" : "对象编辑器")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("完成") { Task { if await session.close() { dismiss() } } }
-                        .disabled(session.busy)
-                }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { session.undo() } label: { Image(systemName: "arrow.uturn.backward") }
-                        .disabled(session.undoStack.isEmpty || session.busy).accessibilityLabel("撤销")
-                    Button { session.redo() } label: { Image(systemName: "arrow.uturn.forward") }
-                        .disabled(session.redoStack.isEmpty || session.busy).accessibilityLabel("重做")
-                    Button { Task { exportURL = await session.export() } } label: { Image(systemName: "square.and.arrow.up") }
-                        .disabled(session.busy).accessibilityLabel("导出图片")
-                }
-            }
+            .toolbar { editorToolbar }
             .overlay { if session.busy { ProgressView("正在处理…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
             .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
             .onChange(of: photoItem) { _, item in
@@ -76,8 +37,11 @@ struct DiaryEditorScreen: View {
                     photoItem = nil
                 }
             }
+            .fullScreenCover(item: $childEditor) { child in
+                AnyView(DiaryEditorScreen(session: child))
+            }
             .sheet(isPresented: $showText) { textEditor }
-            .sheet(isPresented: $showCrop) {
+            .fullScreenCover(isPresented: $showCrop) {
                 if let layer = session.selected { DiaryCropSheet(session: session, layer: layer) }
             }
             .sheet(isPresented: $showLayers) { layerPanel }
@@ -86,7 +50,7 @@ struct DiaryEditorScreen: View {
                     NavigationStack {
                         VStack(spacing: 20) {
                             Image(systemName: "checkmark.circle.fill").font(.largeTitle).foregroundStyle(.green)
-                            Text("已生成 2000 × 2800 图片")
+                            Text("已生成 PNG 图片（保留透明区域）")
                             ShareLink(item: exportURL) { Label("分享或保存图片", systemImage: "square.and.arrow.up") }
                                 .buttonStyle(.borderedProminent)
                         }
@@ -107,19 +71,70 @@ struct DiaryEditorScreen: View {
         }
     }
 
+    @ToolbarContentBuilder
+    private var editorToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            HStack {
+                Button("完成") { Task { if await session.commitToParent() { dismiss() } } }
+                if !session.isRoot { Button("取消") { Task { await session.cancelEditor(); dismiss() } } }
+            }
+            .disabled(session.busy)
+        }
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button { session.undo() } label: { Image(systemName: "arrow.uturn.backward") }
+                .disabled(session.undoStack.isEmpty || session.busy).accessibilityLabel("撤销")
+            Button { session.redo() } label: { Image(systemName: "arrow.uturn.forward") }
+                .disabled(session.redoStack.isEmpty || session.busy).accessibilityLabel("重做")
+            Button { Task { exportURL = await session.export() } } label: { Image(systemName: "square.and.arrow.up") }
+                .disabled(session.busy).accessibilityLabel("导出图片")
+        }
+    }
+
+    private var editorContent: some View {
+            VStack(spacing: 0) {
+                HStack {
+                    Text(session.inkMode ? "涂鸦属于当前对象，返回后跟随对象移动" : "选中对象后打开独立编辑页面")
+                    Spacer()
+                    Text(session.saveStatus).foregroundStyle(.secondary)
+                }
+                .font(.caption).padding(.horizontal).padding(.vertical, 8)
+                GeometryReader { geometry in
+                    let size = session.canvasBounds.size
+                    let scale = max(0.01, min((geometry.size.width - 24) / size.width, (geometry.size.height - 24) / size.height))
+                    ZStack(alignment: .topLeading) {
+                        DiaryCanvasView(session: session)
+                            .frame(width: size.width * scale, height: size.height * scale)
+                        if session.inkMode {
+                            DiaryDrawingCanvasView(session: session)
+                                .frame(width: size.width, height: size.height)
+                                .scaleEffect(scale, anchor: .topLeading)
+                                .frame(width: size.width * scale, height: size.height * scale, alignment: .topLeading)
+                                .clipped()
+                        }
+                    }
+                    .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .background(Color(uiColor: .systemGroupedBackground))
+                controls
+            }
+    }
+
     private var controls: some View {
         VStack(spacing: 8) {
             if let layer = session.selected, !session.inkMode {
                 HStack {
                     Text(layer.name).font(.caption).lineLimit(1)
                     Spacer()
-                    if layer.kind == .group { Button("编辑组合") { session.enterGroup() } }
+                    if layer.kind == .object { Button("打开对象") { childEditor = session.openObject() } }
                     if layer.kind == .photo {
                         Button("替换") { replacementID = layer.id; showPhotoPicker = true }
                         Button("裁剪") { showCrop = true }
+                        if layer.photoCrop != nil { Button("恢复原图") { session.restoreOriginalPhoto() } }
+                        Button("相框") { session.addFrame() }
                     }
                     if layer.kind == .text { Button("编辑文字") { openText() } }
-                    if layer.kind != .photo { Button("删除", role: .destructive) { session.removeSelected() } }
+                    if layer.id != session.content.primaryLayerID { Button("删除", role: .destructive) { session.removeSelected() } }
                 }.font(.caption).disabled(layer.locked)
                 HStack {
                     Text("大小").font(.caption)
@@ -139,7 +154,6 @@ struct DiaryEditorScreen: View {
                         Button("清空画笔", role: .destructive) { session.clearDrawing() }
                     } else {
                         Button { replacementID = nil; showPhotoPicker = true } label: { Label("照片", systemImage: "photo") }
-                            .disabled(session.groupID != nil)
                         Button { session.select(nil); openText() } label: { Label("文字", systemImage: "textformat") }
                         Menu {
                             Button("爱心") { Task { await session.addSticker(symbol: "heart.fill") } }
@@ -147,7 +161,13 @@ struct DiaryEditorScreen: View {
                             Button("太阳") { Task { await session.addSticker(symbol: "sun.max.fill") } }
                         } label: { Label("贴纸", systemImage: "face.smiling") }
                         Button { session.select(nil); session.inkMode = true } label: { Label("画笔", systemImage: "pencil.tip") }
-                            .disabled(session.groupID != nil)
+                        Menu {
+                            Button("透明") { session.setBackground(nil) }
+                            Button("白色") { session.setBackground(.white) }
+                            Button("暖黄") { session.setBackground(.yellow) }
+                            Button("粉色") { session.setBackground(.pink) }
+                            Button("薄荷绿") { session.setBackground(.mint) }
+                        } label: { Label("背景", systemImage: "paintpalette") }
                         Button { showLayers = true } label: { Label("图层", systemImage: "square.3.layers.3d") }
                     }
                 }.font(.subheadline)
@@ -205,44 +225,43 @@ struct DiaryEditorScreen: View {
     }
 }
 
-/// 裁剪在独立工作副本中预览；取消不修改文档，完成只产生一条撤销记录。
+/// 独立全屏裁剪只加载照片原图，装饰始终留在对象的其他图层中。
 private struct DiaryCropSheet: View {
     @ObservedObject var session: DiaryEditorSession
     let layer: DiaryLayer
     @Environment(\.dismiss) private var dismiss
-    @State private var crop: DiaryCrop
-    init(session: DiaryEditorSession, layer: DiaryLayer) {
-        self.session = session; self.layer = layer; _crop = State(initialValue: layer.crop)
-    }
+    @State private var editor: ImageCropEditor?
+    @State private var error: String?
+    @State private var submitting = false
+
     var body: some View {
-        NavigationStack {
-            VStack {
-                if let id = layer.assetID, let image = session.images[id], let asset = session.document.assets[id] {
-                    GeometryReader { geometry in
-                        let fit = min(geometry.size.width / layer.size.width, geometry.size.height / layer.size.height)
-                        let rect = crop.imageRect(source: asset.pixelSize, frame: layer.size)
-                        Image(uiImage: image).resizable()
-                            .frame(width: rect.width * fit, height: rect.height * fit)
-                            .offset(x: rect.minX * fit, y: rect.minY * fit)
-                            .frame(width: layer.size.width * fit, height: layer.size.height * fit, alignment: .topLeading)
-                            .clipped().frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                    .frame(height: 280)
-                    Form {
-                        Slider(value: $crop.zoom, in: 1...5) { Text("放大照片") }
-                        Text("照片放大 \(crop.zoom, specifier: "%.1f") 倍")
-                        Slider(value: $crop.offset.x, in: -layer.size.width...layer.size.width) { Text("左右取景") }
-                        Text("左右取景")
-                        Slider(value: $crop.offset.y, in: -layer.size.height...layer.size.height) { Text("上下取景") }
-                        Text("上下取景")
-                    }
-                }
-            }
-            .navigationTitle("照片取景")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { session.applyCrop(crop); dismiss() } }
-            }
+        Group {
+            if let editor { editor.ignoresSafeArea() }
+            else if let error {
+                VStack(spacing: 20) { Text(error); Button("关闭") { dismiss() } }
+            } else { ProgressView("正在加载原图…") }
+        }
+        .disabled(submitting)
+        .overlay { if submitting { ProgressView("正在保存裁剪…").padding().background(.regularMaterial) } }
+        .interactiveDismissDisabled(submitting)
+        .task {
+            do {
+                guard let id = layer.photoCrop?.originalAssetID ?? layer.assetID,
+                      let asset = session.document.assets[id] else { throw DiaryEditorError.missingResource }
+                let image = try await session.store.loadOriginalImage(asset, documentID: session.document.id)
+                try Task.checkCancellation()
+                editor = try ImageCropEditor(image: image, parameters: layer.photoCrop?.parameters,
+                    onComplete: { image, parameters in
+                        guard !submitting else { return }
+                        submitting = true
+                        Task {
+                            if await session.commitPhotoCrop(layerID: layer.id, image: image, parameters: parameters) { dismiss() }
+                            else { error = session.errorMessage ?? "保存失败"; editor = nil }
+                            submitting = false
+                        }
+                    }, onCancel: { dismiss() }, onError: { message in error = message; editor = nil })
+            } catch is CancellationError { }
+            catch { self.error = error.localizedDescription }
         }
     }
 }

@@ -272,6 +272,7 @@
 				85EA7EEE2FFB252D00137E68 /* Sources */,
 				85EA7EEF2FFB252D00137E68 /* Frameworks */,
 				85EA7EF02FFB252D00137E68 /* Resources */,
+				AABBCC002026101400000001 /* Validate Presets */,
 			);
 			buildRules = (
 			);
@@ -368,6 +369,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		AABBCC002026101400000001 /* Validate Presets */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/ValidateDiaryPresets.swift",
+				"$(SRCROOT)/TravelDiaryClient/Projects/App/Resources/DiaryPresets.bundle",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/DiaryPresets.bundle",
+			);
+			name = "Validate Presets";
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/PresetValidation",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "mkdir -p \"$DERIVED_FILE_DIR/PresetValidation\"\nPRESET_MACOS_SDK=$(/usr/bin/xcrun --sdk macosx --show-sdk-path)\nSDKROOT=\"$PRESET_MACOS_SDK\" /usr/bin/xcrun --sdk macosx swift -sdk \"$PRESET_MACOS_SDK\" -module-cache-path \"$DERIVED_FILE_DIR/PresetValidation\" \"$SRCROOT/scripts/ValidateDiaryPresets.swift\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/DiaryPresets.bundle\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		85EA7EEE2FFB252D00137E68 /* Sources */ = {
@@ -527,6 +550,7 @@
 				DEVELOPMENT_TEAM = 4AN6PV98G7;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
@@ -581,6 +605,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4AN6PV98G7;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
@@ -633,7 +658,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4AN6PV98G7;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/PureLayout/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/AliyunOSSSDK/module.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = cn.zhaodk.TravelDiaryTests;
@@ -655,7 +680,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4AN6PV98G7;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/PureLayout/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/AliyunOSSSDK/module.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = cn.zhaodk.TravelDiaryTests;
