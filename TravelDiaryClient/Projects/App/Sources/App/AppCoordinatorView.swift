@@ -55,9 +55,11 @@ private struct SignedOutAuthCoordinatorView: View {
     }
 
     var body: some View {
-        LoginView(viewModel: viewModel)
+        LoginView(viewModel: viewModel, presentsInitialLegalPromptOnAppear: false)
             .task {
                 await dependencies.lifecycle.handleSignedOutTask()
+                guard !Task.isCancelled else { return }
+                await viewModel.signInWithDeviceAutomaticallyIfNeeded()
             }
     }
 }
@@ -154,7 +156,7 @@ struct SupportMainCoordinatorView: View {
         }
         .sheet(isPresented: $showsDeviceAccountUpgradeSheet) {
             NavigationStack {
-                LoginView(viewModel: upgradeLoginViewModel)
+                LoginView(viewModel: upgradeLoginViewModel, mode: .upgradeDeviceAccount)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
                             Button(L10n.text("common.close", fallback: "关闭")) {

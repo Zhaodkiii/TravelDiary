@@ -91,7 +91,8 @@ final class DiaryCanvasSurface: UIView {
         // 从上到下命中；组内编辑时只检查当前组的直接子层。
         for node in session.scopeLayers.reversed() where node.visible && !node.locked {
             let local = parentPoint.applying(DiaryPageRenderer.matrix(node, siblings: session.scopeLayers).inverted())
-            if DiaryPageRenderer.bounds(node, document: session.document, siblings: session.scopeLayers).contains(local) { return node.id }
+            if DiaryLayerHitTester.contains(local, layer: node, document: session.document,
+                                            siblings: session.scopeLayers, images: session.images) { return node.id }
         }
         return nil
     }

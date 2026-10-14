@@ -13,6 +13,7 @@ struct DiaryEditorScreen: View {
     @State private var showText = false
     @State private var showCrop = false
     @State private var showLayers = false
+    @State private var replacingPhotos = false
     @State private var showStickers = false
     @State private var exportURL: URL?
     @State private var confirmFontFallbackExport = false
@@ -45,6 +46,7 @@ struct DiaryEditorScreen: View {
                 Button("使用替代字体导出") { Task { exportURL = await session.export() } }
                 Button("取消", role: .cancel) { }
             }
+            .sheet(isPresented: $replacingPhotos) { DiaryBatchPhotoSheet(store: session.store, session: session) }
             .sheet(isPresented: $showText) { DiaryTextEditorSheet(session: session, layer: textLayer) }
             .fullScreenCover(isPresented: $showCrop) {
                 if let layer = session.selected { DiaryCropSheet(session: session, layer: layer) }
@@ -87,18 +89,22 @@ struct DiaryEditorScreen: View {
             .disabled(session.busy)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
+            if session.isRoot {
+                Button("一键替换", systemImage: "photo.on.rectangle.angled") { replacingPhotos = true }
+                    .disabled(session.busy)
+            }
             Button { session.undo() } label: { Image(systemName: "arrow.uturn.backward") }
                 .disabled(session.undoStack.isEmpty || session.busy).accessibilityLabel("撤销")
             Button { session.redo() } label: { Image(systemName: "arrow.uturn.forward") }
                 .disabled(session.redoStack.isEmpty || session.busy).accessibilityLabel("重做")
-            Button {
-                let missingFont = session.document.objects.values.flatMap(\.layers).contains {
-                    $0.kind == .text && !DiaryFontCatalog.shared.available($0.font)
-                }
-                if missingFont { confirmFontFallbackExport = true }
-                else { Task { exportURL = await session.export() } }
-            } label: { Image(systemName: "square.and.arrow.up") }
-                .disabled(session.busy).accessibilityLabel("导出图片")
+//            Button {
+//                let missingFont = session.document.objects.values.flatMap(\.layers).contains {
+//                    $0.kind == .text && !DiaryFontCatalog.shared.available($0.font)
+//                }
+//                if missingFont { confirmFontFallbackExport = true }
+//                else { Task { exportURL = await session.export() } }
+//            } label: { Image(systemName: "square.and.arrow.up") }
+//                .disabled(session.busy).accessibilityLabel("导出图片")
         }
     }
 
@@ -112,9 +118,10 @@ struct DiaryEditorScreen: View {
                 .font(.caption).padding(.horizontal).padding(.vertical, 8)
                 GeometryReader { geometry in
                     let size = session.canvasBounds.size
-                    // 给边缘按钮预留真实的命中空间，选框贴近页面边界时仍可操作。
+                    // 页面初始尽量接近屏幕宽度，左右留 20pt；画布高度过长时再按高度缩小。
                     let margin = DiaryCanvasSurface.controlMargin
-                    let scale = max(0.01, min((geometry.size.width - margin * 2 - 24) / size.width, (geometry.size.height - margin * 2 - 24) / size.height))
+                    let scale = max(0.01, min((geometry.size.width - 40) / size.width,
+                                             (geometry.size.height - margin * 2 - 24) / size.height))
                     DiaryZoomableCanvas(contentSize: CGSize(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)) {
                       ZStack(alignment: .topLeading) {
                         DiaryCanvasView(session: session, onEdit: {
@@ -145,30 +152,30 @@ struct DiaryEditorScreen: View {
 
     private var controls: some View {
         VStack(spacing: 8) {
-            if let layer = session.selected, !session.inkMode {
-                HStack {
-                    Text(layer.name).font(.caption).lineLimit(1)
-                    Spacer()
-                    if layer.kind == .object { Button("打开对象") { childEditor = session.openObject() } }
-                    if layer.kind == .photo {
-                        Button("替换") { replacementID = layer.id; showPhotoPicker = true }
-                        Button("裁剪") { showCrop = true }
-                        if layer.photoCrop != nil { Button("恢复原图") { session.restoreOriginalPhoto() } }
-                        Button("相框") { session.addFrame() }
-                    }
-                    if layer.kind == .text { Button("编辑文字") { openText() } }
-                    if layer.id != session.content.primaryLayerID { Button("删除", role: .destructive) { session.removeSelected() } }
-                }.font(.caption).disabled(layer.locked)
-                HStack {
-                    Text("大小").font(.caption)
-                    Slider(value: Binding(get: { session.selected?.transform.scale ?? 1 }, set: { session.previewScale($0) }),
-                           in: 0.2...3, onEditingChanged: { interactionChanged($0) })
-                    Text("方向").font(.caption)
-                    Slider(value: Binding(get: { session.selected?.transform.rotationDegrees ?? 0 }, set: { session.previewAngle($0) }),
-                           in: -180...180, onEditingChanged: { interactionChanged($0) })
-                }
-                .disabled(layer.locked)
-            }
+//            if let layer = session.selected, !session.inkMode {
+//                HStack {
+//                    Text(layer.name).font(.caption).lineLimit(1)
+//                    Spacer()
+//                    if layer.kind == .object { Button("打开对象") { childEditor = session.openObject() } }
+//                    if layer.kind == .photo {
+//                        Button("替换") { replacementID = layer.id; showPhotoPicker = true }
+//                        Button("裁剪") { showCrop = true }
+//                        if layer.photoCrop != nil { Button("恢复原图") { session.restoreOriginalPhoto() } }
+//                        Button("相框") { session.addFrame() }
+//                    }
+//                    if layer.kind == .text { Button("编辑文字") { openText() } }
+//                    if layer.id != session.content.primaryLayerID { Button("删除", role: .destructive) { session.removeSelected() } }
+//                }.font(.caption).disabled(layer.locked)
+//                HStack {
+//                    Text("大小").font(.caption)
+//                    Slider(value: Binding(get: { session.selected?.transform.scale ?? 1 }, set: { session.previewScale($0) }),
+//                           in: 0.2...3, onEditingChanged: { interactionChanged($0) })
+//                    Text("方向").font(.caption)
+//                    Slider(value: Binding(get: { session.selected?.transform.rotationDegrees ?? 0 }, set: { session.previewAngle($0) }),
+//                           in: -180...180, onEditingChanged: { interactionChanged($0) })
+//                }
+//                .disabled(layer.locked)
+//            }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 18) {
                     if session.inkMode {

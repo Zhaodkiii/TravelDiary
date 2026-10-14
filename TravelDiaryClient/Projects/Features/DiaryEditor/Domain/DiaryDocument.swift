@@ -97,6 +97,9 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
     var text = ""
     var fontSize: CGFloat = 36
     var font: DiaryFontReference?
+    /// 一键替换使用完整图片拉伸填满原框；nil 保持旧作品 cover 取景。
+    var photoFill: Bool? = nil
+    var photoPlacement: DiaryPhotoPlacement? = nil
     var photoCrop: DiaryPhotoCrop?
     var crop = DiaryCrop()
     var visible = true
@@ -136,10 +139,41 @@ nonisolated struct DiaryPhotoCrop: Codable, Equatable, Sendable {
     var originalAssetID: UUID
     var originalSize: CGSize
     var originalPivot: CGPoint
+    var originalFill: Bool? = nil
     var originalCrop: DiaryCrop
     var parameters: ImageCropParameters
 }
 
 extension DiaryLayer {
     nonisolated var referencedAssetIDs: [UUID] { [assetID, photoCrop?.originalAssetID].compactMap { $0 } }
+}
+
+
+extension DiaryDocument {
+    /// 顺序固定为页面图层从底到顶、组合深度优先；同一资源的不同实例分别计数。
+    /// 隐藏或锁定的整组跳过，避免改动用户明确保护的内容。
+    func replaceablePhotos() -> [DiaryLayer] {
+        var result: [DiaryLayer] = []
+        var visited = Set<UUID>()
+        func visit(_ id: UUID) {
+            guard visited.insert(id).inserted, let content = objects[id] else { return }
+            for layer in content.layers where layer.visible && !layer.locked {
+                if layer.kind == .photo { result.append(layer) }
+                else if let child = layer.contentID { visit(child) }
+            }
+        }
+        visit(rootContentID)
+        return result
+    }
+
+    /// 保留原框、锚点、角度、拉伸和层级，仅换资源及其取景方式。
+    mutating func replacePhoto(_ id: UUID, with asset: DiaryAsset, placement: DiaryPhotoPlacement? = nil) {
+        assets[asset.id] = asset
+        update(id) { layer in
+            layer.assetID = asset.id
+            layer.crop = DiaryCrop(); layer.photoCrop = nil
+            layer.photoFill = true
+            layer.photoPlacement = placement ?? layer.photoPlacement
+        }
+    }
 }

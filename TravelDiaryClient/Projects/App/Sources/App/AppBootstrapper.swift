@@ -47,8 +47,9 @@ actor AppBootstrapper {
         logger.debug("会话流程：准备步骤 AI prewarm 开始 accountID=\(accountID)", module: .aiConfig)
         await aiConfigCenter.prewarm(ownerAccountID: accountID)
 
-        logger.debug("会话流程：准备步骤 remote AI config 开始 accountID=\(accountID)", module: .aiConfig)
-        await aiConfigCenter.refreshRemoteConfig(ownerAccountID: accountID)
+        // 启动阶段暂不拉取远程 AI 配置（AIConfig.Bootstrap）。
+        // logger.debug("会话流程：准备步骤 remote AI config 开始 accountID=\(accountID)", module: .aiConfig)
+        // await aiConfigCenter.refreshRemoteConfig(ownerAccountID: accountID)
 
         logger.debug(
             "会话流程：准备步骤 OSS STS prefetch 开始 accountID=\(accountID) phase=bootstrapIfNeeded",

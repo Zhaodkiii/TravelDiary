@@ -10,6 +10,7 @@ struct LoginView: View {
 
     @ObservedObject var viewModel: LoginViewModel
     var mode: PresentationMode = .primarySignIn
+    var presentsInitialLegalPromptOnAppear = true
 
     @State private var path: [LoginRoute] = []
     @State private var showPhoneLogin = true
@@ -66,7 +67,7 @@ struct LoginView: View {
             .onAppear {
                 if hasAcceptedInitialLegalPrompt {
                     hasAgreedToLegal = true
-                } else {
+                } else if presentsInitialLegalPromptOnAppear {
                     presentInitialLegalPrompt(showsWarning: false)
                 }
             }

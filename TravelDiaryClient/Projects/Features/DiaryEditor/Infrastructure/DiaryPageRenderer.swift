@@ -77,10 +77,11 @@ enum DiaryPageRenderer {
         if includeInk, let drawing = try? PKDrawing(data: content.drawing) { drawInk(drawing, in: objectBounds(content, document: document)) }
     }
     private static func drawLayers(_ layers: [DiaryLayer], document: DiaryDocument,
-                                   images: [UUID: UIImage], in context: CGContext, cacheObjects: Bool) {
+                                   images: [UUID: UIImage], in context: CGContext, cacheObjects: Bool, siblings: [DiaryLayer]? = nil) {
+        let siblings = siblings ?? layers
         for layer in layers where layer.visible {
             context.saveGState()
-            context.concatenate(matrix(layer, siblings: layers))
+            context.concatenate(matrix(layer, siblings: siblings))
             switch layer.blendMode ?? .normal {
             case .normal: context.setBlendMode(.normal)
             case .multiply: context.setBlendMode(.multiply)
@@ -120,7 +121,7 @@ enum DiaryPageRenderer {
                 (layer.text as NSString).draw(with: bounds(layer), options: [.usesLineFragmentOrigin, .usesFontLeading],
                                              attributes: textStyle(layer), context: nil)
             case .frame:
-                if let target = layers.first(where: { $0.id == layer.frameTargetID }) {
+                if let target = siblings.first(where: { $0.id == layer.frameTargetID }) {
                     let width = layer.frameWidth ?? 12
                     context.setStrokeColor(color(layer.frameColor ?? .white).cgColor)
                     context.setLineWidth(width)
@@ -128,13 +129,53 @@ enum DiaryPageRenderer {
                 }
             case .photo, .sticker:
                 if let id = layer.assetID, let image = images[id], let asset = document.assets[id] {
-                    let frame = CGRect(origin: .zero, size: layer.size)
+                    let frame = layer.photoFill == true ? (layer.displayBounds ?? CGRect(origin: .zero, size: layer.size)) : CGRect(origin: .zero, size: layer.size)
                     context.clip(to: frame)
-                    image.draw(in: layer.kind == .photo ? layer.crop.imageRect(source: asset.pixelSize, frame: layer.size) : frame)
+                    if layer.photoFill == true, let placement = layer.photoPlacement {
+                        // 在完整素材坐标中恢复烘焙的倾斜，再由外层矩阵完成页面旋转与拉伸。
+                        context.translateBy(x: frame.minX, y: frame.minY)
+                        context.translateBy(x: placement.center.x * frame.width, y: placement.center.y * frame.height)
+                        context.rotate(by: placement.radians)
+                        image.draw(in: CGRect(x: -placement.size.width * frame.width / 2,
+                                              y: -placement.size.height * frame.height / 2,
+                                              width: placement.size.width * frame.width, height: placement.size.height * frame.height))
+                    } else {
+                        image.draw(in: layer.kind == .photo && layer.photoFill != true ? layer.crop.imageRect(source: asset.pixelSize, frame: layer.size) : frame)
+                    }
                 }
             }
             context.restoreGState()
         }
+    }
+
+    /// 只绘制当前图层自身的可见内容，不包含下面的照片、棋盘格和选框。
+    /// 复用正式绘制规则，裁剪、文字、画框、对象背景及笔画与预览保持一致。
+    static func drawHitLayer(_ layer: DiaryLayer, document: DiaryDocument,
+                             siblings: [DiaryLayer], images: [UUID: UIImage], in context: CGContext) {
+        context.saveGState()
+        context.concatenate(matrix(layer, siblings: siblings).inverted())
+        drawLayers([layer], document: document, images: images, in: context, cacheObjects: false, siblings: siblings)
+        context.restoreGState()
+    }
+
+    /// 外部摆放不影响局部透明度缓存，内部编辑/撤销/替换图片则必须重新生成。
+    static func hitFingerprint(_ layer: DiaryLayer, document: DiaryDocument,
+                               siblings: [DiaryLayer], images: [UUID: UIImage]) -> Int {
+        var local = layer
+        local.transform = DiaryTransform(position: .zero, pivot: .zero)
+        var hash = Hasher()
+        hash.combine(try? JSONEncoder().encode(local))
+        if let id = layer.contentID, let content = document.objects[id] {
+            hash.combine(fingerprint(content, document: document))
+        }
+        if let target = siblings.first(where: { $0.id == layer.frameTargetID }) {
+            hash.combine(target.size.width); hash.combine(target.size.height)
+        }
+        // UIImage 替换或由缺失变为可用时，不能继续使用旧掩码。
+        for id in images.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            hash.combine(id); hash.combine(ObjectIdentifier(images[id]!))
+        }
+        return hash.finalize()
     }
 
     /// 内层内容变化也进入缓存指纹，避免撤销分支复用 revision 后命中旧预览。

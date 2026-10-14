@@ -22,8 +22,13 @@ do {
         guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             fail("缺少系列目录 \(category["directory"] ?? "")")
         }
-        let children = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
-        for package in children where package.pathExtension == "diarypreset" {
+        let enumerator = FileManager.default.enumerator(
+            at: folder,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        let packages = enumerator?.allObjects as? [URL] ?? []
+        for package in packages where package.pathExtension == "diarypreset" {
             let m = try json(package.appendingPathComponent("package.json"))
             guard m["format"] as? String == "TravelDiary.PresetBook", m["schemaVersion"] as? Int == 1,
                   m["layerSchemaVersion"] as? Int == 1, m["seriesID"] as? String == category["id"] as? String,

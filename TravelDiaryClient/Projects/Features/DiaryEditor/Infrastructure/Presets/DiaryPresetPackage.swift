@@ -275,8 +275,13 @@ nonisolated struct BundleDiaryPresetProvider: DiaryPresetProviding {
         for category in series {
             guard !category.directory.contains("/"), category.directory != ".." else { throw DiaryEditorError.invalidDocument.logged() }
             let folder = root.appendingPathComponent(category.directory)
-            let children = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
-            for url in children where url.pathExtension == "diarypreset" {
+            let enumerator = FileManager.default.enumerator(
+                at: folder,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+            let packages = (enumerator?.allObjects as? [URL] ?? []).filter { $0.pathExtension == "diarypreset" }
+            for url in packages {
                 do {
                     let manifest = try JSONDecoder().decode(PresetManifest.self, from: Data(contentsOf: url.appendingPathComponent("package.json")))
                     guard manifest.seriesID == category.id, manifest.schemaVersion == 1, manifest.layerSchemaVersion == 1,

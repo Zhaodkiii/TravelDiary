@@ -174,6 +174,27 @@ nonisolated final class DiaryDocumentStore: Sendable {
         }
     }
 
+    /// 所有页快照写好之后，一次发布整本目录；中途失败不会出现只替换一半的手帐。
+    func savePhotoReplacementBatch(_ documents: [DiaryDocument], expected: DiaryBook) async throws {
+        try await run {
+            guard let bookID = self.bookID, expected.id == bookID else { throw DiaryEditorError.invalidDocument }
+            var book = try self.readBook(bookID)
+            guard book.catalogRevision == expected.catalogRevision else { throw DiaryEditorError.pageConflict }
+            var revisions: [UUID: UUID] = [:]
+            for document in documents {
+                guard let index = book.pages.firstIndex(where: { $0.id == document.id }),
+                      document.root.referenceSize == book.defaultPageSize else { throw DiaryEditorError.pageConflict }
+                let path = try self.writeSnapshot(document, prefix: "revisions", directory: self.directory(document.id))
+                let revision = UUID(uuidString: String(path.split(separator: "/")[1]))!
+                book.pages[index].revisionID = revision
+                book.pages[index].updatedAt = Date()
+                revisions[document.id] = revision
+            }
+            try self.publish(book)
+            for (id, revision) in revisions { self.opened.values[id] = revision }
+        }
+    }
+
     func load(_ id: UUID) async throws -> Loaded {
         try await run {
             let directory = self.directory(id)
@@ -342,6 +363,11 @@ nonisolated final class DiaryDocumentStore: Sendable {
                       (1...10).contains(node.crop.zoom), (1...300).contains(node.fontSize) else { throw DiaryEditorError.invalidDocument.logged() }
                 guard [node.transform.stretchX, node.transform.stretchY].allSatisfy({ $0.isFinite && (0.05...20).contains($0) }) else {
                     throw DiaryEditorError.invalidDocument.logged()
+                }
+                if let placement = node.photoPlacement {
+                    guard [placement.center.x, placement.center.y, placement.size.width, placement.size.height,
+                           placement.radians].allSatisfy(\.isFinite),
+                          placement.size.width > 0, placement.size.height > 0 else { throw DiaryEditorError.invalidDocument }
                 }
                 if let rect = node.displayBounds {
                     guard [rect.minX, rect.minY, rect.width, rect.height].allSatisfy(\.isFinite),

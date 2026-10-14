@@ -17,6 +17,7 @@ struct DiaryBookScreen: View {
     @State private var showingTrash = false
     @State private var renaming = false
     @State private var name = ""
+    @State private var replacingPhotos = false
 
     init(ownerID: String, book: DiaryBook) {
         self.ownerID = ownerID
@@ -55,6 +56,8 @@ struct DiaryBookScreen: View {
             Button { readingID = book.pages.first?.id; reading = true } label: { Image(systemName: "book") }
                 .disabled(book.pages.isEmpty).accessibilityLabel("阅读整本")
             Menu {
+                Button("一键替换照片", systemImage: "photo.on.rectangle.angled") { replacingPhotos = true }
+                    .disabled(book.pages.isEmpty)
                 Button("重命名手帐") { name = book.title; renaming = true }
                 Button("自动使用第一页作封面") { perform { try await store.setCover(nil) } }
                 Button("最近删除（\(book.trashedPages.count)）") { showingTrash = true }
@@ -83,6 +86,7 @@ struct DiaryBookScreen: View {
         .fullScreenCover(isPresented: $reading, onDismiss: { Task { await refresh() } }) {
             DiaryBookReaderScreen(book: book, store: store, pageID: readingID)
         }
+        .sheet(isPresented: $replacingPhotos, onDismiss: { Task { await refresh() } }) { DiaryBatchPhotoSheet(store: store) }
         .sheet(isPresented: $showingTrash) { trashPanel }
         .alert("手帐", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("确定") { message = nil }

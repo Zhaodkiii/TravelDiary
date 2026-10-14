@@ -39,6 +39,7 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
         if coordinator.size != contentSize {
             scroll.setZoomScale(1, animated: false)
             coordinator.size = contentSize
+            coordinator.needsInitialCenter = true
             coordinator.host.view.frame = CGRect(origin: .zero, size: contentSize)
             scroll.contentSize = contentSize
         }
@@ -48,6 +49,7 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
     final class Coordinator: NSObject, UIScrollViewDelegate {
         let host: UIHostingController<Content>
         var size = CGSize.zero
+        var needsInitialCenter = true
         init(content: Content) { host = UIHostingController(rootView: content) }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { host.view }
@@ -65,6 +67,12 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
             let vertical = max(0, (scroll.bounds.height - size.height * scroll.zoomScale) / 2)
             let inset = UIEdgeInsets(top: vertical, left: horizontal, bottom: vertical, right: horizontal)
             if scroll.contentInset != inset { scroll.contentInset = inset }
+            guard needsInitialCenter, scroll.bounds.width > 0, scroll.bounds.height > 0 else { return }
+            // 初始将页面主体居中；横向内容略宽于视口时，用滚动偏移把两侧手柄留白均分。
+            let x = max(-inset.left, (size.width * scroll.zoomScale - scroll.bounds.width) / 2)
+            let y = max(-inset.top, (size.height * scroll.zoomScale - scroll.bounds.height) / 2)
+            scroll.setContentOffset(CGPoint(x: x, y: y), animated: false)
+            needsInitialCenter = false
         }
     }
 }

@@ -44,7 +44,8 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         let reference = CGRect(origin: .zero, size: content.referenceSize)
         canvasBounds = parent == nil ? reference :
             reference.union(DiaryPageRenderer.objectBounds(content, document: document)).insetBy(dx: -100, dy: -100)
-        selectedID = content.primaryLayerID ?? content.layers.first?.id
+        // 初次进入页面或独立对象时不预选任何图层，避免画布一打开就出现选框。
+        selectedID = nil
     }
     var content: DiaryObjectContent { document.objects[contentID]! }
     var isRoot: Bool { parent == nil }
@@ -248,13 +249,13 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             guard let data = image.pngData() else { throw DiaryEditorError.invalidImage.logged() }
             let (asset, preview) = try await store.importImage(data, documentID: document.id)
             var state = layer.photoCrop ?? DiaryPhotoCrop(originalAssetID: sourceID, originalSize: layer.size,
-                originalPivot: layer.transform.pivot, originalCrop: layer.crop, parameters: parameters)
+                originalPivot: layer.transform.pivot, originalFill: layer.photoFill, originalCrop: layer.crop, parameters: parameters)
             state.parameters = parameters
             images[asset.id] = preview
             edit {
                 document.assets[asset.id] = asset
                 document.update(layerID) {
-                    $0.assetID = asset.id; $0.photoCrop = state; $0.crop = DiaryCrop()
+                    $0.assetID = asset.id; $0.photoCrop = state; $0.crop = DiaryCrop(); $0.photoFill = nil
                     // 保持外部位置和宽度；高度跟随输出比例，锚点按比例映射。
                     let height = $0.size.width * asset.pixelSize.height / asset.pixelSize.width
                     $0.transform.pivot.y *= height / $0.size.height
@@ -270,7 +271,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         edit {
             document.update(layer.id) {
                 $0.assetID = state.originalAssetID; $0.size = state.originalSize
-                $0.transform.pivot = state.originalPivot; $0.crop = state.originalCrop; $0.photoCrop = nil
+                $0.transform.pivot = state.originalPivot; $0.crop = state.originalCrop; $0.photoCrop = nil; $0.photoFill = state.originalFill
             }
         }
     }
@@ -340,6 +341,20 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             }
             return true
         } catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    /// 当前页批量替换是一个编辑命令；完成后一次撤销恢复全部旧照片。
+    func applyPhotoReplacements(_ replacements: [(UUID, DiaryAsset, UIImage, DiaryPhotoPlacement?)], expected: DiaryDocument) -> Bool {
+        guard !busy, document == expected else {
+            errorMessage = "页面已变化，请重新打开一键替换。"; return false
+        }
+        edit {
+            for (id, asset, image, placement) in replacements {
+                images[asset.id] = image
+                document.replacePhoto(id, with: asset, placement: placement)
+            }
+        }
+        return true
     }
 
     func addSticker(symbol: String) async {

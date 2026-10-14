@@ -26,6 +26,7 @@ final class LoginViewModel: ObservableObject {
     private let accountSwitchHandler: (any LoginAccountSwitchHandling)?
     private let logger: Logger = ConsoleLogger()
     private var currentNonce: String?
+    private var didAttemptAutomaticDeviceSignIn = false
 
     private let notificationSource = "auth.login"
 
@@ -89,6 +90,14 @@ final class LoginViewModel: ObservableObject {
         currentNonce = nonce
         request.requestedScopes = [.fullName, .email]
         request.nonce = Self.sha256(nonce)
+    }
+
+    /// 每个未登录页实例仅自动尝试一次，失败后允许用户手动重试。
+    func signInWithDeviceAutomaticallyIfNeeded() async {
+        guard didAttemptAutomaticDeviceSignIn == false, isLoading == false else { return }
+        guard case .signedOut = sessionStore.state else { return }
+        didAttemptAutomaticDeviceSignIn = true
+        await signInWithDevice()
     }
 
     func signInWithDevice() async {
