@@ -3,8 +3,8 @@ import SwiftUI
 /// 手帐入口改为书架。这里只读取本目录和封面，不提前加载整本编辑数据。
 struct DiaryEditorHomeView: View {
     let ownerID: String
+    @Binding var path: NavigationPath
     @State private var books: [DiaryBook] = []
-    @State private var path: [UUID] = []
     @State private var creating = false
     @State private var title = "未命名手帐"
     @State private var pagePreset: DiaryPagePreset = .a5
@@ -12,8 +12,7 @@ struct DiaryEditorHomeView: View {
     @State private var message: String?
 
     var body: some View {
-        NavigationStack(path: $path) {
-            ScrollView {
+        ScrollView {
                 if books.isEmpty {
                     ContentUnavailableView("创建第一本手帐", systemImage: "books.vertical", description: Text("一本手帐可以有很多页，记录每一次旅行和日常。"))
                         .padding(.top, 60)
@@ -38,26 +37,26 @@ struct DiaryEditorHomeView: View {
                 }.padding()
                 Button { pagePreset = .a5; creating = true } label: { Label("新建手帐本", systemImage: "plus") }
                     .buttonStyle(.borderedProminent).padding(.bottom)
-            }
-            .toolbar(.visible, for: .navigationBar)
-            .toolbar {
+        }
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { pagePreset = .a5; creating = true } label: { Image(systemName: "plus") }
                         .accessibilityLabel("新建手帐本")
                 }
-            }
-            .navigationTitle("我的")
-            .navigationDestination(for: UUID.self) { id in
+        }
+        .navigationTitle("我的")
+        .navigationDestination(for: UUID.self) { id in
                 if let book = books.first(where: { $0.id == id }) {
                     DiaryBookScreen(ownerID: ownerID, book: book)
                 } else {
                     ContentUnavailableView("手帐暂不可用", systemImage: "book.closed", description: Text("请返回书架刷新后重试。"))
                 }
-            }
-            .task { await reload(); _ = try? await Task.detached { try BundleDiaryPresetProvider().catalog() }.value }
-            .onChange(of: path) { _, value in if value.isEmpty { Task { await reload() } } }
-            .refreshable { await reload() }
-            .sheet(isPresented: $creating) {
+        }
+        .task { await reload(); _ = try? await Task.detached { try BundleDiaryPresetProvider().catalog() }.value }
+        .onAppear { Task { await reload() } }
+        .refreshable { await reload() }
+        .sheet(isPresented: $creating) {
                 NavigationStack {
                     Form {
                         TextField("手帐名称", text: $title)
@@ -83,11 +82,10 @@ struct DiaryEditorHomeView: View {
                     }
                     .interactiveDismissDisabled(busy)
                 }
-            }
-            .alert("手帐", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
-                Button("确定") { message = nil }
-            } message: { Text(message ?? "") }
         }
+        .alert("手帐", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
+                Button("确定") { message = nil }
+        } message: { Text(message ?? "") }
     }
     private func reload() async {
         do { books = try await DiaryDocumentStore(ownerID: ownerID).listBooks() }

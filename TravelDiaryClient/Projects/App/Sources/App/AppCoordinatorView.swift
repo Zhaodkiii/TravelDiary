@@ -109,17 +109,15 @@ struct SupportMainCoordinatorView: View {
 //                    }
 //                    .tag(SupportRootTab.photoEditor)
 
-                DiaryEditorHomeView(ownerID: String(session.accountID))
+                DiaryEditorHomeView(ownerID: String(session.accountID), path: $path)
                     .id(session.accountID)
                     .tabItem {
                         Label("手帐", systemImage: "book.pages")
                     }
                     .tag(SupportRootTab.diaryEditor)
 
-                NavigationStack {
-                    DiaryPresetLibraryScreen(ownerID: String(session.accountID))
-                }
-                .id(session.accountID)
+                DiaryPresetLibraryScreen(ownerID: String(session.accountID))
+                    .id(session.accountID)
                 .tabItem {
                     Label("预设", systemImage: "books.vertical")
                 }
