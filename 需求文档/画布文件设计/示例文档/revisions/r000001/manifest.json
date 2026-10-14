@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "documentId": "10000000-0000-4000-8000-000000000001",
+  "revision": 1,
+  "title": "海边手帐示例",
+  "createdAt": "2026-10-14T00:00:00Z",
+  "updatedAt": "2026-10-14T00:00:00Z",
+  "pageRefs": [
+    {
+      "id": "20000000-0000-4000-8000-000000000001",
+      "path": "revisions/r000001/pages/20000000-0000-4000-8000-000000000001.json"
+    }
+  ],
+  "assets": {
+    "40000000-0000-4000-8000-000000000001": {
+      "kind": "image",
+      "path": "assets/40000000-0000-4000-8000-000000000001.jpg",
+      "mimeType": "image/jpeg",
+      "byteSize": null,
+      "sha256": null,
+      "pixelSize": {
+        "width": 4000,
+        "height": 3000
+      },
+      "orientation": "upright"
+    },
+    "40000000-0000-4000-8000-000000000002": {
+      "kind": "image",
+      "path": "assets/40000000-0000-4000-8000-000000000002.png",
+      "mimeType": "image/png",
+      "byteSize": null,
+      "sha256": null,
+      "pixelSize": {
+        "width": 512,
+        "height": 512
+      },
+      "orientation": "upright"
+    }
+  }
+}

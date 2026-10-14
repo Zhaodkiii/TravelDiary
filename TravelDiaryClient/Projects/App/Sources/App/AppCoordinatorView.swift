@@ -109,6 +109,13 @@ struct SupportMainCoordinatorView: View {
                     }
                     .tag(SupportRootTab.photoEditor)
 
+                DiaryEditorHomeView(ownerID: String(session.accountID))
+                    .id(session.accountID)
+                    .tabItem {
+                        Label("手帐", systemImage: "book.pages")
+                    }
+                    .tag(SupportRootTab.diaryEditor)
+
                 SecondCameraHomeView()
                     .tabItem {
                         Label(SecondCameraEditorL10n.Home.tabTitle, systemImage: "camera.fill")
@@ -162,6 +169,10 @@ struct SupportMainCoordinatorView: View {
             ToolbarItem(placement: .principal) {
                 tabTitle("照片编辑")
             }
+        case .diaryEditor:
+            ToolbarItem(placement: .principal) {
+                tabTitle("手帐")
+            }
         case .secondCamera:
             // The camera deliberately presents an immersive, navigation-bar-free surface.
             ToolbarItem(placement: .automatic) {
@@ -192,6 +203,7 @@ struct SupportMainCoordinatorView: View {
 private enum SupportRootTab: Hashable {
     case healthHome
     case photoEditor
+    case diaryEditor
     case secondCamera
     case settings
 }

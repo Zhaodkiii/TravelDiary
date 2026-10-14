@@ -134,8 +134,8 @@ final class SecondCameraEditorTextFrameLayer: CAShapeLayer {
         bounds.insetBy(dx: SecondCameraEditorTextFrameLayer.circleRadius, dy: 0)
     }
 
-    nonisolated(unsafe) private lazy var leftCircleLayer = SecondCameraEditorTextFrameLayer.createCircleLayer()
-    nonisolated(unsafe) private lazy var rightCircleLayer = SecondCameraEditorTextFrameLayer.createCircleLayer()
+    nonisolated(unsafe) private let leftCircleLayer = SecondCameraEditorTextFrameLayer.createCircleLayer()
+    nonisolated(unsafe) private let rightCircleLayer = SecondCameraEditorTextFrameLayer.createCircleLayer()
     nonisolated static func createCircleLayer() -> CAShapeLayer {
         let layer = CAShapeLayer()
         layer.bounds = CGRect(origin: .zero, size: CGSize(square: circleRadius * 2))
@@ -481,9 +481,12 @@ final class SecondCameraImageEditorCanvasView: UIView {
             }
         }
         tooltipTimer?.invalidate()
-        tooltipTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] timer in
-            UIView.animate(withDuration: 0.2) {
-                self?.tooltipView.layer.opacity = 0
+        tooltipTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                UIView.animate(withDuration: 0.2) {
+                    self.tooltipView.layer.opacity = 0
+                }
             }
         }
 
@@ -533,6 +536,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
                         shouldFadeTransformableItemWithID: fadedItemID,
                         transform: transform,
                         viewSize: viewSize,
+                        displayScale: traitCollection.displayScale,
                     )
                 else {
                     continue
@@ -597,6 +601,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
                         shouldFadeTransformableItemWithID: fadedItemID,
                         transform: transform,
                         viewSize: viewSize,
+                        displayScale: traitCollection.displayScale,
                     )
                 else {
                     continue
@@ -712,6 +717,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
         shouldFadeTransformableItemWithID fadedItemID: String?,
         transform: SecondCameraImageEditorTransform,
         viewSize: CGSize,
+        displayScale: CGFloat,
     ) -> CALayer? {
         SecondCameraEditorAssertIsOnMainThread()
 
@@ -742,6 +748,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
                 isFaded: isFaded,
                 transform: transform,
                 viewSize: viewSize,
+                displayScale: displayScale,
             )
         case .sticker:
             guard let stickerItem = item as? SecondCameraImageEditorStickerItem else {
@@ -755,6 +762,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
                 isFaded: isFaded,
                 transform: transform,
                 viewSize: viewSize,
+                displayScale: displayScale,
             )
         case .blurRegions:
             guard let blurRegionsItem = item as? SecondCameraImageEditorBlurRegionsItem else {
@@ -969,6 +977,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
         isFaded: Bool,
         transform: SecondCameraImageEditorTransform,
         viewSize: CGSize,
+        displayScale: CGFloat,
     ) -> CALayer? {
         SecondCameraEditorAssertIsOnMainThread()
 
@@ -1026,6 +1035,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
             isFaded: isFaded,
             transform: transform,
             viewSize: viewSize,
+            displayScale: displayScale,
         )
     }
 
@@ -1039,6 +1049,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
         isFaded: Bool,
         transform: SecondCameraImageEditorTransform,
         viewSize: CGSize,
+        displayScale: CGFloat,
     ) -> CALayer? {
         let textLayer = SecondCameraEditorEditorTextLayer(itemId: item.itemId)
         textLayer.string = attributedString
@@ -1052,7 +1063,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
         // * The screen scaling (so that text looks sharp on Retina devices.
         // * The item's scaling (so that text doesn't become blurry as you make it larger).
         // * Model transform (so that text doesn't become blurry as you zoom the content).
-        textLayer.contentsScale = UIScreen.main.scale * item.scaling * transform.scaling
+        textLayer.contentsScale = displayScale * item.scaling * transform.scaling
 
         let maxWidth = imageFrame.size.width * unitWidth
         let textSize = attributedString.boundingRect(
@@ -1100,6 +1111,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
         isFaded: Bool,
         transform: SecondCameraImageEditorTransform,
         viewSize: CGSize,
+        displayScale: CGFloat,
     ) -> CALayer? {
         SecondCameraEditorAssertIsOnMainThread()
 
@@ -1136,6 +1148,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
                 isFaded: isFaded,
                 transform: transform,
                 viewSize: viewSize,
+                displayScale: displayScale,
             )
         }
 
@@ -1150,6 +1163,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
             isFaded: isFaded,
             transform: transform,
             viewSize: viewSize,
+            displayScale: displayScale,
         )
     }
 
@@ -1161,8 +1175,9 @@ final class SecondCameraImageEditorCanvasView: UIView {
         isFaded: Bool,
         transform: SecondCameraImageEditorTransform,
         viewSize: CGSize,
+        displayScale: CGFloat,
     ) -> CALayer {
-        imageLayer.contentsScale = UIScreen.main.scale * item.scaling * transform.scaling
+        imageLayer.contentsScale = displayScale * item.scaling * transform.scaling
         let stickerSize = CGSize(square: 175 * imageFrame.size.width / item.referenceImageWidth)
         let centerInCanvas = item.unitCenter.fromUnitCoordinates(viewBounds: imageFrame)
         imageLayer.frame = imageFrame
@@ -1193,6 +1208,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
         isFaded: Bool,
         transform: SecondCameraImageEditorTransform,
         viewSize: CGSize,
+        displayScale: CGFloat,
     ) -> CALayer? {
         switch storySticker {
         case .clockDigital(let digitalClockStyle):
@@ -1216,6 +1232,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
                 isFaded: isFaded,
                 transform: transform,
                 viewSize: viewSize,
+                displayScale: displayScale,
             )
         case .clockAnalog(let clockStyle):
             let clockLayer = clockStyle.drawClock(date: item.date)
@@ -1228,6 +1245,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
                 isFaded: isFaded,
                 transform: transform,
                 viewSize: viewSize,
+                displayScale: displayScale,
             )
         }
     }
@@ -1386,6 +1404,7 @@ final class SecondCameraImageEditorCanvasView: UIView {
                     shouldFadeTransformableItemWithID: nil,
                     transform: transform,
                     viewSize: viewSize,
+                    displayScale: dstScale,
                 )
             else {
                 secondCameraEditorFailDebug("Couldn't create layer for item.")

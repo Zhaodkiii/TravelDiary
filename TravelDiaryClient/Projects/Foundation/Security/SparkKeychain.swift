@@ -8,9 +8,9 @@ enum SparkKeychain {
         case deviceCredentialUnavailable
     }
 
-    nonisolated(unsafe) private static let service = "com.dreamhua.supportclient"
-    nonisolated(unsafe) private static let deviceIDAccount = "device_unique_id"
-    nonisolated(unsafe) private static let deviceSecretAccount = "device_login_secret"
+    nonisolated private static let service = "com.dreamhua.supportclient"
+    nonisolated private static let deviceIDAccount = "device_unique_id"
+    nonisolated private static let deviceSecretAccount = "device_login_secret"
 
     nonisolated static func getOrCreateDeviceID() -> String {
         if let existing = load(account: deviceIDAccount) { return existing }

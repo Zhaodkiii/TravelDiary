@@ -1,0 +1,176 @@
+{
+  "id": "20000000-0000-4000-8000-000000000001",
+  "size": {
+    "width": 1000,
+    "height": 1400
+  },
+  "background": {
+    "type": "solid",
+    "color": "#FFF8EEFF"
+  },
+  "layers": [
+    {
+      "id": "30000000-0000-4000-8000-000000000001",
+      "name": "海边照片组合",
+      "type": "group",
+      "visible": true,
+      "locked": false,
+      "opacity": 1,
+      "transform": {
+        "position": {
+          "x": 500,
+          "y": 600
+        },
+        "pivot": {
+          "x": 200,
+          "y": 150
+        },
+        "scale": 1,
+        "rotationDegrees": 0,
+        "flipX": false,
+        "flipY": false
+      },
+      "payload": {
+        "role": "photoComposition",
+        "children": [
+          {
+            "id": "30000000-0000-4000-8000-000000000002",
+            "name": "海边照片",
+            "type": "image",
+            "visible": true,
+            "locked": false,
+            "opacity": 1,
+            "transform": {
+              "position": {
+                "x": 200,
+                "y": 150
+              },
+              "pivot": {
+                "x": 200,
+                "y": 150
+              },
+              "scale": 1,
+              "rotationDegrees": 0,
+              "flipX": false,
+              "flipY": false
+            },
+            "payload": {
+              "role": "photo",
+              "assetId": "40000000-0000-4000-8000-000000000001",
+              "size": {
+                "width": 400,
+                "height": 300
+              },
+              "crop": {
+                "fit": "cover",
+                "zoom": 1.5,
+                "offsetX": -30,
+                "offsetY": 20
+              },
+              "mask": {
+                "type": "rectangle"
+              }
+            }
+          },
+          {
+            "id": "30000000-0000-4000-8000-000000000003",
+            "name": "透明贴纸",
+            "type": "image",
+            "visible": true,
+            "locked": false,
+            "opacity": 1,
+            "transform": {
+              "position": {
+                "x": 380,
+                "y": 0
+              },
+              "pivot": {
+                "x": 50,
+                "y": 50
+              },
+              "scale": 1,
+              "rotationDegrees": 0,
+              "flipX": false,
+              "flipY": false
+            },
+            "payload": {
+              "role": "sticker",
+              "assetId": "40000000-0000-4000-8000-000000000002",
+              "size": {
+                "width": 100,
+                "height": 100
+              },
+              "crop": null,
+              "mask": {
+                "type": "rectangle"
+              }
+            }
+          },
+          {
+            "id": "30000000-0000-4000-8000-000000000004",
+            "name": "照片说明",
+            "type": "text",
+            "visible": true,
+            "locked": false,
+            "opacity": 1,
+            "transform": {
+              "position": {
+                "x": 200,
+                "y": 320
+              },
+              "pivot": {
+                "x": 180,
+                "y": 0
+              },
+              "scale": 1,
+              "rotationDegrees": 0,
+              "flipX": false,
+              "flipY": false
+            },
+            "payload": {
+              "text": "今天在海边\n晴天，微风",
+              "layoutWidth": 360,
+              "fontId": "app.default.regular.v1",
+              "fontSize": 28,
+              "lineHeightMultiple": 1.2,
+              "alignment": "center",
+              "color": "#333333FF"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "30000000-0000-4000-8000-000000000005",
+      "name": "页面标题",
+      "type": "text",
+      "visible": true,
+      "locked": false,
+      "opacity": 1,
+      "transform": {
+        "position": {
+          "x": 500,
+          "y": 100
+        },
+        "pivot": {
+          "x": 300,
+          "y": 0
+        },
+        "scale": 1,
+        "rotationDegrees": 0,
+        "flipX": false,
+        "flipY": false
+      },
+      "payload": {
+        "text": "我的海边旅行",
+        "layoutWidth": 600,
+        "fontId": "app.default.regular.v1",
+        "fontSize": 48,
+        "lineHeightMultiple": 1.2,
+        "alignment": "center",
+        "color": "#333333FF"
+      }
+    }
+  ],
+  "drawingRef": null
+}

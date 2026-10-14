@@ -130,8 +130,8 @@ private enum SecondCameraPreview {
 
 private struct CustomCameraFullScreenView: UIViewControllerRepresentable {
     var onMediaBatchCaptured: ([CustomCameraMedia]) -> Void
-    var onImageCaptured: (UIImage) -> Void
-    var onVideoCaptured: (URL, UIImage) -> Void
+    var onImageCaptured: @MainActor @Sendable (UIImage) -> Void
+    var onVideoCaptured: @MainActor @Sendable (URL, UIImage) -> Void
     var onDismiss: () -> Void
 
     func makeUIViewController(context: Context) -> UIViewController {
@@ -149,8 +149,8 @@ private struct CustomCameraFullScreenView: UIViewControllerRepresentable {
 private final class CustomCameraHostViewController: UIHostingController<AnyView> {
     init(
         onMediaBatchCaptured: @escaping ([CustomCameraMedia]) -> Void,
-        onImageCaptured: @escaping (UIImage) -> Void,
-        onVideoCaptured: @escaping (URL, UIImage) -> Void,
+        onImageCaptured: @escaping @MainActor @Sendable (UIImage) -> Void,
+        onVideoCaptured: @escaping @MainActor @Sendable (URL, UIImage) -> Void,
         onClose: @escaping () -> Void
     ) {
         CustomCameraFileStore.removeExpiredTemporaryFiles()
@@ -191,7 +191,9 @@ private final class CustomCameraHostViewController: UIHostingController<AnyView>
                     if case .failure = result {
                         print("SecondCamera: failed to save image")
                     }
-                    onImageCaptured(image)
+                    Task { @MainActor in
+                        onImageCaptured(image)
+                    }
                 }
             }
             .onVideoCaptured { video, _ in
@@ -199,7 +201,9 @@ private final class CustomCameraHostViewController: UIHostingController<AnyView>
                     if case .failure = result {
                         print("SecondCamera: failed to save video")
                     }
-                    onVideoCaptured(video, Self.makeVideoThumbnail(from: video))
+                    Task { @MainActor in
+                        onVideoCaptured(video, Self.makeVideoThumbnail(from: video))
+                    }
                 }
             }
             .startSession()
