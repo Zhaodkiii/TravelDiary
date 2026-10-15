@@ -14,3 +14,6 @@ xcuserdata/
 .env
 .env.*
 !.env.example
+
+# Bundled diary preset assets (kept locally; imported separately)
+/TravelDiaryClient/Projects/App/Resources/DiaryPresets.bundle/
