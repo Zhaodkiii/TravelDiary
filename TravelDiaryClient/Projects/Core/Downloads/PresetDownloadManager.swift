@@ -118,13 +118,23 @@ final class PresetDownloadManager: ObservableObject {
         }
         return nil
     }
-    func hasDownloadedPage(bookID: String, version: Int, pageID: String? = nil) -> Bool {
-        jobs.contains { job in
-            guard ["ready", "completed"].contains(job.status),
-                  let manifest = try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData),
-                  manifest.templateBookID == bookID, manifest.packageVersion == version else { return false }
-            return pageID == nil || manifest.pages.contains { $0.id == pageID }
+    /// Count unique, locally available pages for this exact template version.
+    func downloadedPageIDs(bookID: String, version: Int) -> Set<String> {
+        var result = Set<String>()
+        for job in jobs where ["ready", "completed"].contains(job.status) {
+            guard let manifest = try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData),
+                  manifest.templateBookID == bookID, manifest.packageVersion == version else { continue }
+            let directory = root.appendingPathComponent(job.id.uuidString)
+            guard manifest.files.allSatisfy({ record in
+                let url = directory.appendingPathComponent(record.path)
+                return (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) == record.byteCount
+            }) else { continue }
+            result.formUnion(manifest.pages.map(\.id))
         }
+        return result
+    }
+    func hasDownloadedPage(bookID: String, version: Int, pageID: String) -> Bool {
+        downloadedPageIDs(bookID: bookID, version: version).contains(pageID)
     }
     func preparedPackage(_ id: UUID) -> DiaryPresetPackage? {
         guard let job = jobs.first(where: { $0.id == id }), ["ready", "completed"].contains(job.status),

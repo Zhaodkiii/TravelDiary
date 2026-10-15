@@ -9,6 +9,18 @@ struct PresetAvailabilityBadge: View {
     }
 }
 
+struct PresetBookAvailabilityBadge: View {
+    let downloadedCount: Int
+    let totalCount: Int
+    private var complete: Bool { totalCount > 0 && downloadedCount >= totalCount }
+    var body: some View {
+        Label(complete ? "已下载" : "已下载 \(downloadedCount) / \(totalCount) 页",
+              systemImage: complete ? "checkmark.circle.fill" : "cloud")
+            .font(.caption2).foregroundStyle(complete ? Color.secondary : Color.blue)
+            .fixedSize()
+    }
+}
+
 private struct RemotePresetSelection: Identifiable {
     let id = UUID()
     let pageIDs: [String]
@@ -38,7 +50,7 @@ struct RemotePresetDetailScreen: View {
                 if let manifest {
                     HStack {
                         Text("\(pages.count) 页 · \(Int(manifest.pageSize.width)) × \(Int(manifest.pageSize.height))")
-                        PresetAvailabilityBadge(downloaded: downloads.hasDownloadedPage(bookID: book.id, version: book.version))
+                        PresetBookAvailabilityBadge(downloadedCount: min(book.page_count, downloads.downloadedPageIDs(bookID: book.id, version: book.version).count), totalCount: book.page_count)
                     }
                     Button("整本添加到我的") {
                         selection = RemotePresetSelection(pageIDs: pages.map(\.id), wholeBook: true)

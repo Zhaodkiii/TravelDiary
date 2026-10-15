@@ -63,7 +63,7 @@ struct DiaryPresetLibraryScreen: View {
                                         .clipShape(RoundedRectangle(cornerRadius: 10))
                                     HStack {
                                         Text(book.title).font(.headline)
-                                        PresetAvailabilityBadge(downloaded: downloads.hasDownloadedPage(bookID: book.id, version: book.version))
+                                        PresetBookAvailabilityBadge(downloadedCount: min(book.page_count, downloads.downloadedPageIDs(bookID: book.id, version: book.version).count), totalCount: book.page_count)
                                     }
                                     Text("\(book.page_count) 页").font(.caption).foregroundStyle(.secondary)
                                 }
