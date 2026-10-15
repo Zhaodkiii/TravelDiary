@@ -89,7 +89,9 @@ struct DiaryEditorScreen: View {
             .disabled(session.busy)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
-            if session.isRoot {
+            if session.inkMode {
+                Button("完成绘画") { session.finishInteraction(); session.inkMode = false }
+            } else if session.isRoot {
                 Button("一键替换", systemImage: "photo.on.rectangle.angled") { replacingPhotos = true }
                     .disabled(session.busy)
             }
@@ -180,7 +182,6 @@ struct DiaryEditorScreen: View {
                 HStack(spacing: 18) {
                     if session.inkMode {
                         Button("完成绘画") { session.finishInteraction(); session.inkMode = false }
-                        Button(session.eraser ? "使用画笔" : "橡皮擦") { session.eraser.toggle() }
                         Button("清空画笔", role: .destructive) { session.clearDrawing() }
                     } else {
                         Button { replacementID = nil; showPhotoPicker = true } label: { Label("照片", systemImage: "photo") }

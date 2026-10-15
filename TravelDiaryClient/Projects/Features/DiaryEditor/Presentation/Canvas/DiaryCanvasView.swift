@@ -433,12 +433,14 @@ struct DiaryDrawingCanvasView: UIViewRepresentable {
     @ObservedObject var session: DiaryEditorSession
     func makeCoordinator() -> Coordinator { Coordinator(session: session) }
     func makeUIView(context: Context) -> PKCanvasView {
-        let view = PKCanvasView()
+        let view = DiaryNativeDrawingCanvas()
+        view.onWindowChanged = { [weak coordinator = context.coordinator] in coordinator?.updateToolPicker() }
         view.backgroundColor = .clear; view.isOpaque = false
         view.overrideUserInterfaceStyle = .light
         view.isScrollEnabled = false; view.drawingPolicy = .anyInput
         view.delegate = context.coordinator
         context.coordinator.canvas = view
+        context.coordinator.toolPicker.addObserver(view)
         session.flushDrawingInteraction = { [weak coordinator = context.coordinator] in coordinator?.flush() }
         configure(view, coordinator: context.coordinator)
         return view
@@ -446,6 +448,10 @@ struct DiaryDrawingCanvasView: UIViewRepresentable {
     func updateUIView(_ view: PKCanvasView, context: Context) { configure(view, coordinator: context.coordinator) }
     static func dismantleUIView(_ uiView: PKCanvasView, coordinator: Coordinator) {
         coordinator.session.finishInteraction()
+        (uiView as? DiaryNativeDrawingCanvas)?.onWindowChanged = nil
+        coordinator.toolPicker.setVisible(false, forFirstResponder: uiView)
+        coordinator.toolPicker.removeObserver(uiView)
+        uiView.resignFirstResponder()
         coordinator.session.flushDrawingInteraction = nil
         uiView.delegate = nil
     }
@@ -460,10 +466,8 @@ struct DiaryDrawingCanvasView: UIViewRepresentable {
             coordinator.lastData = data
             coordinator.replaying = false
         }
-        if coordinator.lastEraser != session.eraser {
-            view.tool = session.eraser ? PKEraserTool(.vector) : PKInkingTool(.pen, color: .systemPink, width: 8)
-            coordinator.lastEraser = session.eraser
-        }
+        // Let PencilKit own tool selection, color and width; never reset it during SwiftUI updates.
+        coordinator.updateToolPicker()
     }
     final class Coordinator: NSObject, PKCanvasViewDelegate {
         let session: DiaryEditorSession
@@ -471,7 +475,12 @@ struct DiaryDrawingCanvasView: UIViewRepresentable {
         var replaying = false
         var dirty = false
         var lastData: Data?
-        var lastEraser: Bool?
+        let toolPicker = PKToolPicker()
+        func updateToolPicker() {
+            guard let canvas, canvas.window != nil else { return }
+            toolPicker.setVisible(session.inkMode, forFirstResponder: canvas)
+            if session.inkMode && !canvas.isFirstResponder { canvas.becomeFirstResponder() }
+        }
         init(session: DiaryEditorSession) { self.session = session }
         func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { session.beginInteraction() }
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
@@ -492,5 +501,14 @@ struct DiaryDrawingCanvasView: UIViewRepresentable {
             session.finishInteraction()
             canvasView.undoManager?.removeAllActions()
         }
+    }
+}
+
+/// A tool picker can only become visible after the canvas joins a window.
+private final class DiaryNativeDrawingCanvas: PKCanvasView {
+    var onWindowChanged: (() -> Void)?
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        onWindowChanged?()
     }
 }
