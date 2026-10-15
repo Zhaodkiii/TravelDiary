@@ -15,6 +15,9 @@ struct DiaryPresetLibraryScreen: View {
     @State private var error: String?
     var body: some View {
         VStack {
+            NavigationLink("云端预设与下载管理") {
+                RemotePresetLibraryScreen(ownerID: ownerID, targetBook: targetBook, afterPageID: targetAfterPageID)
+            }.padding(.top)
             if let catalog {
                 if let pending {
                     HStack {

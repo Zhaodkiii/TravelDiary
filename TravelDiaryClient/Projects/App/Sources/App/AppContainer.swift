@@ -57,6 +57,7 @@ final class AppContainer {
     ) {
         self.environment = environment
         self.backend = backend
+        PresetDownloadManager.shared.configure(engine: backend.engine)
         self.coreDataStack = coreDataStack
         self.contentDependencies = contentDependencies
         self.aiSettingsRepository = aiSettingsRepository

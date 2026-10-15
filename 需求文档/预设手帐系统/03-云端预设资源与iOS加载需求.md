@@ -1,8 +1,10 @@
 # 云端预设资源与 iOS 加载需求
 
-版本：v1.0；日期：2026-10-15；状态：方案需求，待分阶段实施。
+版本：v1.2；日期：2026-10-15；状态：方案需求，待分阶段实施。
 
 本文承接 [预设手帐系统总需求](./README.md) 与 [统一资源包与加载协议](./01-统一资源包与加载协议.md)。目标是将随 iOS 包发布的预设资源迁到阿里云 OSS，支持在线浏览、逐页预览、添加单页和整本添加；用户添加后的内容仍是设备上的原生可编辑手帐。
+
+> 最新实施规格见 [后台页面管理与 OSS 直传下载技术方案](./04-后台页面管理与OSS直传下载技术方案.md)：后台增删页/排序、云侧校验、资源不经过 ECS、统一下载管理器与暂停续传均为首期要求。
 
 ## 1. 现状与设计结论
 
@@ -51,12 +53,12 @@ presets/v1/series/{series_id}/{template_id}/versions/{version}/previews/{file}
 
 包内相对路径映射到固定版本前缀。服务端不接受客户端指定任意 key。上传先到 `staging/{release_uuid}/`；发布工具检查 manifest/schema、文件数和大小、SHA-256、路径穿越、引用闭包、图片真实尺寸/格式、预览存在性。校验全部通过后，将资源写入不可变版本前缀并在数据库事务中登记为 `published`，客户端立即可见，不经过人工审核。任一步失败则保持 `failed` 或 `draft`，不更新模板当前版本指针，不出现在客户端目录。下架只隐藏目录，不立即删除 OSS 文件；回滚只切换当前版本指针。
 
-版本资源可设长期 `immutable` 缓存；API 目录使用 ETag 和短新鲜期；预签名链接的缓存时间不得超过签名期限。日志要隐藏签名 URL query。发布工具首期可以是命令行；后台先用 Django admin 管理系列、模板、上下架和发布记录，不要求新建内容运营站点。
+版本资源可设长期 `immutable` 缓存；API 目录使用 ETag 和短新鲜期；预签名链接的缓存时间不得超过签名期限。日志要隐藏签名 URL query。发布工具首期可以是命令行；现有 backoffice-web 管理系列、模板、单页增删/排序、上下架与发布记录；Django admin 仅作为辅助管理入口。
 
 
 ### 模板上传包的目录结构
 
-上传对象是一个完整的 `.diarypreset` 目录，实际通过 ZIP（建议扩展名 `.diarypreset.zip`）上传；服务端解压到隔离的 staging 目录。不可只上传 `package.json`、PDF/预览图，或某几张素材图。客户端添加页面依赖图层 JSON、素材与绘画数据，缺少任一被引用文件都不能正常编辑。
+上传对象是一个完整的 `.diarypreset` 目录，实际通过 ZIP（建议扩展名 `.diarypreset.zip`）上传；由 OSS 同地域云执行器解压到隔离的 staging 目录，低带宽 ECS 不读取大包。不可只上传 `package.json`、PDF/预览图，或某几张素材图。客户端添加页面依赖图层 JSON、素材与绘画数据，缺少任一被引用文件都不能正常编辑。
 
 推荐压缩包根目录直接包含下列项目，不额外套一层同名文件夹；解压后目录名可使用模板 slug：
 
@@ -140,7 +142,7 @@ presets/v1/series/{series_id}/{template_id}/versions/{version}/previews/{file}
 8. **上传与核对：** 使用不可变 OSS 版本前缀上传；核对对象数量、Content-Length/ETag（ETag 不替代 SHA-256）；登记对象 key、hash 和发布人。
 9. **原子发布：** 数据库事务写入版本、页、文件、依赖关系并切换模板 current_version。只有全部成功才设 `published` 并让目录 API 可见。失败时保持旧版本指针不动，记录失败原因并清理或保留隔离 staging 供排查。
 
-发布可由 Django 管理后台触发，也可由受保护的管理命令调用同一发布服务。上传大包优先采用 API 创建 draft/upload session、服务端返回**限定 staging 前缀和对象名的短时上传凭证**、客户端/发布工具直传 OSS、最后调用 finalize；绝不把 RAM 长期密钥给浏览器或 iOS。对于当前 200MB 级资源包，避免经过 Django/Gunicorn 请求体中转。Finalize 必须重新读取 OSS 文件做上述校验，不能信任上传端提交的摘要。
+发布可由 Django 管理后台触发，也可由受保护的管理命令调用同一发布服务。上传大包优先采用 API 创建 draft/upload session、服务端返回**限定 staging 前缀和对象名的短时上传凭证**、客户端/发布工具直传 OSS、最后调用 finalize；绝不把 RAM 长期密钥给浏览器或 iOS。对于当前 200MB 级资源包，避免经过 Django/Gunicorn 请求体中转。Finalize 只触发 OSS 同地域云执行器读取真实文件进行上述校验；ECS 接收经鉴权的结果和有界元数据，不读取资源大文件，也不信任上传端自行声称的摘要。
 
 发布成功后用户端立即可见；若发现问题，管理员可下架版本或回滚 current_version。无审核不代表跳过自动校验、权限校验和可追溯发布记录。
 
@@ -189,13 +191,13 @@ presets/v1/series/{series_id}/{template_id}/versions/{version}/previews/{file}
 
 请求例：`{"scope":"page","page_ids":["page-abc"],"purpose":"import"}`；整本用 `scope=book`。响应含 manifest 摘要、版本、总字节数、URL 过期时间，以及每文件的包内相对路径、短时 GET URL、大小、SHA-256、MIME。后端按发布时的依赖表确定文件；验证 page ID 属于该版本及用户有访问权。单页仅签发该页页面 JSON、递归对象、引用素材/绘画和所需预览；整本签发全包依赖。客户端提供一个 `selected_files` 集合供部分包校验，不能对局部包错误调用“要求每个全包文件都在场”的校验。
 
-签名 URL 建议有效期 15 分钟、只读单对象；临近过期时重新签发。限制一次签发文件数量及总字节，较大清单分页或生成短时清单对象。首期不承诺断点续传；下载失败可重签并重下。预览缓存键使用 `template/version/page/size`，不使用签名 URL 作缓存身份。
+签名 URL 建议有效期 15 分钟、只读单对象；临近过期时重新签发。限制一次签发文件数量及总字节，较大清单分页或生成短时清单对象。首期必须支持暂停和继续；大文件采用应用层分段直连下载，完成分段持久化，签名过期重签后仅补缺失分段，详见 04 文档。预览缓存键使用 `template/version/page/size`，不使用签名 URL 作缓存身份。
 
 ## 7. iOS 加载与交互
 
 ### Provider 和本地缓存
 
-新增 `RemoteDiaryPresetProvider` / `DiaryPresetRepository` 管理目录、版本、签名和缓存。状态包含 `remoteOnly/downloading(progress)/cached/unsupported/unavailable`。本地持久化目录缓存、包版本、校验结果、下载任务；建议路径 `Library/Caches/DiaryPresets/{templateID}/{version}/`，未完成资源放 `.staging-{operationID}`。系统可清除 Caches，缺失后重下；Documents 中已导入作品不属于缓存，绝不随预设缓存淘汰。可提供“保留离线包”标记。
+新增 `RemoteDiaryPresetProvider` / `DiaryPresetRepository` 管理目录、版本、签名和缓存。状态包含 `remoteOnly/downloading(progress)/cached/unsupported/unavailable`。本地持久化目录缓存、包版本、校验结果、下载任务；建议路径 `Library/Caches/DiaryPresets/{templateID}/{version}/`，未完成资源放 `.staging-{operationID}`。系统可清除 Caches，缺失后重下；Documents 中已导入作品不属于缓存，绝不随预设缓存淘汰。显式“保留离线包”和在途任务需存 Application Support 并排除备份，不能只标记 Caches 而承诺系统不会清除。
 
 ### 浏览和预览
 
@@ -221,7 +223,7 @@ presets/v1/series/{series_id}/{template_id}/versions/{version}/previews/{file}
 3. 完整校验 manifest.files 的大小/hash 与所有引用后复用现有整本 importer：创建临时作品目录、准备所有页和素材，再目录 move 原子发布。
 4. 设置封面/外壳页、保存来源版本。取消可清除 staging；崩溃后恢复或清理；operation 重试不应产生重复作品。
 
-首期以前台 URLSession 下载和重启后的应用层恢复为基线。是否需要应用切后台后继续下载，由大包真机体验决定。若启用 background URLSession，持久化 task/operation ID，并用相同 session identifier 在启动时重新关联；Apple 文档支持后台下载任务及应用重启后恢复关联。[Apple 后台下载文档](https://developer.apple.com/documentation/foundation/downloading-files-in-the-background)
+首期统一下载管理器必须支持多任务异步下载、暂停、继续与重启恢复。采用分段持久化和 URLSession，后台系统调度不承诺持续运行；详见 04 文档。若启用 background URLSession，持久化 task/operation ID，并用相同 session identifier 在启动时重新关联；Apple 文档支持后台下载任务及应用重启后恢复关联。[Apple 后台下载文档](https://developer.apple.com/documentation/foundation/downloading-files-in-the-background)
 
 ### 缓存和版本
 
@@ -238,7 +240,7 @@ presets/v1/series/{series_id}/{template_id}/versions/{version}/previews/{file}
 
 ## 9. Django app 与异步任务
 
-首期应新建 `diary_presets` app，因其有独立领域模型、API、admin 和 migration；加入当前 Django web 容器即可，不单独部署服务。首期不用 Celery：发布校验由本地发布命令完成，文件经 OSS 直传下载，Django 只查库和签名。以后后台允许上传大包时，再加幂等的 `validate_diary_preset_release(release_id)` 队列任务，保存阶段/重试/错误摘要。不要把 iOS 每个下载都放进 Celery；不新增 Redis 队列或定时任务作为首期依赖。过期 staging 清理可后续通过受控维护任务进行，已发布版本删除需人工复核。
+首期新建 `diary_presets` app，复用当前 Django 服务和 backoffice-web。大包直传 OSS 后，由同地域云执行器异步完成解压、hash、媒体检查与发布索引生成。ECS 不下载资源；现有 Celery 如参与，仅承担触发、状态查询、超时重试等控制任务。详细任务与回收规则见 04 文档。
 
 ## 10. 分期和验收
 
@@ -248,7 +250,7 @@ presets/v1/series/{series_id}/{template_id}/versions/{version}/previews/{file}
 
 **阶段 C：** 单页依赖下载和导入。验证只下载依赖闭包；URL 过期、断网、取消、空间不足、hash 错误、目标本并发修改均不产生半页；导入页能编辑、替换图像、重启重开，作品不依赖缓存。
 
-**阶段 D：** 整本下载/原子发布、恢复和大包优化。校验页序、封面、外壳、对象关系、来源版本；真机测试约 227 MB 雨崩、153 MB 苏州的时长、磁盘峰值、耗电和后台行为，再决定断点续传和并发上限。
+**阶段 D：** 整本下载/原子发布、恢复和大包优化。校验页序、封面、外壳、对象关系、来源版本；真机测试约 227 MB 雨崩、153 MB 苏州的时长、磁盘峰值、耗电和后台行为，验收暂停续传并调优并发上限。
 
 ## 11. 初始产品默认值
 
@@ -258,7 +260,7 @@ presets/v1/series/{series_id}/{template_id}/versions/{version}/previews/{file}
 | 签名 URL | 15 分钟，仅 GET；过期重新签发 |
 | 图片预览 | 约 480px 列表图；详情再取约 1800px 图 |
 | 图片并发 | 起步 3 路，按真机内存/滚动表现调整 |
-| 文件并发 | 起步 3–4 路，首期不承诺断点续传 |
+| 文件并发 | 全局起步 3 路；首期实现分段暂停续传 |
 | 蜂窝网络 | 允许浏览；大包下载前显示大小并确认 |
 | Bundle 迁移 | 云端首版仍保留常用/小型内置包兜底，稳定后分批移出 IPA |
 
@@ -266,7 +268,7 @@ presets/v1/series/{series_id}/{template_id}/versions/{version}/previews/{file}
 
 1. 官方模板是否所有登录用户免费，是否有会员可见模板（决定目录和签名授权规则）。
 2. 预览图是否允许匿名访问；默认按私有资源处理。
-3. 是否要求离开 App 后继续整本下载；默认先实现前台稳定下载/应用重启恢复，再依据实测开后台会话。
+3. 后台会话的调度体验需真机确认；暂停、继续与重启恢复已确定为首期要求，具体实现见 04 文档。
 4. 整本蜂窝下载是否允许；默认允许但先显示容量确认。
 5. 内置 Bundle 保留多久；建议云端稳定后再逐批移除，避免首个云端版本依赖网络导致预设空白。
 
