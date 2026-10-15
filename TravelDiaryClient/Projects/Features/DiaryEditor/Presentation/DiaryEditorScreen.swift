@@ -13,6 +13,7 @@ struct DiaryEditorScreen: View {
     @State private var showText = false
     @State private var showCrop = false
     @State private var showLayers = false
+    @State private var showDrawing = false
     @State private var replacingPhotos = false
     @State private var showStickers = false
     @State private var exportURL: URL?
@@ -53,6 +54,11 @@ struct DiaryEditorScreen: View {
             }
             .sheet(isPresented: $showStickers) { DiaryStickerPickerSheet(session: session) }
             .sheet(isPresented: $showLayers) { layerPanel }
+            .sheet(isPresented: $showDrawing, onDismiss: { session.inkMode = false }) {
+                DiaryDrawingSheet(session: session)
+                    .presentationDetents([.large])
+                    .interactiveDismissDisabled()
+            }
             .sheet(isPresented: Binding(get: { exportURL != nil }, set: { if !$0 { exportURL = nil } })) {
                 if let exportURL {
                     NavigationStack {
@@ -89,9 +95,7 @@ struct DiaryEditorScreen: View {
             .disabled(session.busy)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
-            if session.inkMode {
-                Button("完成绘画") { session.finishInteraction(); session.inkMode = false }
-            } else if session.isRoot {
+            if session.isRoot {
                 Button("一键替换", systemImage: "photo.on.rectangle.angled") { replacingPhotos = true }
                     .disabled(session.busy)
             }
@@ -124,7 +128,7 @@ struct DiaryEditorScreen: View {
                     let margin = DiaryCanvasSurface.controlMargin
                     let scale = max(0.01, min((geometry.size.width - 40) / size.width,
                                              (geometry.size.height - margin * 2 - 24) / size.height))
-                    DiaryZoomableCanvas(contentSize: CGSize(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2), sessionID: session.id, inkMode: session.inkMode) {
+                    DiaryZoomableCanvas(contentSize: CGSize(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2), sessionID: session.id, inkMode: session.inkMode, minimumScale: 0.65) {
                       ZStack(alignment: .topLeading) {
                         DiaryCanvasView(session: session, onEdit: {
                             guard let layer = session.selected else { return }
@@ -134,14 +138,7 @@ struct DiaryEditorScreen: View {
                             else if layer.kind == .sticker { childEditor = session.openSelectedStickerObject() }
                         })
                             .frame(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)
-                        if session.inkMode {
-                            DiaryDrawingCanvasView(session: session)
-                                .frame(width: size.width, height: size.height)
-                                .scaleEffect(scale, anchor: .topLeading)
-                                .frame(width: size.width * scale, height: size.height * scale, alignment: .topLeading)
-                                .clipped()
-                                .offset(x: margin, y: margin)
-                        }
+
                       }
                       .frame(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)
                     }
@@ -180,14 +177,10 @@ struct DiaryEditorScreen: View {
 //            }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 18) {
-                    if session.inkMode {
-                        Button("完成绘画") { session.finishInteraction(); session.inkMode = false }
-                        Button("清空画笔", role: .destructive) { session.clearDrawing() }
-                    } else {
                         Button { replacementID = nil; showPhotoPicker = true } label: { Label("照片", systemImage: "photo") }
                         Button { session.select(nil); openText() } label: { Label("文字", systemImage: "textformat") }
                         Button { showStickers = true } label: { Label("贴纸", systemImage: "face.smiling") }
-                        Button { session.select(nil); session.inkMode = true } label: { Label("画笔", systemImage: "pencil.tip") }
+                        Button { session.finishInteraction(); session.select(nil); session.inkMode = true; showDrawing = true } label: { Label("画笔", systemImage: "pencil.tip") }
                         Menu {
                             Button("透明") { session.setBackground(nil) }
                             Button("白色") { session.setBackground(.white) }
@@ -196,7 +189,6 @@ struct DiaryEditorScreen: View {
                             Button("薄荷绿") { session.setBackground(.mint) }
                         } label: { Label("背景", systemImage: "paintpalette") }
                         Button { showLayers = true } label: { Label("图层", systemImage: "square.3.layers.3d") }
-                    }
                 }.font(.subheadline)
             }
         }

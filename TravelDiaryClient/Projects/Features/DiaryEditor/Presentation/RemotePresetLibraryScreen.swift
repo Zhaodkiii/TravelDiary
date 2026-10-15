@@ -21,7 +21,7 @@ struct PresetBookAvailabilityBadge: View {
     }
 }
 
-private struct RemotePresetSelection: Identifiable {
+private struct RemotePresetSelection: Identifiable, Hashable {
     let id = UUID()
     let pageIDs: [String]
     let wholeBook: Bool
@@ -32,6 +32,7 @@ struct RemotePresetDetailScreen: View {
     let book: RemotePresetBook
     let targetBook: DiaryBook?
     let afterPageID: UUID?
+    var fixedTarget = false
     let onImported: (DiaryBook) -> Void
     @ObservedObject private var downloads = PresetDownloadManager.shared
     @State private var pages: [RemotePresetPage] = []
@@ -52,9 +53,11 @@ struct RemotePresetDetailScreen: View {
                         Text("\(pages.count) 页 · \(Int(manifest.pageSize.width)) × \(Int(manifest.pageSize.height))")
                         PresetBookAvailabilityBadge(downloadedCount: min(book.page_count, downloads.downloadedPageIDs(bookID: book.id, version: book.version).count), totalCount: book.page_count)
                     }
-                    Button("整本添加到我的") {
-                        selection = RemotePresetSelection(pageIDs: pages.map(\.id), wholeBook: true)
-                    }.buttonStyle(.borderedProminent)
+                    if !fixedTarget {
+                        Button("整本添加到我的") {
+                            selection = RemotePresetSelection(pageIDs: pages.map(\.id), wholeBook: true)
+                        }.buttonStyle(.borderedProminent)
+                    }
                     DiaryPageListGrid(pages: pageData, shellID: manifest.shellPageID, coverID: manifest.coverPageID) { page in
                         if let remote = pages.first(where: { $0.id == page.id }) {
                             VStack {
@@ -101,14 +104,17 @@ struct RemotePresetDetailScreen: View {
             }
         }
         .sheet(item: $selection) { value in
+            importPage(value)
+        }
+    }
+    @ViewBuilder private func importPage(_ value: RemotePresetSelection) -> some View {
             if let package = placeholderPackage {
                 DiaryPresetImportSheet(ownerID: ownerID, package: package, pageIDs: value.pageIDs,
                     defaultTarget: value.wholeBook ? nil : targetBook, wholeBook: value.wholeBook,
-                    defaultAfterPageID: afterPageID, remoteBook: book) { result in
+                    defaultAfterPageID: afterPageID, remoteBook: book, fixedTarget: fixedTarget) { result in
                         selection = nil; onImported(result)
                     }
             }
-        }
     }
     private func remoteImage(_ raw: String, size: CGSize) -> some View {
         AsyncImage(url: URL(string: raw)) { phase in

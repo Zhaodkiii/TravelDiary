@@ -60,6 +60,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
     }
     /// 收藏与最近使用按账号保存，跨本共享。
     let stickerPreferenceKey: String
+    let ownerID: String
     private let root: URL
     private let libraryRoot: URL
     private let bookID: UUID?
@@ -73,6 +74,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
     private let opened = RevisionState()
 
     init(ownerID: String, baseDirectory: URL? = nil, bookID: UUID? = nil) {
+        self.ownerID = ownerID
         let scope = Data(ownerID.utf8).base64EncodedString().replacingOccurrences(of: "/", with: "_")
         stickerPreferenceKey = "diary.stickers." + scope
         let scopeRoot = (baseDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
@@ -582,7 +584,7 @@ extension DiaryDocumentStore {
     private nonisolated func previewURL(_ page: DiaryPageEntry, large: Bool) -> URL {
         let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         let scope = libraryRoot.deletingLastPathComponent().lastPathComponent
-        return cache.appendingPathComponent("DiaryPreviews/\(scope)/\(bookID?.uuidString ?? "single")/\(page.id)/\(page.revisionID)/v1-\(large ? 1800 : 480).png")
+        return cache.appendingPathComponent("DiaryPreviews/\(scope)/\(bookID?.uuidString ?? "single")/\(page.id)/\(page.revisionID)/v2-light-ink-\(large ? 1800 : 480).png")
     }
 }
 

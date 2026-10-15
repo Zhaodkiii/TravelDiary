@@ -9,6 +9,8 @@ struct DiaryBatchPhotoSheet: View {
     var preset: DiaryPresetPackage? = nil
     var presetPageIDs: [String] = []
     var preparationDirectory: URL? = nil
+    var finishesImport = false
+    var embedded = false
     var onPrepared: (([URL]) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var documents: [DiaryDocument] = []
@@ -31,7 +33,11 @@ struct DiaryBatchPhotoSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
+        Group {
+            if embedded { content } else { NavigationStack { content } }
+        }
+    }
+    private var content: some View {
             List {
                 Section {
                     Text(session == nil && preset == nil ? "当前手帐共 \(slots.count) 张可替换照片" : "当前页共 \(slots.count) 张可替换照片")
@@ -47,7 +53,7 @@ struct DiaryBatchPhotoSheet: View {
                 }
                 if onPrepared != nil {
                     Section {
-                        Button("保留原照片，继续") { onPrepared?([]); dismiss() }.disabled(!ready)
+                        Button(finishesImport ? "保留原照片，完成添加" : "保留原照片，继续") { onPrepared?([]); if !embedded { dismiss() } }.disabled(!ready)
                     }
                 }
                 Section("替换对应顺序") {
@@ -76,9 +82,9 @@ struct DiaryBatchPhotoSheet: View {
             }
             .navigationTitle(onPrepared == nil ? "一键替换照片" : "第 2 步 · 选择照片")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(busy) }
+                ToolbarItem(placement: .cancellationAction) { Button(embedded ? "上一步" : "取消") { dismiss() }.disabled(busy) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(onPrepared == nil ? "替换全部" : "下一步") { Task { await replace() } }
+                    Button(onPrepared == nil ? "替换全部" : finishesImport ? "完成添加" : "下一步") { Task { await replace() } }
                         .disabled(!ready || busy || slots.isEmpty || selection.count != slots.count)
                 }
             }
@@ -87,7 +93,6 @@ struct DiaryBatchPhotoSheet: View {
             .interactiveDismissDisabled(busy)
             .task { await prepare() }
             .task(id: selection) { await loadThumbnails() }
-        }
     }
 
     private func thumbnail(_ image: UIImage?) -> some View {
@@ -192,7 +197,7 @@ struct DiaryBatchPhotoSheet: View {
                     for file in files { try? FileManager.default.removeItem(at: file) }
                     throw error
                 }
-                onPrepared(files); dismiss(); return
+                onPrepared(files); if !embedded { dismiss() }; return
             }
             var updated = documents
             var replacements: [(UUID, DiaryAsset, UIImage, DiaryPhotoPlacement?)] = []

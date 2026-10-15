@@ -65,7 +65,9 @@ enum DiaryPageRenderer {
 
     private static func drawInk(_ drawing: PKDrawing, in rect: CGRect) {
         guard !drawing.strokes.isEmpty, !rect.isNull, !rect.isEmpty else { return }
-        drawing.image(from: rect, scale: 2).draw(in: rect)
+        UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
+            drawing.image(from: rect, scale: 2).draw(in: rect)
+        }
     }
     private static func drawContent(_ content: DiaryObjectContent, document: DiaryDocument,
                                     images: [UUID: UIImage], in context: CGContext, includeInk: Bool = true, cacheObjects: Bool = false) {

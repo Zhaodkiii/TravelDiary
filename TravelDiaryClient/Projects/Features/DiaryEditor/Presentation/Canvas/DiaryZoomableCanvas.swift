@@ -7,6 +7,8 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
     let contentSize: CGSize
     let sessionID: UUID
     let inkMode: Bool
+    var minimumScale: CGFloat = 1
+    var refreshContent = false
     @ViewBuilder let content: () -> Content
 
     func makeCoordinator() -> Coordinator { Coordinator(content: content()) }
@@ -17,7 +19,7 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
             coordinator?.center(scroll)
         }
         scroll.delegate = context.coordinator
-        scroll.minimumZoomScale = 1
+        scroll.minimumZoomScale = minimumScale
         scroll.maximumZoomScale = 8
         scroll.bouncesZoom = true
         scroll.showsVerticalScrollIndicator = false
@@ -34,7 +36,7 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
     func updateUIView(_ scroll: UIScrollView, context: Context) {
         let coordinator = context.coordinator
         // 内部画布自行观察 Session；只有结构、尺寸或会话改变才替换宿主树。
-        if coordinator.sessionID != sessionID || coordinator.inkMode != inkMode || coordinator.size != contentSize {
+        if refreshContent || coordinator.sessionID != sessionID || coordinator.inkMode != inkMode || coordinator.size != contentSize {
             coordinator.host.rootView = content()
             coordinator.sessionID = sessionID; coordinator.inkMode = inkMode
         }

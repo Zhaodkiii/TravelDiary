@@ -428,83 +428,138 @@ final class DiaryCanvasSurface: UIView {
 
 }
 
-/// 原生绘画画布以设计尺寸布局，再整体缩放显示，保存的笔画始终是页面坐标。
-struct DiaryDrawingCanvasView: UIViewRepresentable {
+/// 绘画草稿只在“完成”时提交；屏幕点坐标与作品坐标之间可逆转换。
+struct DiaryDrawingSheet: View {
     @ObservedObject var session: DiaryEditorSession
-    func makeCoordinator() -> Coordinator { Coordinator(session: session) }
+    @Environment(\.dismiss) private var dismiss
+    @State private var drawing: PKDrawing
+    @State private var clearConfirmation = false
+
+    init(session: DiaryEditorSession) {
+        self.session = session
+        _drawing = State(initialValue: session.drawing)
+    }
+
+    var body: some View {
+        NavigationStack {
+            GeometryReader { geometry in
+                let bounds = session.canvasBounds
+                let scale = max(0.001, min(max(1, geometry.size.width - 24) / bounds.width,
+                                          max(1, geometry.size.height - 24) / bounds.height))
+                let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+                let margin = DiaryCanvasSurface.controlMargin
+                DiaryZoomableCanvas(contentSize: size, sessionID: session.id, inkMode: true,
+                                    minimumScale: 0.5, refreshContent: true) {
+                ZStack(alignment: .topLeading) {
+                    // CanvasSurface already renders artwork to fit, including its control margin.
+                    DiaryCanvasView(session: session, onEdit: {})
+                        .frame(width: size.width + margin * 2, height: size.height + margin * 2)
+                        .offset(x: -margin, y: -margin)
+                        .allowsHitTesting(false)
+                    DiaryDrawingCanvasView(drawing: $drawing, bounds: bounds, displayScale: scale)
+                        .frame(width: size.width, height: size.height)
+                }
+                .frame(width: size.width, height: size.height, alignment: .topLeading)
+                .background(.white).clipped()
+
+                }.clipped()
+
+            }
+            .background(Color(uiColor: .systemGroupedBackground))
+            // Reserve room for the native palette so the bottom of the page remains reachable.
+            .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 110).allowsHitTesting(false) }
+            .navigationTitle("绘画").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") {
+                        session.beginInteraction()
+                        session.previewDrawing(drawing)
+                        session.finishInteraction()
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("清空", role: .destructive) { clearConfirmation = true }
+                }
+            }
+            .confirmationDialog("清空当前页面的笔迹？", isPresented: $clearConfirmation, titleVisibility: .visible) {
+                Button("清空笔迹", role: .destructive) { drawing = PKDrawing() }
+            } message: { Text("只清空绘画草稿，点击完成后保存。") }
+        }
+    }
+}
+
+/// PKCanvasView uses screen points, so native tool widths don't shrink with high-resolution pages.
+struct DiaryDrawingCanvasView: UIViewRepresentable {
+    @Binding var drawing: PKDrawing
+    let bounds: CGRect
+    let displayScale: CGFloat
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
     func makeUIView(context: Context) -> PKCanvasView {
         let view = DiaryNativeDrawingCanvas()
-        view.onWindowChanged = { [weak coordinator = context.coordinator] in coordinator?.updateToolPicker() }
         view.backgroundColor = .clear; view.isOpaque = false
         view.overrideUserInterfaceStyle = .light
         view.isScrollEnabled = false; view.drawingPolicy = .anyInput
         view.delegate = context.coordinator
         context.coordinator.canvas = view
         context.coordinator.toolPicker.addObserver(view)
-        session.flushDrawingInteraction = { [weak coordinator = context.coordinator] in coordinator?.flush() }
+        view.onWindowChanged = { [weak coordinator = context.coordinator] in coordinator?.showTools() }
         configure(view, coordinator: context.coordinator)
         return view
     }
     func updateUIView(_ view: PKCanvasView, context: Context) { configure(view, coordinator: context.coordinator) }
-    static func dismantleUIView(_ uiView: PKCanvasView, coordinator: Coordinator) {
-        coordinator.session.finishInteraction()
-        (uiView as? DiaryNativeDrawingCanvas)?.onWindowChanged = nil
-        coordinator.toolPicker.setVisible(false, forFirstResponder: uiView)
-        coordinator.toolPicker.removeObserver(uiView)
-        uiView.resignFirstResponder()
-        coordinator.session.flushDrawingInteraction = nil
-        uiView.delegate = nil
+    static func dismantleUIView(_ view: PKCanvasView, coordinator: Coordinator) {
+        (view as? DiaryNativeDrawingCanvas)?.onWindowChanged = nil
+        coordinator.toolPicker.setVisible(false, forFirstResponder: view)
+        coordinator.toolPicker.removeObserver(view)
+        view.resignFirstResponder(); view.delegate = nil
     }
     private func configure(_ view: PKCanvasView, coordinator: Coordinator) {
-        let data = session.content.drawing
-        if !coordinator.dirty && coordinator.lastData != data {
-            var displayed = session.drawing
-            displayed.transform(using: CGAffineTransform(translationX: -session.canvasBounds.minX, y: -session.canvasBounds.minY))
+        let data = drawing.dataRepresentation()
+        let geometryChanged = coordinator.parent.displayScale != displayScale || coordinator.parent.bounds != bounds
+        coordinator.parent = self
+        if coordinator.lastData != data || geometryChanged {
+            var displayed = drawing
+            displayed.transform(using: CGAffineTransform(a: displayScale, b: 0, c: 0, d: displayScale,
+                tx: -bounds.minX * displayScale, ty: -bounds.minY * displayScale))
             coordinator.replaying = true
             view.drawing = displayed
-            view.undoManager?.removeAllActions()
             coordinator.lastData = data
             coordinator.replaying = false
         }
-        // Let PencilKit own tool selection, color and width; never reset it during SwiftUI updates.
-        coordinator.updateToolPicker()
+        coordinator.showTools()
     }
     final class Coordinator: NSObject, PKCanvasViewDelegate {
-        let session: DiaryEditorSession
+        var parent: DiaryDrawingCanvasView
         weak var canvas: PKCanvasView?
-        var replaying = false
-        var dirty = false
-        var lastData: Data?
         let toolPicker = PKToolPicker()
-        func updateToolPicker() {
-            guard let canvas, canvas.window != nil else { return }
-            toolPicker.setVisible(session.inkMode, forFirstResponder: canvas)
-            if session.inkMode && !canvas.isFirstResponder { canvas.becomeFirstResponder() }
+        var replaying = false
+        var lastData: Data?
+        init(parent: DiaryDrawingCanvasView) {
+            self.parent = parent
+            super.init()
+            // Palette chrome may be dark, but its colors must target the light artwork canvas.
+            toolPicker.colorUserInterfaceStyle = .light
         }
-        init(session: DiaryEditorSession) { self.session = session }
-        func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { session.beginInteraction() }
+        func showTools() {
+            guard let canvas, canvas.window != nil else { return }
+            toolPicker.setVisible(true, forFirstResponder: canvas)
+            if !canvas.isFirstResponder { canvas.becomeFirstResponder() }
+        }
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             guard !replaying else { return }
-            session.beginInteraction()
-            dirty = true
-        }
-        func flush() {
-            guard dirty, let canvas else { return }
-            dirty = false
-            var local = canvas.drawing
-            local.transform(using: CGAffineTransform(translationX: session.canvasBounds.minX, y: session.canvasBounds.minY))
-            session.previewDrawing(local)
-            lastData = session.content.drawing
-        }
-        func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
-            flush()
-            session.finishInteraction()
-            canvasView.undoManager?.removeAllActions()
+            var value = canvasView.drawing
+            let scale = parent.displayScale
+            value.transform(using: CGAffineTransform(a: 1 / scale, b: 0, c: 0, d: 1 / scale,
+                tx: parent.bounds.minX, ty: parent.bounds.minY))
+            lastData = value.dataRepresentation()
+            parent.drawing = value
         }
     }
 }
 
-/// A tool picker can only become visible after the canvas joins a window.
 private final class DiaryNativeDrawingCanvas: PKCanvasView {
     var onWindowChanged: (() -> Void)?
     override func didMoveToWindow() {

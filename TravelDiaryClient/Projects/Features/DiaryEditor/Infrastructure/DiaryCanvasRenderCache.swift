@@ -180,7 +180,9 @@ final class DiaryCanvasRenderCache {
     func rasterizeInk() {
         guard inkDirty else { return }
         inkDirty = false
-        inkImage = drawing.strokes.isEmpty ? nil : drawing.image(from: inkRect, scale: inkScale)
+        UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
+            inkImage = drawing.strokes.isEmpty ? nil : drawing.image(from: inkRect, scale: inkScale)
+        }
         rasterCount += 1
     }
 

@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import PhotosUI
 
 /// 阅读投影不修改目录：内封皮与第一页组成首跨页，之后按目录顺序连续配对。
 struct DiaryPhysicalBookScreen: View {
@@ -14,8 +15,14 @@ struct DiaryPhysicalBookScreen: View {
     @State private var editor: DiaryEditorSession?
     @State private var loadingEditor = false
     @State private var errorMessage: String?
+    @State private var pickingPhoto = false
+    @State private var photo: PhotosPickerItem?
+    @State private var choosingPreset = false
     private var innerPages: [DiaryPageEntry] { book.contentPages }
-    private var spreadCount: Int { innerPages.isEmpty ? 0 : (innerPages.count + 2) / 2 }
+    private var contentSpreadCount: Int { (innerPages.count + 2) / 2 }
+    // An odd number of pages needs one virtual blank spread; an even number already
+    // has a padded blank leaf on its final spread. Neither case gets a spread after it.
+    private var spreadCount: Int { contentSpreadCount + (innerPages.count.isMultiple(of: 2) ? 0 : 1) }
     private var paperRatio: CGFloat {
         let size = innerPages.first?.size ?? book.defaultPageSize
         return max(size.width, 1) / max(size.height, 1)
@@ -44,7 +51,7 @@ struct DiaryPhysicalBookScreen: View {
                         DiaryBookOpeningStage(progress: opened ? 1 : 0, viewport: geometry.size,
                                               paperRatio: paperRatio, cover: book.shell,
                                               firstPage: innerPages.first, store: store) {
-                            DiaryCurlBook(pages: innerPages, store: store, spread: $spread, reduceMotion: reduceMotion, onSelectPage: openEditor)
+                            DiaryCurlBook(pages: innerPages, store: store, spreadCount: spreadCount, spread: $spread, reduceMotion: reduceMotion, onSelectPage: openEditor, onAddPage: handleAdd)
                                 .id(book.catalogRevision)
                         }
                         .animation(reduceMotion ? nil : .easeInOut(duration: 0.85), value: opened)
@@ -57,7 +64,7 @@ struct DiaryPhysicalBookScreen: View {
                         Image(systemName: "chevron.left")
                     }.disabled(!opened || (spread == 0 && book.shell == nil)).accessibilityLabel(spread == 0 ? "合上手帐" : "上一跨页")
                     Spacer()
-                    Text(opened ? "\(spreadTitle(spread)) / \(innerPages.count)" : "外壳")
+                    Text(opened ? (spread >= contentSpreadCount ? "添加页面" : "\(spreadTitle(spread)) / \(innerPages.count)") : "外壳")
                         .font(.subheadline.monospacedDigit())
                     Spacer()
                     Button { if opened { spread += 1 } else { openBook() } } label: {
@@ -65,10 +72,32 @@ struct DiaryPhysicalBookScreen: View {
                     }.disabled(spreadCount == 0 || (opened && spread >= spreadCount - 1))
                         .accessibilityLabel(opened ? "下一跨页" : "展开手帐")
                 }.padding(.horizontal, 28).disabled(turningCover)
-                thumbnailRail.disabled(turningCover)
+                HStack(spacing: 0) {
+                    thumbnailRail
+                    Menu { addActions } label: {
+                        Image(systemName: "plus.circle.fill").font(.title2).padding(.trailing, 16)
+                    }.accessibilityLabel("添加页面")
+                }.disabled(turningCover)
             }
             .disabled(loadingEditor)
             .overlay { if loadingEditor { ProgressView("正在打开页面…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+            .photosPicker(isPresented: $pickingPhoto, selection: $photo, matching: .images)
+            .onChange(of: photo) { _, item in
+                guard let item else { return }
+                Task {
+                    do {
+                        guard let data = try await item.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage }
+                        await createPage(data: data)
+                    } catch { errorMessage = error.localizedDescription }
+                    photo = nil
+                }
+            }
+            .sheet(isPresented: $choosingPreset) {
+                DiaryPresetPagePicker(ownerID: store.ownerID, targetBook: book) { updated in
+                    book = updated
+                    if let last = innerPages.last { reveal(last.id) }
+                }
+            }
             .fullScreenCover(item: $editor, onDismiss: {
                 Task { await refreshAfterEditing() }
             }) { session in
@@ -95,6 +124,44 @@ struct DiaryPhysicalBookScreen: View {
                     }
                 }
             }
+    }
+
+    @ViewBuilder private var addActions: some View {
+        Button("空白页", systemImage: "doc") { Task { await createPage(data: nil) } }
+        Button("从照片新建", systemImage: "photo") { pickingPhoto = true }
+        Button("从预设选择", systemImage: "books.vertical") { choosingPreset = true }
+    }
+    private func handleAdd(_ action: DiaryReaderAddAction) {
+        switch action {
+        case .blank: Task { await createPage(data: nil) }
+        case .photo: pickingPhoto = true
+        case .preset: choosingPreset = true
+        }
+    }
+    private func reveal(_ id: UUID) {
+        if let index = innerPages.firstIndex(where: { $0.id == id }) { spread = (index + 1) / 2 }
+        opened = true
+    }
+    private func createPage(data: Data?) async {
+        guard !loadingEditor else { return }
+        loadingEditor = true
+        defer { loadingEditor = false }
+        do {
+            var document = DiaryDocument()
+            document.bookID = book.id
+            document.objects[document.rootContentID]?.referenceSize = book.defaultPageSize
+            var images: [UUID: UIImage] = [:]
+            if let data {
+                let (asset, image) = try await store.importImage(data, documentID: document.id)
+                document.assets[asset.id] = asset; images[asset.id] = image
+                document.appendObject(containing: DiaryLayer.photo(asset: asset,
+                    center: CGPoint(x: book.defaultPageSize.width / 2, y: book.defaultPageSize.height / 2)))
+            }
+            try await store.save(document)
+            book = try await store.loadBook()
+            reveal(document.id)
+            editor = DiaryEditorSession(document: document, images: images, store: store)
+        } catch { errorMessage = error.localizedDescription }
     }
 
     private func openEditor(_ page: DiaryPageEntry) {
@@ -160,7 +227,8 @@ struct DiaryPhysicalBookScreen: View {
         }
     }
     private func spreadTitle(_ index: Int) -> String {
-        if index == 0 { return "第 1 页" }
+        if index >= contentSpreadCount { return "添加页面" }
+        if index == 0 { return innerPages.isEmpty ? "添加页面" : "第 1 页" }
         let first = index * 2
         let last = min(first + 1, innerPages.count)
         return first == last ? "第 \(first) 页" : "第 \(first)–\(last) 页"
@@ -209,12 +277,16 @@ private struct DiaryBindingRings: View {
 
 /// UIKit 中置书脊始终显示两个控制器，内封皮占首位，末尾缺页时补齐留白。
 /// 原生 pageCurl 提供交互卷页、取消回弹和纸张背面，无需模拟整张跨页滑动。
+private enum DiaryReaderAddAction { case blank, photo, preset }
+
 private struct DiaryCurlBook: UIViewControllerRepresentable {
     let pages: [DiaryPageEntry]
     let store: DiaryDocumentStore
+    let spreadCount: Int
     @Binding var spread: Int
     let reduceMotion: Bool
     let onSelectPage: (DiaryPageEntry) -> Void
+    let onAddPage: (DiaryReaderAddAction) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIViewController(context: Context) -> UIPageViewController {
@@ -274,9 +346,12 @@ private struct DiaryCurlBook: UIViewControllerRepresentable {
         init(_ parent: DiaryCurlBook) { self.parent = parent }
 
         func page(_ index: Int) -> DiaryPaperController? {
-            let paddedCount = ((parent.pages.count + 2) / 2) * 2
+            let paddedCount = parent.spreadCount * 2
             guard (0..<paddedCount).contains(index) else { return nil }
-            return DiaryPaperController(index: index, page: parent.pages.indices.contains(index - 1) ? parent.pages[index - 1] : nil, store: parent.store) { [weak self] selected in
+            return DiaryPaperController(index: index, page: parent.pages.indices.contains(index - 1) ? parent.pages[index - 1] : nil, store: parent.store, onAdd: { [weak self] action in
+                guard let self, !self.transitioning else { return }
+                self.parent.onAddPage(action)
+            }) { [weak self] selected in
                 guard let self, !self.transitioning else { return }
                 self.parent.onSelectPage(selected)
             }
@@ -336,26 +411,53 @@ private struct DiaryCurlBook: UIViewControllerRepresentable {
 }
 
 /// 每次只加载 UIKit 请求的相邻页；复用现有带版本号的预览缓存，不解码整本原图。
-@MainActor private final class DiaryPaperController: UIHostingController<DiaryBookPaper> {
+@MainActor private final class DiaryPaperController: UIHostingController<DiaryBookPaper>, UIPopoverPresentationControllerDelegate {
     let index: Int
     private let selectedPage: DiaryPageEntry?
     private let onSelect: (DiaryPageEntry) -> Void
-    init(index: Int, page: DiaryPageEntry?, store: DiaryDocumentStore, onSelect: @escaping (DiaryPageEntry) -> Void) {
+    private let onAdd: (DiaryReaderAddAction) -> Void
+    init(index: Int, page: DiaryPageEntry?, store: DiaryDocumentStore, onAdd: @escaping (DiaryReaderAddAction) -> Void, onSelect: @escaping (DiaryPageEntry) -> Void) {
         self.index = index
         self.selectedPage = page
         self.onSelect = onSelect
+        self.onAdd = onAdd
         super.init(rootView: DiaryBookPaper(page: page, store: store, left: index.isMultiple(of: 2), insideCover: index == 0))
         view.backgroundColor = .clear
         safeAreaRegions = []
-        if page != nil {
-            let tap = UITapGestureRecognizer(target: self, action: #selector(selectPage))
+        if page != nil || index > 0 {
+            let tap = UITapGestureRecognizer(target: self, action: #selector(selectPage(_:)))
             view.addGestureRecognizer(tap)
-            view.accessibilityHint = "轻点编辑这一页"
+            view.accessibilityHint = page == nil ? "轻点添加页面" : "轻点编辑这一页"
         }
     }
-    @objc private func selectPage() {
-        guard let selectedPage else { return }
-        onSelect(selectedPage)
+    @objc private func selectPage(_ gesture: UITapGestureRecognizer) {
+        if let selectedPage { onSelect(selectedPage) }
+        else if index > 0 { showAddMenu(at: gesture.location(in: view)) }
+    }
+    private func showAddMenu(at point: CGPoint) {
+        guard presentedViewController == nil, view.window != nil else { return }
+        let menu = UIAlertController(title: "添加页面", message: nil, preferredStyle: .actionSheet)
+        for (title, action) in [("空白页", DiaryReaderAddAction.blank), ("从照片新建", .photo), ("从预设选择", .preset)] {
+            menu.addAction(UIAlertAction(title: title, style: .default) { [weak self, weak menu] _ in
+                // Finish dismissing the native menu before presenting a photo picker or sheet.
+                guard let self else { return }
+                if let menu, menu.presentingViewController != nil {
+                    menu.dismiss(animated: true) { self.onAdd(action) }
+                } else { self.onAdd(action) }
+            })
+        }
+        menu.addAction(UIAlertAction(title: "取消", style: .cancel))
+        menu.modalPresentationStyle = .popover
+        if let popover = menu.popoverPresentationController {
+            popover.sourceView = view
+            popover.sourceRect = CGRect(x: point.x, y: point.y, width: 1, height: 1)
+            popover.permittedArrowDirections = .any
+            popover.delegate = self
+        }
+        present(menu, animated: true)
+    }
+    func adaptivePresentationStyle(for controller: UIPresentationController, traitCollection: UITraitCollection) -> UIModalPresentationStyle {
+        .none
     }
     @available(*, unavailable)
     required init?(coder aDecoder: NSCoder) { fatalError("不支持 Storyboard") }
@@ -376,7 +478,7 @@ private struct DiaryBookPaper: View {
             } else if let page {
                 DiaryPagePreview(page: page, store: store, large: true, undecorated: true)
             } else {
-                Text("留白页").font(.caption).foregroundStyle(.brown.opacity(0.5))
+                Label("添加页面", systemImage: "plus.circle").font(.caption).foregroundStyle(.brown.opacity(0.5))
             }
             HStack(spacing: 0) {
                 if left { Spacer(minLength: 0) }

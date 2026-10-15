@@ -20,7 +20,7 @@ enum SupportAppEnvironment: String, CaseIterable, Sendable {
     var apiBaseURL: URL {
         switch self {
         case .debug:
-            return URL(string: "https://diary.dreamwhale.top")!
+            return URL(string: "http://39.106.39.110:22026")!
         case .staging, .production:
             return URL(string: "https://diary.dreamwhale.top")!
         }

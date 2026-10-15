@@ -6,6 +6,8 @@ struct DiaryPresetLibraryScreen: View {
     let ownerID: String
     var targetBook: DiaryBook? = nil
     var targetAfterPageID: UUID? = nil
+    var singlePageOnly = false
+    var onPageAdded: ((DiaryBook) -> Void)? = nil
     @ObservedObject private var downloads = PresetDownloadManager.shared
     @State private var remote: RemotePresetCatalog?
     @State private var pending: DiaryPresetImportIntent?
@@ -19,7 +21,7 @@ struct DiaryPresetLibraryScreen: View {
     var body: some View {
         VStack {
             if let catalog {
-                if let pending {
+                if let pending, !singlePageOnly {
                     HStack {
                         Text("有未完成的预设导入").font(.caption)
                         Button("继续") { resuming = pending }
@@ -40,7 +42,9 @@ struct DiaryPresetLibraryScreen: View {
                             // 直接提供目的地，避免 Tab 子树中的值路由注册对外层导航栈不可见。
                             NavigationLink {
                                 DiaryPresetDetailScreen(ownerID: ownerID, package: package, targetBook: targetBook,
-                                                        targetAfterPageID: targetAfterPageID) { book in recovered = book }
+                                                        targetAfterPageID: targetAfterPageID, fixedTarget: singlePageOnly) { book in
+                                    if let onPageAdded { onPageAdded(book) } else { recovered = book }
+                                }
                             } label: {
                                 VStack(alignment: .leading) {
                                     DiaryPresetCover(package: package)
@@ -56,7 +60,9 @@ struct DiaryPresetLibraryScreen: View {
                         }) { book in
                             NavigationLink {
                                 RemotePresetDetailScreen(ownerID: ownerID, book: book, targetBook: targetBook,
-                                    afterPageID: targetAfterPageID) { recovered = $0 }
+                                    afterPageID: targetAfterPageID, fixedTarget: singlePageOnly) { book in
+                                    if let onPageAdded { onPageAdded(book) } else { recovered = book }
+                                }
                             } label: {
                                 VStack(alignment: .leading) {
                                     AsyncImage(url: URL(string: book.cover_url)) { image in image.resizable().scaledToFit() }
@@ -83,6 +89,7 @@ struct DiaryPresetLibraryScreen: View {
             } else if let error { VStack { Text(error); Button("重试") { reload += 1 } } }
             else { ProgressView("正在读取预设…") }
         }
+        .navigationTitle(singlePageOnly ? "选择预设手帐" : "预设")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink { PresetDownloadCenter(ownerID: ownerID) } label: { Image(systemName: "arrow.down.circle").accessibilityLabel("下载管理") }
@@ -152,12 +159,13 @@ private struct DiaryPresetImage: View {
             }
     }
 }
-private struct PresetSelection: Identifiable { let id = UUID(); let pageIDs: [String]; var wholeBook = false }
+private struct PresetSelection: Identifiable, Hashable { let id = UUID(); let pageIDs: [String]; var wholeBook = false }
 private struct DiaryPresetDetailScreen: View {
     let ownerID: String
     let package: DiaryPresetPackage
     let targetBook: DiaryBook?
     let targetAfterPageID: UUID?
+    var fixedTarget = false
     @State private var pages: [PresetPage] = []
     @State private var previewPage: String?
     @State private var showingPreview = false
@@ -176,8 +184,10 @@ private struct DiaryPresetDetailScreen: View {
                     Text("此预设的部分字体暂不可用，导入后将临时使用系统字体，排版可能与预览不同。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Button("整本添加到我的") { selection = PresetSelection(pageIDs: pages.map(\.id), wholeBook: true) }
-                    .buttonStyle(.borderedProminent).disabled(pages.isEmpty || !validated)
+                if !fixedTarget {
+                    Button("整本添加到我的") { selection = PresetSelection(pageIDs: pages.map(\.id), wholeBook: true) }
+                        .buttonStyle(.borderedProminent).disabled(pages.isEmpty || !validated)
+                }
                 DiaryPageListGrid(pages: pages, shellID: package.manifest.shellPageID,
                                   coverID: package.manifest.coverPageID) { page in
                         VStack {
@@ -230,11 +240,15 @@ private struct DiaryPresetDetailScreen: View {
                 }
             }
             .sheet(item: $selection) { value in
+                importPage(value)
+            }
+    }
+    private func importPage(_ value: PresetSelection) -> some View {
                 DiaryPresetImportSheet(ownerID: ownerID, package: package, pageIDs: value.pageIDs,
-                                       defaultTarget: value.wholeBook ? nil : targetBook, wholeBook: value.wholeBook, defaultAfterPageID: targetAfterPageID) { book in
+                                       defaultTarget: value.wholeBook ? nil : targetBook, wholeBook: value.wholeBook, defaultAfterPageID: targetAfterPageID, fixedTarget: fixedTarget) { book in
                     selection = nil; onImported(book)
                 }
-            }
+
     }
 }
 private nonisolated struct PresetPhotoSlotPreview: Identifiable, Sendable {
@@ -243,6 +257,7 @@ private nonisolated struct PresetPhotoSlotPreview: Identifiable, Sendable {
     let image: UIImage?
 }
 
+enum DiaryPresetImportRoute: Hashable { case photos, target }
 struct DiaryPresetImportSheet: View {
     let ownerID: String
     let package: DiaryPresetPackage
@@ -252,13 +267,15 @@ struct DiaryPresetImportSheet: View {
     var defaultAfterPageID: UUID? = nil
     var resume: DiaryPresetImportIntent? = nil
     var remoteBook: RemotePresetBook? = nil
+    var fixedTarget = false
     let completed: (DiaryBook) -> Void
     @ObservedObject private var downloads = PresetDownloadManager.shared
     @State private var downloadID: UUID?
     @State private var readyPackage: DiaryPresetPackage?
     @State private var planning = false
-    @State private var step = 1
-    @State private var showingPhotos = false
+    private typealias Route = DiaryPresetImportRoute
+    @State private var path: [Route] = []
+    @State private var initialized = false
     @State private var replacementPhotos: [URL] = []
     @State private var photoSlots: [PresetPhotoSlotPreview] = []
     @State private var previewReady = false
@@ -279,9 +296,30 @@ struct DiaryPresetImportSheet: View {
     @State private var cancellation = DiaryPresetCancellation()
     private var target: DiaryBook? { books.first { $0.id == targetID } }
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) { flow }
+        .interactiveDismissDisabled(busy)
+        .onDisappear { cleanupPhotos() }
+        .onChange(of: downloads.jobs) { _, _ in
+            if let downloadID { readyPackage = downloads.preparedPackage(downloadID) }
+        }
+        .task(id: previewIdentity) { await preparePreview() }
+        .task { await initialize() }
+    }
+    private var flow: some View {
+        stage(1)
+            .navigationDestination(for: Route.self) { route in
+                switch route {
+                case .photos: photoStep
+                case .target: stage(3)
+                }
+            }
+    }
+    private func advance(_ route: Route) {
+        path.append(route)
+    }
+    private func stage(_ step: Int) -> some View {
             Form {
-                Text(singlePage ? "第 \(step) 步 / 3 · \(step == 1 ? "预览单页" : step == 2 ? "选择照片" : "选择帐本")" : "添加 \(pageIDs.count) 页")
+                Text(singlePage ? "第 \(fixedTarget ? min(step, 2) : step) 步 / \(fixedTarget ? 2 : 3) · \(step == 1 ? "预览单页" : (step == 2 || fixedTarget) ? "选择照片" : "选择帐本")" : "添加 \(pageIDs.count) 页")
                 if singlePage && step == 1, let availablePackage {
                     if let preview {
                         Section {
@@ -319,7 +357,7 @@ struct DiaryPresetImportSheet: View {
                         else { Button("下载资源") { Task { await prepareRemote() } } }
                     }
                 }
-                if !singlePage || step == 3 {
+                if (!singlePage || step == 3) && !fixedTarget {
                 if singlePage { Text(replacementPhotos.isEmpty ? "保留原照片" : "已选择 \(replacementPhotos.count) 张替换照片").foregroundStyle(.secondary) }
                 if !wholeBook {
                     Picker("添加到", selection: $targetID) {
@@ -349,51 +387,56 @@ struct DiaryPresetImportSheet: View {
                     }
                 } else { TextField("手帐名称", text: $title) }
                 }
-                if let error { Text(error).foregroundStyle(.red) }
+                if let error {
+                    Text(error).foregroundStyle(.red)
+                    if fixedTarget && step == 3 { Button("重试添加") { Task { await runImport() } } }
+                }
                 if busy { ProgressView(progress.isEmpty ? "正在校验资源…" : progress) }
             }.disabled(busy).navigationTitle(singlePage ? "添加单页" : "添加预设")
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button(busy ? "取消导入" : "取消") { if busy { cancellation.cancel() } else { cleanupPhotos(); dismiss() } } }
                     ToolbarItem(placement: .confirmationAction) {
-                        if singlePage && step < 3 {
-                            Button("下一步") { step = 2; showingPhotos = true }
+                        if singlePage && (step < 3 || fixedTarget) {
+                            Button("下一步") { advance(.photos) }
                                 .disabled(busy || !previewReady || availablePackage == nil)
                         } else {
                             Button("添加") { Task { await runImport() } }.disabled(busy || (remoteBook != nil && readyPackage == nil) || (targetID == nil && title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                         }
                     }
-                    ToolbarItem(placement: .bottomBar) {
-                        if singlePage && step == 3 {
-                            Button("上一步：选择照片") { step = 2; showingPhotos = true }.disabled(busy)
-                        }
-                    }
-                }.onChange(of: downloads.jobs) { _, _ in
-                    if let downloadID { readyPackage = downloads.preparedPackage(downloadID) }
-                }.interactiveDismissDisabled(busy)
-                .task(id: previewIdentity) { await preparePreview() }
-                .sheet(isPresented: $showingPhotos, onDismiss: { if step == 2 { step = 1 } }) {
-                    if let availablePackage {
-                        DiaryBatchPhotoSheet(store: DiaryDocumentStore(ownerID: ownerID), preset: availablePackage,
-                            presetPageIDs: pageIDs, preparationDirectory: preparationDirectory, onPrepared: { files in
-                                for old in replacementPhotos { try? FileManager.default.removeItem(at: old) }
-                                replacementPhotos = files; operationID = UUID(); step = 3; showingPhotos = false
-                            })
-                    }
                 }
-                .onDisappear { if !showingPhotos && !busy { cleanupPhotos() } }
-                .task {
-                    title = package.manifest.title
-                    await prepareRemote()
-
-                    do {
-                        books = try await DiaryDocumentStore(ownerID: ownerID).listBooks()
-                        if let resume {
-                            targetID = resume.targetID; afterPageID = resume.afterPageID; title = resume.title
-                        } else { targetID = defaultTarget?.id; afterPageID = defaultAfterPageID }
-                    }
-                    catch { self.error = error.localizedDescription }
+                .navigationBarBackButtonHidden(busy)
+    }
+    @ViewBuilder private var photoStep: some View {
+        if let availablePackage {
+            DiaryBatchPhotoSheet(store: DiaryDocumentStore(ownerID: ownerID), preset: availablePackage,
+                presetPageIDs: pageIDs, preparationDirectory: preparationDirectory,
+                finishesImport: fixedTarget, embedded: true, onPrepared: { files in
+                    for old in replacementPhotos { try? FileManager.default.removeItem(at: old) }
+                    replacementPhotos = files; operationID = UUID(); error = nil
+                    if fixedTarget { Task { await runImport() } }
+                    else { advance(.target) }
+                })
+                .disabled(busy)
+                .navigationBarBackButtonHidden(busy)
+                .overlay {
+                    if busy { ProgressView(progress.isEmpty ? "正在添加…" : progress).padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) }
+                }
+                .safeAreaInset(edge: .bottom) {
+                    if let error { Text(error).foregroundStyle(.red).padding() }
                 }
         }
+    }
+    private func initialize() async {
+        guard !initialized else { return }
+        initialized = true
+        title = package.manifest.title
+        await prepareRemote()
+        do {
+            books = try await DiaryDocumentStore(ownerID: ownerID).listBooks()
+            if let resume {
+                targetID = resume.targetID; afterPageID = resume.afterPageID; title = resume.title
+            } else { targetID = defaultTarget?.id; afterPageID = defaultAfterPageID }
+        } catch { self.error = error.localizedDescription }
     }
     private func cleanupPhotos() {
         try? FileManager.default.removeItem(at: preparationDirectory)
@@ -445,7 +488,11 @@ struct DiaryPresetImportSheet: View {
         } catch { self.error = error.localizedDescription }
     }
     private func runImport() async {
-        guard !busy else { return }; busy = true
+        guard !busy else { return }
+        if fixedTarget && (defaultTarget == nil || targetID != defaultTarget?.id) {
+            error = "目标帐本暂不可用，请重新打开添加页面。"; return
+        }
+        busy = true
         defer { busy = false }
         do {
             if let resume { operationID = resume.id }
@@ -469,6 +516,23 @@ struct DiaryPresetImportSheet: View {
         } catch {
             self.error = error.localizedDescription
             books = (try? await DiaryDocumentStore(ownerID: ownerID).listBooks()) ?? books
+        }
+    }
+}
+
+struct DiaryPresetPagePicker: View {
+    let ownerID: String
+    let targetBook: DiaryBook
+    var afterPageID: UUID? = nil
+    let completed: (DiaryBook) -> Void
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack() {
+            DiaryPresetLibraryScreen(ownerID: ownerID, targetBook: targetBook,
+                targetAfterPageID: afterPageID, singlePageOnly: true, onPageAdded: { book in
+                    completed(book); dismiss()
+                })
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
         }
     }
 }

@@ -19,6 +19,8 @@ struct DiaryBookScreen: View {
     @State private var renaming = false
     @State private var name = ""
     @State private var replacingPhotos = false
+    @State private var showingPresetPicker = false
+    @State private var presetAfterPageID: UUID?
     @State private var draggingPage: DiaryPageEntry?
     @State private var dragOrigin = CGRect.zero
     @State private var dragTranslation = CGSize.zero
@@ -51,7 +53,7 @@ struct DiaryBookScreen: View {
             Menu {
                 Button("空白页", systemImage: "doc") { Task { await createPage(data: nil) } }
                 Button("从照片新建", systemImage: "photo") { pickingPhoto = true }
-                NavigationLink("从预设选择") { DiaryPresetLibraryScreen(ownerID: ownerID, targetBook: book) }
+                Button("从预设选择") { presetAfterPageID = nil; showingPresetPicker = true }
             } label: { Label("新建一页", systemImage: "plus") }
                 .buttonStyle(.borderedProminent).padding(.bottom)
         }
@@ -160,6 +162,11 @@ struct DiaryBookScreen: View {
             DiaryPhysicalBookScreen(book: book, store: store)
         }
         .sheet(isPresented: $replacingPhotos, onDismiss: { Task { await refresh() } }) { DiaryBatchPhotoSheet(store: store) }
+        .sheet(isPresented: $showingPresetPicker, onDismiss: { Task { await refresh() } }) {
+            DiaryPresetPagePicker(ownerID: ownerID, targetBook: book, afterPageID: presetAfterPageID) { updated in
+                book = updated
+            }
+        }
         .sheet(isPresented: $showingTrash) { trashPanel }
         .sheet(isPresented: $showingPDF, onDismiss: {
             if let exportedPDF { DiaryBookPDFExporter.discard(exportedPDF) }
@@ -265,7 +272,7 @@ struct DiaryBookScreen: View {
     private func pageMenu(_ page: DiaryPageEntry, index: Int) -> some View {
         Menu {
             Button("编辑") { Task { await open(page) } }
-            NavigationLink("在此页后添加预设") { DiaryPresetLibraryScreen(ownerID: ownerID, targetBook: book, targetAfterPageID: page.id) }
+            Button("在此页后添加预设") { presetAfterPageID = page.id; showingPresetPicker = true }
             Button("从这页开始阅读") { readingID = page.id; reading = true }.disabled(book.shellPageID == page.id)
             if book.shellPageID == page.id {
                 Button("取消外壳") { perform { try await store.setShell(nil) } }
