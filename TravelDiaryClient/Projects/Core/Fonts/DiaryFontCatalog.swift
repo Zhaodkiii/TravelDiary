@@ -46,6 +46,8 @@ final class DiaryFontCatalog {
     private(set) var failures: [String: String] = [:]
     private var prepared = false
     private var registeredIDs = Set<String>()
+    private var validatedIDs = Set<String>()
+    private let resolvedFonts = NSCache<NSString, UIFont>()
 
     init(provider: any DiaryFontResourceProvider = BundledDiaryFonts()) { self.provider = provider }
     func prepare() {
@@ -70,9 +72,31 @@ final class DiaryFontCatalog {
         return registerIfNeeded(entry)
     }
     func font(_ reference: DiaryFontReference?, size: CGFloat) -> UIFont {
+        let key = "\(reference?.id ?? "system")-\(reference?.version ?? "1")-\(size)" as NSString
+        if let cached = resolvedFonts.object(forKey: key) { return cached }
         guard let entry = entry(reference), registerIfNeeded(entry), let name = entry.postScriptName,
               let font = UIFont(name: name, size: size) else { return .systemFont(ofSize: size) }
+        resolvedFonts.setObject(font, forKey: key)
         return font
+    }
+
+    /// 进入画布前把大字库读取和摘要校验移出主线程；CoreText 注册仍由主线程串行完成。
+    func prewarm(_ references: [DiaryFontReference]) async {
+        for reference in references {
+            guard !Task.isCancelled else { return }
+            guard let entry = entry(reference), entry.id != "system", !registeredIDs.contains(entry.id),
+                  failures[entry.id] == nil, let url = provider.url(for: entry), let expected = entry.sha256 else { continue }
+            if !validatedIDs.contains(entry.id) {
+                let valid = await Task.detached(priority: .userInitiated) {
+                    guard let data = try? Data(contentsOf: url) else { return false }
+                    return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() == expected
+                }.value
+                guard !Task.isCancelled else { return }
+                guard valid else { failures[entry.id] = "字体暂不可用"; continue }
+                validatedIDs.insert(entry.id)
+            }
+            _ = registerIfNeeded(entry)
+        }
     }
 
     private func registerIfNeeded(_ entry: DiaryFontEntry) -> Bool {
@@ -82,9 +106,12 @@ final class DiaryFontCatalog {
         do {
             guard let url = provider.url(for: entry), let name = entry.postScriptName,
                   let expectedDigest = entry.sha256 else { throw CocoaError(.fileNoSuchFile) }
-            let data = try Data(contentsOf: url)
-            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-            guard digest == expectedDigest else { throw CocoaError(.fileReadCorruptFile) }
+            if !validatedIDs.contains(entry.id) {
+                let data = try Data(contentsOf: url)
+                let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                guard digest == expectedDigest else { throw CocoaError(.fileReadCorruptFile) }
+                validatedIDs.insert(entry.id)
+            }
             var error: Unmanaged<CFError>?
             let registered = CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error)
             if !registered, let failure = error?.takeRetainedValue(), CFErrorGetCode(failure) != CTFontManagerError.alreadyRegistered.rawValue {

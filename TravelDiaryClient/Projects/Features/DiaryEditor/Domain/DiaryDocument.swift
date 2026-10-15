@@ -87,6 +87,8 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
     var kind: Kind
     var transform: DiaryTransform
     var size: CGSize
+    /// 文字图片仍使用 sticker 绘制；独立分类供后续递归隐藏文字使用。
+    var category: DiaryLayerCategory? = nil
     var assetID: UUID?
     var contentID: UUID?
     var frameTargetID: UUID?
@@ -113,6 +115,11 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
                           transform: DiaryTransform(position: center, pivot: CGPoint(x: size.width / 2, y: size.height / 2)),
                           size: size, assetID: asset.id)
     }
+}
+
+/// 语义分类独立于绘制类型；nil 表示普通图层，不从显示名称推断。
+nonisolated enum DiaryLayerCategory: String, Codable, Sendable {
+    case textImage
 }
 
 nonisolated enum DiaryBlendMode: String, Codable, Sendable {

@@ -25,6 +25,7 @@ nonisolated struct PresetTransform: Decodable, Sendable {
 nonisolated struct PresetNode: Decodable, Sendable {
     let id: String
     let name: String
+    let category: DiaryLayerCategory?
     let kind: DiaryLayer.Kind
     let size: PresetSize
     let transform: PresetTransform
@@ -71,6 +72,7 @@ nonisolated struct PresetManifest: Decodable, Sendable {
     let tags: [String]?
     let pageSize: PresetSize
     let coverPageID: String
+    let shellPageID: String?
     let pages: [PageReference]
     let objectTable: [String: String]
     let assetTable: [String: Asset]
@@ -134,6 +136,9 @@ nonisolated struct DiaryPresetPackage: Identifiable, Sendable {
               manifest.files.count <= 10000 else {
             log("validate.failed reason=manifest format=\(manifest.format) schema=\(manifest.schemaVersion) layerSchema=\(manifest.layerSchemaVersion) pages=\(manifest.pages.count) capabilities=\(manifest.requiredCapabilities)", level: .error)
             throw DiaryEditorError.unsupportedVersion.logged()
+        }
+        if let shellID = manifest.shellPageID, !manifest.pages.contains(where: { $0.id == shellID }) {
+            throw invalid("外壳页不在页面目录中")
         }
         let paths = Set(manifest.files.map(\.path))
         guard paths.count == manifest.files.count else { throw invalid("文件索引包含重复路径") }
@@ -201,6 +206,7 @@ nonisolated struct DiaryPresetPackage: Identifiable, Sendable {
             for node in source.layers {
                 var layer = DiaryLayer(id: ids[node.id]!, name: node.name, kind: node.kind, transform: node.transform.value, size: node.size.cg,
                                        text: node.text ?? "", fontSize: node.fontSize ?? 36, visible: node.visible, locked: node.locked)
+                layer.category = node.category
                 layer.font = node.font
                 layer.blendMode = node.blendMode
                 if let assetID = node.assetID {

@@ -138,8 +138,8 @@ private struct DiaryPresetDetailScreen: View {
                 }
                 Button("整本添加到我的") { selection = PresetSelection(pageIDs: pages.map(\.id), wholeBook: true) }
                     .buttonStyle(.borderedProminent).disabled(pages.isEmpty || !validated)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150))]) {
-                    ForEach(pages) { page in
+                DiaryPageListGrid(pages: pages, shellID: package.manifest.shellPageID,
+                                  coverID: package.manifest.coverPageID) { page in
                         VStack {
                             Button { previewPage = page.id; showingPreview = true } label: {
                                 DiaryPresetImage(package: package, path: page.preview.thumbnailPath, size: page.size.cg)
@@ -147,7 +147,6 @@ private struct DiaryPresetDetailScreen: View {
                             Text(page.title).font(.caption)
                             Button("使用这一页") { selection = PresetSelection(pageIDs: [page.id]) }.disabled(!validated)
                         }
-                    }
                 }
                 if let error { Text(error).foregroundStyle(.red) }
             }.padding()

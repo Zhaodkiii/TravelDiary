@@ -27,9 +27,9 @@ struct DiaryTextEditorSheet: View {
         NavigationStack {
             VStack(spacing: 12) {
                 ZStack(alignment: .topLeading) {
-                    DiaryTextInputView(text: $text, font: DiaryFontCatalog.shared.font(font, size: size))
+                    DiaryTextInputView(text: $text, font: (ready ? DiaryFontCatalog.shared.font(font, size: size) : UIFont.systemFont(ofSize: size)))
                     if text.isEmpty {
-                        Text("记录此刻的心情…").font(Font(DiaryFontCatalog.shared.font(font, size: size)))
+                        Text("记录此刻的心情…").font(Font((ready ? DiaryFontCatalog.shared.font(font, size: size) : UIFont.systemFont(ofSize: size))))
                             .foregroundStyle(.tertiary).padding(12).allowsHitTesting(false)
                     }
                 }.frame(minHeight: 120, maxHeight: 200)
@@ -43,7 +43,7 @@ struct DiaryTextEditorSheet: View {
                     Text("字号 \(Int(size))")
                     Slider(value: $size, in: min(18, layer?.fontSize ?? 36)...max(90, layer?.fontSize ?? 36), step: 1)
                 }
-                if let warning = DiaryFontCatalog.shared.warning(font, text: text) {
+                if ready, let warning = DiaryFontCatalog.shared.warning(font, text: text) {
                     Text(warning).font(.caption).foregroundStyle(.secondary)
                 }
                 Picker("字体分类", selection: $category) {
@@ -104,7 +104,11 @@ struct DiaryTextEditorSheet: View {
                     Button("确定") { error = nil }
                 } message: { Text(error ?? "") }
         }.presentationDetents([.large]).interactiveDismissDisabled(changed || saving)
-            .task { DiaryFontCatalog.shared.prepare(); ready = true }
+            .task {
+                DiaryFontCatalog.shared.prepare()
+                await DiaryFontCatalog.shared.prewarm(DiaryFontCatalog.shared.entries.map(\.reference))
+                if !Task.isCancelled { ready = true }
+            }
     }
 }
 

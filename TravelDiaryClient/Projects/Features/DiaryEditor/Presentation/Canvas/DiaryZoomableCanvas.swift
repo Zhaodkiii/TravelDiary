@@ -5,6 +5,8 @@ import UIKit
 /// 单指交给素材编辑，双指交给视口平移，避免 zoomable 的拖动与素材手势冲突。
 struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
     let contentSize: CGSize
+    let sessionID: UUID
+    let inkMode: Bool
     @ViewBuilder let content: () -> Content
 
     func makeCoordinator() -> Coordinator { Coordinator(content: content()) }
@@ -30,7 +32,12 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
     }
 
     func updateUIView(_ scroll: UIScrollView, context: Context) {
-        context.coordinator.host.rootView = content()
+        let coordinator = context.coordinator
+        // 内部画布自行观察 Session；只有结构、尺寸或会话改变才替换宿主树。
+        if coordinator.sessionID != sessionID || coordinator.inkMode != inkMode || coordinator.size != contentSize {
+            coordinator.host.rootView = content()
+            coordinator.sessionID = sessionID; coordinator.inkMode = inkMode
+        }
         configure(scroll, coordinator: context.coordinator)
     }
 
@@ -50,6 +57,8 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
         let host: UIHostingController<Content>
         var size = CGSize.zero
         var needsInitialCenter = true
+        var sessionID: UUID?
+        var inkMode = false
         init(content: Content) { host = UIHostingController(rootView: content) }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { host.view }
@@ -57,7 +66,7 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
             center(scrollView)
             // 缩放后重画屏幕尺寸恒定的控制点，不修改任何作品坐标。
             func redraw(_ view: UIView) {
-                if view is DiaryCanvasSurface { view.setNeedsDisplay() }
+                if let canvas = view as? DiaryCanvasSurface { canvas.viewportDidZoom() }
                 view.subviews.forEach(redraw)
             }
             redraw(host.view)

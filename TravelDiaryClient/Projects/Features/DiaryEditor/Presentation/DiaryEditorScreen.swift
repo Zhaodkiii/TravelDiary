@@ -122,7 +122,7 @@ struct DiaryEditorScreen: View {
                     let margin = DiaryCanvasSurface.controlMargin
                     let scale = max(0.01, min((geometry.size.width - 40) / size.width,
                                              (geometry.size.height - margin * 2 - 24) / size.height))
-                    DiaryZoomableCanvas(contentSize: CGSize(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)) {
+                    DiaryZoomableCanvas(contentSize: CGSize(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2), sessionID: session.id, inkMode: session.inkMode) {
                       ZStack(alignment: .topLeading) {
                         DiaryCanvasView(session: session, onEdit: {
                             guard let layer = session.selected else { return }

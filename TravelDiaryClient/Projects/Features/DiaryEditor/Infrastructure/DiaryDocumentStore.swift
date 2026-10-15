@@ -209,7 +209,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
                 path = pointer.manifestPath
             }
             let document = try self.readSnapshot(path, directory: directory, documentID: id)
-            return Loaded(document: document, images: try self.readImages(document, dimension: 1800))
+            return Loaded(document: document, images: try self.readImages(document, dimension: 1800, editorPlan: DiaryEditorImageSizing.plan(document, contentID: document.rootContentID, longestEdge: 1200)))
         }
     }
     func latestID() async throws -> UUID? {
@@ -241,7 +241,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
             let pointer = try self.readPointer(url)
             let document = try self.readSnapshot(pointer.manifestPath, directory: directory, documentID: documentID)
             guard let base = pointer.baseRevision, document.objects[contentID] != nil else { throw DiaryEditorError.invalidDocument.logged() }
-            return Draft(loaded: Loaded(document: document, images: try self.readImages(document, dimension: 1800)), baseRevision: base)
+            return Draft(loaded: Loaded(document: document, images: try self.readImages(document, dimension: 1800, editorPlan: DiaryEditorImageSizing.plan(document, contentID: document.rootContentID, longestEdge: 1200))), baseRevision: base)
         }
     }
     func discardDraft(contentID: UUID, documentID: UUID) async throws {
@@ -305,14 +305,31 @@ nonisolated final class DiaryDocumentStore: Sendable {
         _ = try Self.validate(document)
         return document
     }
-    private func readImages(_ document: DiaryDocument, dimension: Int) throws -> [UUID: UIImage] {
+    private func readImages(_ document: DiaryDocument, dimension: Int, editorPlan: [UUID: Int]? = nil) throws -> [UUID: UIImage] {
         var result: [UUID: UIImage] = [:]
         let used = Set(document.objects.values.flatMap { $0.layers.flatMap(\.referencedAssetIDs) })
         for id in used {
             guard let asset = document.assets[id] else { throw DiaryEditorError.missingResource.logged() }
-            result[id] = try Self.decode(Data(contentsOf: resolve(asset.path, in: assetDirectory(document.id))), maximumDimension: dimension)
+            result[id] = try Self.decode(Data(contentsOf: resolve(asset.path, in: assetDirectory(document.id))), maximumDimension: editorPlan?[id] ?? dimension)
         }
         return result
+    }
+    /// 已在后台队列解码，回到主线程只替换引用。计划按像素桶稳定，避免缩放抖动反复加载。
+    func editorImages(for document: DiaryDocument, plan: [UUID: Int], existing: [UUID: UIImage]) async throws -> [UUID: UIImage] {
+        try await run {
+            var result: [UUID: UIImage] = [:]
+            for (id, dimension) in plan {
+                guard let asset = document.assets[id] else { continue }
+                let expected = min(CGFloat(dimension), max(asset.pixelSize.width, asset.pixelSize.height))
+                if let image = existing[id], let cg = image.cgImage,
+                   abs(CGFloat(max(cg.width, cg.height)) - expected) <= max(2, expected * 0.15) {
+                    result[id] = image
+                } else {
+                    result[id] = try Self.decode(Data(contentsOf: self.resolve(asset.path, in: self.assetDirectory(document.id))), maximumDimension: dimension)
+                }
+            }
+            return result
+        }
     }
     private func directory(_ id: UUID) -> URL {
         let parent = bookID == nil ? root : root.appendingPathComponent("pages", isDirectory: true)
@@ -529,6 +546,17 @@ extension DiaryDocumentStore {
             return Loaded(document: doc, images: try self.readImages(doc, dimension: large ? 1800 : 480))
         }
     }
+    /// 导出使用目录捕获的不可变页版本，不改变正在编辑页面的保存基线。
+    func loadPDFSource(_ page: DiaryPageEntry) async throws -> Loaded {
+        try await run {
+            let path = "revisions/\(page.revisionID.uuidString)/manifest.json"
+            let document = try self.readSnapshot(path, directory: self.directory(page.id), documentID: page.id)
+            let size = document.root.referenceSize
+            let plan = DiaryEditorImageSizing.plan(document, contentID: document.rootContentID,
+                longestEdge: max(size.width, size.height), maximumDimension: 4000, pixelBudget: 96 * 1024 * 1024 / 4)
+            return Loaded(document: document, images: try self.readImages(document, dimension: 4000, editorPlan: plan))
+        }
+    }
     nonisolated func cachedPreview(_ page: DiaryPageEntry, large: Bool) async throws -> Data? {
         try await run { try? Data(contentsOf: self.previewURL(page, large: large)) }
     }
@@ -634,6 +662,9 @@ extension DiaryDocumentStore {
             book.pages.insert(contentsOf: entries, at: insertion)
             if isNew {
                 book.coverPageID = entries.first(where: { $0.presetSource?.pageID == package.manifest.coverPageID })?.id ?? entries.first?.id
+                if let shellID = package.manifest.shellPageID {
+                    book.shellPageID = entries.first(where: { $0.presetSource?.pageID == shellID })?.id
+                }
             }
             if book.presetImports == nil { book.presetImports = [:] }
             book.presetImports?[operationID.uuidString] = entries.map(\.id)

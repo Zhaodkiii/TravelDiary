@@ -17,9 +17,26 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     private var closing = false
     private let parentStateBeforeOpen: Snapshot?
     let store: DiaryDocumentStore
-    @Published private(set) var document: DiaryDocument
-    @Published private(set) var images: [UUID: UIImage]
-    var drawing: PKDrawing { (try? PKDrawing(data: content.drawing)) ?? PKDrawing() }
+    @Published private(set) var document: DiaryDocument {
+        didSet { renderGeneration &+= 1; selectedIndex = nil }
+    }
+    @Published private(set) var images: [UUID: UIImage] {
+        didSet {
+            renderGeneration &+= 1
+            if !applyingImagePlan { imagePlan = [:] }
+        }
+    }
+    // UI 状态不推进渲染代数；撤销也会推进，避免复用历史 revision 后误命中缓存。
+    private(set) var renderGeneration: UInt64 = 0
+    private var selectedIndex: (id: UUID, index: Int)?
+    private var cachedDrawing: (data: Data, value: PKDrawing)?
+    var drawing: PKDrawing {
+        let data = content.drawing
+        if let cachedDrawing, cachedDrawing.data == data { return cachedDrawing.value }
+        let value = (try? PKDrawing(data: data)) ?? PKDrawing()
+        cachedDrawing = (data, value)
+        return value
+    }
     @Published var selectedID: UUID?
     @Published var inkMode = false
     @Published var eraser = false
@@ -29,7 +46,13 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     @Published private(set) var undoStack: [Snapshot] = []
     @Published private(set) var redoStack: [Snapshot] = []
     private var interactionStart: Snapshot?
+    // 原生画布负责实时笔画；提交、切后台或关闭工具时才序列化一次。
+    var flushDrawingInteraction: (() -> Void)?
     private var saveTask: Task<Void, Never>?
+    private var imageTask: Task<Void, Never>?
+    private var imagePlan: [UUID: Int] = [:]
+    private var imagePlanAssets: [UUID: DiaryAsset] = [:]
+    private var applyingImagePlan = false
     private var revision = 0
 
     /// 主画布和子对象共享会话类型；子会话持有值拷贝，取消时不会污染父文档。
@@ -49,9 +72,39 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     }
     var content: DiaryObjectContent { document.objects[contentID]! }
     var isRoot: Bool { parent == nil }
-    var selected: DiaryLayer? { scopeLayers.first { $0.id == selectedID } }
+    var selected: DiaryLayer? {
+        guard let selectedID else { return nil }
+        if let cached = selectedIndex, cached.id == selectedID { return scopeLayers[cached.index] }
+        guard let index = scopeLayers.firstIndex(where: { $0.id == selectedID }) else { return nil }
+        selectedIndex = (selectedID, index)
+        return scopeLayers[index]
+    }
     var scopeLayers: [DiaryLayer] { content.layers }
     var snapshot: Snapshot { Snapshot(document: document) }
+
+    func requestEditorImages(longestEdge: CGFloat) {
+        let plan = DiaryEditorImageSizing.plan(document, contentID: contentID, longestEdge: longestEdge)
+        guard plan != imagePlan || document.assets != imagePlanAssets else { return }
+        imagePlan = plan; imagePlanAssets = document.assets
+        imageTask?.cancel()
+        let state = document, existing = images, store = store
+        imageTask = Task { [weak self] in
+            do {
+                let loaded = try await store.editorImages(for: state, plan: plan, existing: existing)
+                try Task.checkCancellation()
+                guard let self, self.document.assets == state.assets else { return }
+                let changed = loaded.count != self.images.count || loaded.contains { self.images[$0.key] !== $0.value }
+                if changed {
+                    self.applyingImagePlan = true
+                    self.images = loaded
+                    self.applyingImagePlan = false
+                }
+            } catch {
+                // 清晰度提升失败保留现有预览；正式保存/导出仍会报告资源错误。
+                if !Task.isCancelled { self?.imagePlan = [:] }
+            }
+        }
+    }
 
     /// 打开新的全屏编辑页面；每一级都复用本类和同一个编辑视图。
     func openObject() -> DiaryEditorSession? {
@@ -150,6 +203,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     /// 一次拖动/滑块调节只提交一条历史；中间状态实时显示，结束后再自动保存。
     func beginInteraction() { if interactionStart == nil { interactionStart = snapshot } }
     func finishInteraction() {
+        flushDrawingInteraction?()
         guard let before = interactionStart else { return }
         interactionStart = nil
         record(before)
@@ -370,6 +424,16 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     func previewLayer(_ value: DiaryLayer) {
         guard selectedID == value.id, selected?.locked == false else { return }
         document.update(value.id) { $0 = value }
+    }
+
+    /// 手势预览留在画布；结束时只提交一次，取消不产生历史或保存。
+    func commitTransform(_ value: DiaryLayer) {
+        guard let current = selected, current.id == value.id, !current.locked,
+              current.kind != .frame, current.transform != value.transform else { return }
+        edit {
+            guard let index = document.objects[contentID]?.layers.firstIndex(where: { $0.id == value.id }) else { return }
+            document.objects[contentID]!.layers[index].transform = value.transform
+        }
     }
 
     /// 复制对象时递归复制内容和内部 ID；图片字节可共享，编辑内容彼此独立。
