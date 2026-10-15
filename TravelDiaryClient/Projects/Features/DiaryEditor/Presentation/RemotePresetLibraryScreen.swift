@@ -136,7 +136,8 @@ struct PresetDownloadCenter: View {
     @State private var opened: DiaryBook?
     @State private var error: String?
     @State private var removing = Set<UUID>()
-    @State private var confirmingRemoval = false
+    @State private var confirmingRemovalID: UUID?
+    @State private var confirmingBulkRemoval = false
     private var downloadedJobs: [PresetDownloadJob] {
         manager.jobs.filter { $0.owner == ownerID && ["ready", "completed"].contains($0.status) }
     }
@@ -147,7 +148,13 @@ struct PresetDownloadCenter: View {
                     .font(.footnote).foregroundStyle(.secondary)
                 if !downloadedJobs.isEmpty {
                     Button("清理全部已下载资源", role: .destructive) {
-                        removing = Set(downloadedJobs.map(\.id)); confirmingRemoval = true
+                        confirmingBulkRemoval = true
+                    }
+                    .confirmationDialog("清理预设资源？", isPresented: $confirmingBulkRemoval, titleVisibility: .visible) {
+                        Button("清理所选资源", role: .destructive) { clearDownloads(Set(downloadedJobs.map(\.id))) }
+                        Button("取消", role: .cancel) { }
+                    } message: {
+                        Text("将删除已下载记录及本机缓存。其他任务共用的资源会保留；已添加到手帐的页面不受影响。内置预设无需清理。")
                     }
                 }
             }
@@ -176,28 +183,30 @@ struct PresetDownloadCenter: View {
                             }
                         }
                         if ["ready", "completed", "cancelled", "paused", "failed"].contains(job.status) {
-                            Button("清理资源", role: .destructive) {
-                                removing = [job.id]; confirmingRemoval = true
-                            }
+                            Button("清理资源", role: .destructive) { confirmingRemovalID = job.id }
+                                .confirmationDialog("清理这份预设资源？", isPresented: Binding(
+                                    get: { confirmingRemovalID == job.id },
+                                    set: { if !$0 && confirmingRemovalID == job.id { confirmingRemovalID = nil } }
+                                ), titleVisibility: .visible) {
+                                    Button("清理「\(job.title)」", role: .destructive) { clearDownloads([job.id]) }
+                                    Button("取消", role: .cancel) { confirmingRemovalID = nil }
+                                } message: {
+                                    Text("将删除这条下载记录及本机缓存。其他任务共用的资源会保留；已添加到手帐的页面不受影响。")
+                                }
                         }
                     }.buttonStyle(.borderless)
                 }.padding(.vertical, 6)
             }
         }.navigationTitle("下载管理")
-        .confirmationDialog("清理预设资源？", isPresented: $confirmingRemoval, titleVisibility: .visible) {
-            Button("清理所选资源", role: .destructive) {
-                do { try manager.removeDownloads(removing, ownerID: ownerID); error = nil }
-                catch { self.error = error.localizedDescription }
-                removing = []
-            }
-            Button("取消", role: .cancel) { removing = [] }
-        } message: {
-            Text("将删除所选下载记录及本机缓存。其他任务共用的资源会保留；已添加到手帐的页面不受影响。内置预设无需清理。")
-        }
         .task { manager.activate(owner: ownerID) }
         .navigationDestination(isPresented: Binding(get: { opened != nil }, set: { if !$0 { opened = nil } })) {
             if let opened { DiaryBookScreen(ownerID: ownerID, book: opened) }
         }
+    }
+    private func clearDownloads(_ ids: Set<UUID>) {
+        do { try manager.removeDownloads(ids, ownerID: ownerID); error = nil }
+        catch { self.error = error.localizedDescription }
+        confirmingRemovalID = nil
     }
     private func label(_ state: String) -> String {
         ["queued":"等待下载", "downloading":"正在下载", "verifying":"正在校验", "importing":"正在添加", "completed":"已完成", "ready":"已下载，可返回预设继续添加", "paused":"已暂停", "failed":"失败，可继续重试", "cancelled":"已取消"][state] ?? state
