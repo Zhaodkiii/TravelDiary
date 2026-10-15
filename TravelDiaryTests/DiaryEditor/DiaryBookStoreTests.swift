@@ -15,6 +15,24 @@ struct DiaryBookStoreTests {
     }
 
     @Test
+    func deletingBookRemovesOnlySelectedOwnersBook() async throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let deleted = try await store().createBook(title: "删除")
+        let kept = try await store().createBook(title: "保留")
+        let other = try await store(owner: "other").createBook(title: "另一个账号")
+        try await store(deleted.id).save(page(deleted))
+        try await store().deleteBook(deleted.id)
+        let books = try await store().listBooks()
+        #expect(books.map(\.id) == [kept.id])
+        let others = try await store(owner: "other").listBooks()
+        #expect(others.map(\.id) == [other.id])
+        // Repeated deletion is harmless and never targets another book.
+        try await store().deleteBook(deleted.id)
+        let scope = Data("owner".utf8).base64EncodedString()
+        #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("Diaries/\(scope)/books/\(deleted.id.uuidString)").path))
+    }
+
+    @Test
     func testShellIsIndependentAndPersists() async throws {
         defer { try? FileManager.default.removeItem(at: folder) }
         let original = try await store().createBook(title: "外壳", preset: .portrait)

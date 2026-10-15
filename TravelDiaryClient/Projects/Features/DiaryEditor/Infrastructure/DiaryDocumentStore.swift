@@ -436,6 +436,15 @@ extension DiaryDocumentStore {
                 .sorted { $0.updatedAt == $1.updatedAt ? $0.id.uuidString < $1.id.uuidString : $0.updatedAt > $1.updatedAt }
         }
     }
+    /// 删除当前账号下整本手帐，包括页面、回收站和独立素材。
+    nonisolated func deleteBook(_ id: UUID) async throws {
+        try await run {
+            let directory = self.libraryRoot.appendingPathComponent(id.uuidString, isDirectory: true)
+            if FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.removeItem(at: directory)
+            }
+        }
+    }
     nonisolated func createBook(title: String, preset: DiaryPagePreset = .a5) async throws -> DiaryBook {
         try await run {
             let name = title.trimmingCharacters(in: .whitespacesAndNewlines)

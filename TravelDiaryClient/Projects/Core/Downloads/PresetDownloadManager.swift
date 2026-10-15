@@ -154,6 +154,38 @@ final class PresetDownloadManager: ObservableObject {
         guard let i = jobs.firstIndex(where: { $0.id == id }), !["importing", "completed"].contains(jobs[i].status) else { return }
         jobs[i].status = "cancelled"; running[id]?.cancel(); persist()
     }
+    /// 仅删除停止运行的下载资源；手帐使用独立副本，不受影响。
+    func removeDownloads(_ ids: Set<UUID>, ownerID: String) throws {
+        let removable = jobs.filter {
+            ids.contains($0.id) && $0.owner == ownerID && running[$0.id] == nil
+                && ["ready", "completed", "cancelled", "paused", "failed"].contains($0.status)
+        }
+        let removedIDs = Set(removable.map(\.id))
+        guard removedIDs == ids else { throw DiaryEditorError.staleObject }
+        let remaining = jobs.filter { !removedIDs.contains($0.id) }
+        // Decode before deleting anything; retain blobs referenced by any account or task.
+        let retained = try Set(remaining.flatMap {
+            try JSONDecoder().decode(PresetManifest.self, from: $0.manifestData).files.map(\.sha256)
+        })
+        let candidates = try Set(removable.flatMap {
+            try JSONDecoder().decode(PresetManifest.self, from: $0.manifestData).files.map(\.sha256)
+        })
+        let fm = FileManager.default
+        for job in removable {
+            let directory = root.appendingPathComponent(job.id.uuidString)
+            if fm.fileExists(atPath: directory.path) { try fm.removeItem(at: directory) }
+        }
+        for hash in candidates.subtracting(retained) where !lockedHashes.contains(hash) {
+            guard hash.count == 64, hash.allSatisfy({ $0.isHexDigit }) else { continue }
+            for name in [hash, hash + ".parts"] {
+                let url = root.appendingPathComponent("blobs").appendingPathComponent(name)
+                if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
+            }
+        }
+        jobs = remaining
+        persist()
+    }
+
     private func persist() {
         do { try JSONEncoder().encode(jobs).write(to: root.appendingPathComponent("jobs.json"), options: .atomic) }
         catch { /* Existing jobs remain in memory; surface persistence failure. */

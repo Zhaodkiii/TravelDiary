@@ -135,12 +135,29 @@ struct PresetDownloadCenter: View {
     @ObservedObject private var manager = PresetDownloadManager.shared
     @State private var opened: DiaryBook?
     @State private var error: String?
+    @State private var removing = Set<UUID>()
+    @State private var confirmingRemoval = false
+    private var downloadedJobs: [PresetDownloadJob] {
+        manager.jobs.filter { $0.owner == ownerID && ["ready", "completed"].contains($0.status) }
+    }
     var body: some View {
         List {
+            Section {
+                Text("已下载 \(downloadedJobs.count) 份资源，可清理单页或整本下载。清理后可以重新下载，已添加到我的手帐的内容不受影响。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                if !downloadedJobs.isEmpty {
+                    Button("清理全部已下载资源", role: .destructive) {
+                        removing = Set(downloadedJobs.map(\.id)); confirmingRemoval = true
+                    }
+                }
+            }
             if let error { Text(error).foregroundStyle(.red) }
             ForEach(manager.jobs.filter { $0.owner == ownerID }) { job in
                 VStack(alignment: .leading, spacing: 8) {
                     Text(job.title).font(.headline)
+                    if let manifest = try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData) {
+                        Text("\(job.wholeBook ? "整本" : "单页/选页") · \(manifest.pages.count) 页 · 版本 \(manifest.packageVersion)").font(.caption).foregroundStyle(.secondary)
+                    }
                     Text(label(job.status)).font(.caption)
                     ProgressView(value: Double(job.bytes), total: Double(max(1, job.total)))
                     Text("\(ByteCountFormatter.string(fromByteCount: job.bytes, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: job.total, countStyle: .file))")
@@ -158,10 +175,25 @@ struct PresetDownloadCenter: View {
                                 }
                             }
                         }
+                        if ["ready", "completed", "cancelled", "paused", "failed"].contains(job.status) {
+                            Button("清理资源", role: .destructive) {
+                                removing = [job.id]; confirmingRemoval = true
+                            }
+                        }
                     }.buttonStyle(.borderless)
                 }.padding(.vertical, 6)
             }
         }.navigationTitle("下载管理")
+        .confirmationDialog("清理预设资源？", isPresented: $confirmingRemoval, titleVisibility: .visible) {
+            Button("清理所选资源", role: .destructive) {
+                do { try manager.removeDownloads(removing, ownerID: ownerID); error = nil }
+                catch { self.error = error.localizedDescription }
+                removing = []
+            }
+            Button("取消", role: .cancel) { removing = [] }
+        } message: {
+            Text("将删除所选下载记录及本机缓存。其他任务共用的资源会保留；已添加到手帐的页面不受影响。内置预设无需清理。")
+        }
         .task { manager.activate(owner: ownerID) }
         .navigationDestination(isPresented: Binding(get: { opened != nil }, set: { if !$0 { opened = nil } })) {
             if let opened { DiaryBookScreen(ownerID: ownerID, book: opened) }
