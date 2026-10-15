@@ -12,10 +12,14 @@ nonisolated struct DiaryBook: Codable, Identifiable, Equatable, Sendable {
     var updatedAt = Date()
     var defaultPageSize = DiaryPagePreset.a5.size
     var coverPageID: UUID?
+    /// 外壳独立于列表封面；旧帐本不配置外壳。
+    var shellPageID: UUID? = nil
     /// 导入操作发布记录，用于崩溃后重试去重。旧作品缺省为空。
     var presetImports: [String: [UUID]]? = nil
     var pages: [DiaryPageEntry] = []
     var trashedPages: [DiaryTrashedPage] = []
+    var shell: DiaryPageEntry? { pages.first { $0.id == shellPageID } }
+    var contentPages: [DiaryPageEntry] { pages.filter { $0.id != shellPageID } }
     var effectiveCover: DiaryPageEntry? { pages.first { $0.id == coverPageID } ?? pages.first }
 }
 

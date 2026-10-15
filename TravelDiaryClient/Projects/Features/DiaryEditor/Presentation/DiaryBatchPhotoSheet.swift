@@ -150,14 +150,14 @@ struct DiaryBatchPhotoSheet: View {
         defer { busy = false }
         do {
             var updated = documents
-            var replacements: [(UUID, DiaryAsset, UIImage)] = []
+            var replacements: [(UUID, DiaryAsset, UIImage, DiaryPhotoPlacement?)] = []
             // 逐张读取，失败时不提交任何图层修改；已导入的文件暂不被作品引用。
             for (index, slot) in slots.enumerated() {
                 progress = "正在准备第 \(index + 1)/\(slots.count) 张照片…"
                 guard let data = try await selection[index].loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage }
                 let (asset, image) = try await store.importImage(data, documentID: documents[slot.documentIndex].id)
                 updated[slot.documentIndex].replacePhoto(slot.id, with: asset)
-                if session != nil { replacements.append((slot.id, asset, image)) }
+                if session != nil { replacements.append((slot.id, asset, image, nil)) }
             }
             progress = "正在保存…"
             if let session {

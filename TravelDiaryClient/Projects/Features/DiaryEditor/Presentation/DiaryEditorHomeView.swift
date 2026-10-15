@@ -98,20 +98,21 @@ struct DiaryPagePreview: View {
     let page: DiaryPageEntry
     let store: DiaryDocumentStore
     var large = false
+    var undecorated = false
     @State private var image: UIImage?
     @State private var failed = false
     @State private var retry = 0
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8).fill(Color(uiColor: .secondarySystemGroupedBackground))
+            if !undecorated { RoundedRectangle(cornerRadius: 8).fill(Color(uiColor: .secondarySystemGroupedBackground)) }
             if let image { Image(uiImage: image).resizable().scaledToFit() }
             else if failed {
                 Button { retry += 1 } label: { Label("重试预览", systemImage: "arrow.clockwise") }.font(.caption)
             } else { ProgressView() }
         }
         .aspectRatio(page.size.width / page.size.height, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: undecorated ? 0 : 8))
         .task(id: "\(page.id)-\(page.revisionID)-\(large)-\(retry)") {
             image = nil; failed = false
             do {

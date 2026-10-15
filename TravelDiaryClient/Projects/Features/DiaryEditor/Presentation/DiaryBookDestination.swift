@@ -12,11 +12,20 @@ struct DiaryBookDestination: View {
     @State private var book: DiaryBook?
     @State private var error: String?
     @State private var retry = 0
+    @State private var showingList = false
 
     var body: some View {
         Group {
             if let book {
-                DiaryBookScreen(ownerID: ownerID, book: book)
+                if showingList || book.pages.isEmpty {
+                    DiaryBookScreen(ownerID: ownerID, book: book)
+                } else {
+                    DiaryPhysicalBookScreen(
+                        book: book,
+                        store: DiaryDocumentStore(ownerID: ownerID, bookID: bookID),
+                        onShowList: { showingList = true }
+                    )
+                }
             } else if let error {
                 ContentUnavailableView {
                     Label("手帐暂不可用", systemImage: "book.closed")

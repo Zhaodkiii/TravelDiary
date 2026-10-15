@@ -14,6 +14,40 @@ struct DiaryBookStoreTests {
         return value
     }
 
+    @Test
+    func testShellIsIndependentAndPersists() async throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let original = try await store().createBook(title: "外壳", preset: .portrait)
+        let repository = store(original.id)
+        let shell = page(original)
+        let content = page(original)
+        try await repository.save(shell)
+        try await repository.save(content)
+        try await repository.setCover(content.id)
+        var book = try await repository.loadBook()
+        #expect(book.shell == nil)
+        #expect(book.contentPages.count == 2)
+        // 缺少新增字段的旧目录仍能正常解码，不推断外壳。
+        let encoded = try JSONEncoder().encode(book)
+        var json = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        json.removeValue(forKey: "shellPageID")
+        let legacy = try JSONDecoder().decode(DiaryBook.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(legacy.shell == nil)
+        try await repository.setShell(shell.id)
+        book = try await store(original.id).loadBook()
+        #expect(book.shell?.id == shell.id)
+        #expect(book.effectiveCover?.id == content.id)
+        #expect(book.contentPages.map(\.id) == [content.id])
+        try await repository.setShell(nil)
+        book = try await repository.loadBook()
+        #expect(book.contentPages.map(\.id) == [shell.id, content.id])
+        try await repository.setShell(shell.id)
+        try await repository.trashPage(shell.id)
+        book = try await repository.loadBook()
+        #expect(book.shellPageID == nil)
+        #expect(book.effectiveCover?.id == content.id)
+    }
+
     /// 同名本、页顺序和独立图层在重建 Store 后仍能正确恢复。
     @Test
     func testBooksAndPagesSurviveReopen() async throws {
@@ -80,6 +114,34 @@ struct DiaryBookStoreTests {
         #expect(state.pages.map(\.id) == [b.id, a.id])
         let restored = try await repository.load(a.id)
         #expect(restored.document == a)
+    }
+
+    @Test
+    func testDragOrderPersistsAndRejectsStaleOrInvalidLists() async throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let book = try await store().createBook(title: "拖动排序", preset: .portrait)
+        let repository = store(book.id)
+        let a = page(book), b = page(book), c = page(book)
+        try await repository.save(a)
+        try await repository.save(b)
+        try await repository.save(c)
+        try await repository.setCover(b.id)
+        let before = try await repository.loadBook()
+        try await repository.reorderPages([c.id, a.id, b.id], expectedRevision: before.catalogRevision)
+        let saved = try await store(book.id).loadBook()
+        #expect(saved.pages.map(\.id) == [c.id, a.id, b.id])
+        #expect(saved.coverPageID == b.id)
+        #expect(saved.pages.first?.revisionID == before.pages.last?.revisionID)
+        do {
+            try await repository.reorderPages([a.id, b.id, c.id], expectedRevision: before.catalogRevision)
+            Issue.record("过期排序不应覆盖新顺序")
+        } catch DiaryEditorError.pageConflict { }
+        do {
+            try await repository.reorderPages([a.id, a.id, c.id], expectedRevision: saved.catalogRevision)
+            Issue.record("重复页面不应发布")
+        } catch DiaryEditorError.invalidDocument { }
+        let final = try await repository.loadBook()
+        #expect(final == saved)
     }
 
     @Test

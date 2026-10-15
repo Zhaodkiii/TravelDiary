@@ -445,6 +445,12 @@ extension DiaryDocumentStore {
             book.coverPageID = id
         }
     }
+    nonisolated func setShell(_ id: UUID?) async throws {
+        try await mutateBook { book in
+            guard id == nil || book.pages.contains(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument.logged() }
+            book.shellPageID = id
+        }
+    }
     nonisolated func movePage(_ id: UUID, forward: Bool) async throws {
         try await mutateBook { book in
             guard let index = book.pages.firstIndex(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument.logged() }
@@ -453,12 +459,23 @@ extension DiaryDocumentStore {
             book.pages.swapAt(index, target)
         }
     }
+    /// 一次原子发布完整顺序；拖动期间目录变化时拒绝覆盖新增、删除或其他排序。
+    nonisolated func reorderPages(_ ids: [UUID], expectedRevision: UUID) async throws {
+        try await mutateBook { book in
+            guard book.catalogRevision == expectedRevision else { throw DiaryEditorError.pageConflict }
+            guard ids.count == book.pages.count, Set(ids).count == ids.count,
+                  Set(ids) == Set(book.pages.map(\.id)) else { throw DiaryEditorError.invalidDocument }
+            let entries = Dictionary(uniqueKeysWithValues: book.pages.map { ($0.id, $0) })
+            book.pages = ids.compactMap { entries[$0] }
+        }
+    }
     /// 软删除只移动目录引用，资源与完整图层仍保留，供用户恢复。
     nonisolated func trashPage(_ id: UUID) async throws {
         try await mutateBook { book in
             guard let index = book.pages.firstIndex(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument.logged() }
             book.trashedPages.append(DiaryTrashedPage(entry: book.pages.remove(at: index), originalIndex: index))
             if book.coverPageID == id { book.coverPageID = nil }
+            if book.shellPageID == id { book.shellPageID = nil }
         }
     }
     nonisolated func restorePage(_ id: UUID) async throws {
