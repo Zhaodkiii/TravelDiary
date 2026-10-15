@@ -21,7 +21,7 @@ nonisolated struct RemotePresetPage: Decodable, Identifiable, Sendable {
     let thumbnail_url: String
     let preview_url: String
 }
-nonisolated struct PresetDownloadJob: Codable, Identifiable, Sendable {
+nonisolated struct PresetDownloadJob: Codable, Identifiable, Sendable, Equatable {
     let id: UUID
     let owner: String
     let planID: String
@@ -31,6 +31,7 @@ nonisolated struct PresetDownloadJob: Codable, Identifiable, Sendable {
     let targetID: UUID?
     let afterPageID: UUID?
     let expectedRevision: UUID?
+    var downloadOnly: Bool? = nil
     var status = "queued"
     var bytes: Int64 = 0
     var total: Int64 = 0
@@ -59,7 +60,7 @@ final class PresetDownloadManager: ObservableObject {
         try? url.setResourceValues(values)
         if let data = try? Data(contentsOf: root.appendingPathComponent("jobs.json")),
            let saved = try? JSONDecoder().decode([PresetDownloadJob].self, from: data) {
-            jobs = saved.map { value in var value = value; if !["completed", "cancelled"].contains(value.status) { value.status = "paused" }; return value }
+            jobs = saved.map { value in var value = value; if !["completed", "ready", "cancelled"].contains(value.status) { value.status = "paused" }; return value }
         }
     }
     func configure(engine: SupportNetworkEngine) { self.engine = engine }
@@ -84,21 +85,54 @@ final class PresetDownloadManager: ObservableObject {
         struct Result: Decodable { let pages: [RemotePresetPage] }
         return try JSONDecoder().decode(Result.self, from: await request("templates/\(book.id)/\(book.version)/")).pages
     }
-    func enqueue(book: RemotePresetBook, pageIDs: [String]?, owner: String, target: DiaryBook?, after: UUID?) async throws {
+    @discardableResult
+    func enqueue(book: RemotePresetBook, pageIDs: [String]?, owner: String, target: DiaryBook?, after: UUID?, downloadOnly: Bool = false) async throws -> UUID {
         activate(owner: owner)
+        if downloadOnly, let existing = jobs.last(where: { job in
+            guard job.owner == owner, job.downloadOnly == true, job.status != "cancelled",
+                  let manifest = try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData),
+                  manifest.templateBookID == book.id, manifest.packageVersion == book.version else { return false }
+            return pageIDs.map { Set($0).isSubset(of: Set(manifest.pages.map(\.id))) } ?? job.wholeBook
+        }) { return existing.id }
         let data = try await request("templates/\(book.id)/\(book.version)/", body: pageIDs.map { ["page_ids": $0] } ?? [:])
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let plan = json["id"] as? String, let manifest = json["manifest"] else { throw DiaryEditorError.invalidDocument }
         let bytes = try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
         let package = try JSONDecoder().decode(PresetManifest.self, from: bytes)
-        jobs.append(PresetDownloadJob(id: UUID(), owner: owner, planID: plan, title: book.title,
+        let jobID = UUID()
+        jobs.append(PresetDownloadJob(id: jobID, owner: owner, planID: plan, title: book.title,
             manifestData: bytes, wholeBook: pageIDs == nil, targetID: pageIDs == nil ? nil : target?.id,
             afterPageID: after, expectedRevision: target?.catalogRevision,
-            total: Int64(package.files.reduce(0) { $0 + $1.byteCount })))
+            downloadOnly: downloadOnly, total: Int64(package.files.reduce(0) { $0 + $1.byteCount })))
         persist(); schedule()
+        return jobID
+    }
+    func cachedPackage(bookID: String, version: Int, pageIDs: [String]) -> DiaryPresetPackage? {
+        for job in jobs.reversed() where ["ready", "completed"].contains(job.status) {
+            guard let manifest = try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData),
+                  manifest.templateBookID == bookID, manifest.packageVersion == version,
+                  Set(pageIDs).isSubset(of: Set(manifest.pages.map(\.id))) else { continue }
+            let directory = root.appendingPathComponent(job.id.uuidString)
+            guard manifest.files.allSatisfy({ FileManager.default.fileExists(atPath: directory.appendingPathComponent($0.path).path) }) else { continue }
+            return DiaryPresetPackage(root: directory, manifest: manifest)
+        }
+        return nil
+    }
+    func hasDownloadedPage(bookID: String, version: Int, pageID: String? = nil) -> Bool {
+        jobs.contains { job in
+            guard ["ready", "completed"].contains(job.status),
+                  let manifest = try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData),
+                  manifest.templateBookID == bookID, manifest.packageVersion == version else { return false }
+            return pageID == nil || manifest.pages.contains { $0.id == pageID }
+        }
+    }
+    func preparedPackage(_ id: UUID) -> DiaryPresetPackage? {
+        guard let job = jobs.first(where: { $0.id == id }), ["ready", "completed"].contains(job.status),
+              let manifest = try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData) else { return nil }
+        return cachedPackage(bookID: manifest.templateBookID, version: manifest.packageVersion, pageIDs: manifest.pages.map(\.id))
     }
     func pause(_ id: UUID) {
-        guard let i = jobs.firstIndex(where: { $0.id == id }), !["completed", "importing"].contains(jobs[i].status) else { return }
+        guard let i = jobs.firstIndex(where: { $0.id == id }), !["completed", "ready", "importing"].contains(jobs[i].status) else { return }
         jobs[i].status = "paused"; running[id]?.cancel(); persist()
     }
     func resume(_ id: UUID) {
@@ -150,6 +184,10 @@ final class PresetDownloadManager: ObservableObject {
             update(id) { $0.status = "verifying" }
             try await Task.detached { try package.validate() }.value
             try Task.checkCancellation()
+            if job.downloadOnly == true {
+                update(id) { $0.status = "ready" }
+                return
+            }
             guard owner == job.owner else { throw CancellationError() }
             update(id) { $0.status = "importing" }
             let result = try await DiaryDocumentStore(ownerID: job.owner, bookID: job.targetID).importPreset(package,

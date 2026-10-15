@@ -5,6 +5,8 @@ struct DiaryPresetLibraryScreen: View {
     let ownerID: String
     var targetBook: DiaryBook? = nil
     var targetAfterPageID: UUID? = nil
+    @ObservedObject private var downloads = PresetDownloadManager.shared
+    @State private var remote: RemotePresetCatalog?
     @State private var pending: DiaryPresetImportIntent?
     @State private var resuming: DiaryPresetImportIntent?
     @State private var recovered: DiaryBook?
@@ -15,9 +17,6 @@ struct DiaryPresetLibraryScreen: View {
     @State private var error: String?
     var body: some View {
         VStack {
-            NavigationLink("云端预设与下载管理") {
-                RemotePresetLibraryScreen(ownerID: ownerID, targetBook: targetBook, afterPageID: targetAfterPageID)
-            }.padding(.top)
             if let catalog {
                 if let pending {
                     HStack {
@@ -28,7 +27,7 @@ struct DiaryPresetLibraryScreen: View {
                 }
                 Picker("系列", selection: $selectedSeries) {
                     Text("全部").tag("")
-                    ForEach(catalog.series) { Text($0.title).tag($0.id) }
+                    ForEach(combinedSeries(catalog)) { Text($0.title).tag($0.id) }
                 }.pickerStyle(.segmented).padding(.horizontal)
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150))], spacing: 20) {
@@ -49,12 +48,33 @@ struct DiaryPresetLibraryScreen: View {
                                 }
                             }.buttonStyle(.plain)
                         }
+                        ForEach((remote?.books ?? []).filter { book in
+                            !catalog.books.contains(where: { $0.id == book.id }) &&
+                            (selectedSeries.isEmpty || book.series == selectedSeries) &&
+                            (search.isEmpty || book.title.localizedCaseInsensitiveContains(search))
+                        }) { book in
+                            NavigationLink {
+                                RemotePresetDetailScreen(ownerID: ownerID, book: book, targetBook: targetBook,
+                                    afterPageID: targetAfterPageID) { recovered = $0 }
+                            } label: {
+                                VStack(alignment: .leading) {
+                                    AsyncImage(url: URL(string: book.cover_url)) { image in image.resizable().scaledToFit() }
+                                        placeholder: { Color.gray.opacity(0.1).aspectRatio(0.7, contentMode: .fit).overlay { ProgressView() } }
+                                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                                    HStack {
+                                        Text(book.title).font(.headline)
+                                        PresetAvailabilityBadge(downloaded: downloads.hasDownloadedPage(bookID: book.id, version: book.version))
+                                    }
+                                    Text("\(book.page_count) 页").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }.buttonStyle(.plain)
+                        }
                     }.padding()
                     if !catalog.issues.isEmpty {
                         Text("部分预设暂不可用：\n" + catalog.issues.joined(separator: "\n"))
                             .font(.caption).foregroundStyle(.secondary).padding()
                     }
-                    if !catalog.books.contains(where: { (selectedSeries.isEmpty || $0.manifest.seriesID == selectedSeries) && (search.isEmpty || ($0.manifest.title + ($0.manifest.tags ?? []).joined()).localizedCaseInsensitiveContains(search)) }) {
+                    if !(remote?.books.contains(where: { (selectedSeries.isEmpty || $0.series == selectedSeries) && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) }) ?? false) && !catalog.books.contains(where: { (selectedSeries.isEmpty || $0.manifest.seriesID == selectedSeries) && (search.isEmpty || ($0.manifest.title + ($0.manifest.tags ?? []).joined()).localizedCaseInsensitiveContains(search)) }) {
                         ContentUnavailableView("暂无匹配的预设", systemImage: "books.vertical")
                         Button("查看全部") { selectedSeries = ""; search = "" }
                     }
@@ -62,6 +82,12 @@ struct DiaryPresetLibraryScreen: View {
             } else if let error { VStack { Text(error); Button("重试") { reload += 1 } } }
             else { ProgressView("正在读取预设…") }
         }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink { PresetDownloadCenter(ownerID: ownerID) } label: { Image(systemName: "arrow.down.circle").accessibilityLabel("下载管理") }
+            }
+        }
+        .refreshable { remote = try? await downloads.catalog() }
         .searchable(text: $search, prompt: "搜索预设本")
         .sheet(item: $resuming) { intent in
             if let package = catalog?.books.first(where: { $0.id == intent.templateID && $0.manifest.packageVersion == intent.version }) {
@@ -75,10 +101,20 @@ struct DiaryPresetLibraryScreen: View {
             if let recovered { DiaryBookScreen(ownerID: ownerID, book: recovered) }
         }
         .task(id: reload) {
+            downloads.activate(owner: ownerID)
             pending = DiaryPresetImportIntent.read(owner: ownerID)
             do { catalog = try await Task.detached { try BundleDiaryPresetProvider().catalog() }.value }
             catch { self.error = error.localizedDescription }
+            do { remote = try await downloads.catalog() }
+            catch { /* Local templates remain available when the network is unavailable. */ }
         }
+    }
+    private func combinedSeries(_ catalog: DiaryPresetCatalog) -> [DiaryPresetSeries] {
+        var result = catalog.series
+        for entry in remote?.series ?? [] where !result.contains(where: { $0.id == entry.slug }) {
+            result.append(DiaryPresetSeries(id: entry.slug, title: entry.title, directory: entry.slug, sortOrder: result.count))
+        }
+        return result
     }
 }
 struct DiaryPresetCover: View {
@@ -200,7 +236,7 @@ private struct DiaryPresetDetailScreen: View {
             }
     }
 }
-private struct DiaryPresetImportSheet: View {
+struct DiaryPresetImportSheet: View {
     let ownerID: String
     let package: DiaryPresetPackage
     let pageIDs: [String]
@@ -208,7 +244,12 @@ private struct DiaryPresetImportSheet: View {
     let wholeBook: Bool
     var defaultAfterPageID: UUID? = nil
     var resume: DiaryPresetImportIntent? = nil
+    var remoteBook: RemotePresetBook? = nil
     let completed: (DiaryBook) -> Void
+    @ObservedObject private var downloads = PresetDownloadManager.shared
+    @State private var downloadID: UUID?
+    @State private var readyPackage: DiaryPresetPackage?
+    @State private var planning = false
     @Environment(\.dismiss) private var dismiss
     @State private var books: [DiaryBook] = []
     @State private var targetID: UUID?
@@ -225,6 +266,21 @@ private struct DiaryPresetImportSheet: View {
         NavigationStack {
             Form {
                 Text("添加 \(pageIDs.count) 页")
+                if remoteBook != nil {
+                    Section {
+                        if let job = downloads.jobs.first(where: { $0.id == downloadID }) {
+                            ProgressView(value: Double(job.bytes), total: Double(max(1, job.total)))
+                            Text(readyPackage == nil ? "正在准备资源 · \(Int(min(1, Double(job.bytes) / Double(max(1, job.total))) * 100))%" : "资源已下载，可以添加")
+                            if let error = job.error { Text(error).foregroundStyle(.red) }
+                            HStack {
+                                if ["queued", "downloading", "verifying"].contains(job.status) { Button("暂停下载") { downloads.pause(job.id) } }
+                                if ["paused", "failed"].contains(job.status) { Button("继续下载") { downloads.resume(job.id) } }
+                            }
+                        } else if planning { ProgressView("正在获取资源清单…") }
+                        else if readyPackage != nil { Label("资源已下载，可以添加", systemImage: "checkmark.circle.fill") }
+                        else { Button("下载资源") { Task { await prepareRemote() } } }
+                    }
+                }
                 if !wholeBook {
                     Picker("添加到", selection: $targetID) {
                         Text("新建手帐本").tag(Optional<UUID>.none)
@@ -258,11 +314,14 @@ private struct DiaryPresetImportSheet: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button(busy ? "取消导入" : "取消") { if busy { cancellation.cancel() } else { dismiss() } } }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("添加") { Task { await runImport() } }.disabled(busy || (targetID == nil && title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                        Button("添加") { Task { await runImport() } }.disabled(busy || (remoteBook != nil && readyPackage == nil) || (targetID == nil && title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                     }
+                }.onChange(of: downloads.jobs) { _, _ in
+                    if let downloadID { readyPackage = downloads.preparedPackage(downloadID) }
                 }.interactiveDismissDisabled(busy)
                 .task {
                     title = package.manifest.title
+                    await prepareRemote()
                     preview = try? package.pages.first { $0.id == pageIDs.first }
                     do {
                         books = try await DiaryDocumentStore(ownerID: ownerID).listBooks()
@@ -273,6 +332,21 @@ private struct DiaryPresetImportSheet: View {
                     catch { self.error = error.localizedDescription }
                 }
         }
+    }
+    private func prepareRemote() async {
+        guard let remoteBook else { return }
+        downloads.activate(owner: ownerID)
+        if let cached = downloads.cachedPackage(bookID: remoteBook.id, version: remoteBook.version, pageIDs: pageIDs) {
+            readyPackage = cached; return
+        }
+        guard downloadID == nil, !planning else { return }
+        planning = true
+        defer { planning = false }
+        do {
+            downloadID = try await downloads.enqueue(book: remoteBook, pageIDs: wholeBook ? nil : pageIDs,
+                owner: ownerID, target: nil, after: nil, downloadOnly: true)
+            if let downloadID { readyPackage = downloads.preparedPackage(downloadID) }
+        } catch { self.error = error.localizedDescription }
     }
     private func runImport() async {
         guard !busy else { return }; busy = true
@@ -286,7 +360,7 @@ private struct DiaryPresetImportSheet: View {
             let intent = DiaryPresetImportIntent(id: operationID, templateID: package.id, version: package.manifest.packageVersion,
                   pageIDs: pageIDs, wholeBook: wholeBook, targetID: targetID, afterPageID: afterPageID, title: title)
             try intent.save(owner: ownerID)
-            let result = try await DiaryDocumentStore(ownerID: ownerID, bookID: targetID).importPreset(package, pageIDs: pageIDs, title: title,
+            let result = try await DiaryDocumentStore(ownerID: ownerID, bookID: targetID).importPreset(readyPackage ?? package, pageIDs: pageIDs, title: title,
                     operationID: operationID, afterPageID: afterPageID, expectedRevision: target?.catalogRevision, progress: { value in
                         Task { @MainActor in progress = value }
                     }, cancellation: cancellation)

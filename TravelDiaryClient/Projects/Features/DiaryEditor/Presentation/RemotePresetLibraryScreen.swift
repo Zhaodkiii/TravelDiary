@@ -1,97 +1,120 @@
 import SwiftUI
 
-struct RemotePresetLibraryScreen: View {
-    let ownerID: String
-    var targetBook: DiaryBook?
-    var afterPageID: UUID?
-    @ObservedObject private var downloads = PresetDownloadManager.shared
-    @State private var catalog: RemotePresetCatalog?
-    @State private var error: String?
-    @State private var series = ""
+struct PresetAvailabilityBadge: View {
+    let downloaded: Bool
     var body: some View {
-        ScrollView {
-            if let catalog {
-                Picker("系列", selection: $series) {
-                    Text("全部").tag("")
-                    ForEach(catalog.series, id: \.slug) { Text($0.title).tag($0.slug) }
-                }.pickerStyle(.menu)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))]) {
-                    ForEach(catalog.books.filter { series.isEmpty || $0.series == series }) { book in
-                        NavigationLink {
-                            RemotePresetDetailScreen(ownerID: ownerID, book: book, targetBook: targetBook, afterPageID: afterPageID)
-                        } label: {
-                            VStack {
-                                AsyncImage(url: URL(string: book.cover_url)) { image in image.resizable().scaledToFit() }
-                                    placeholder: { ProgressView() }.frame(height: 180)
-                                Text(book.title)
-                                Text("\(book.page_count) 页").font(.caption)
-                            }.padding()
-                        }.buttonStyle(.plain)
-                    }
-                }
-            } else if error == nil { ProgressView("正在加载云端预设…") }
-            if let error { Text(error).foregroundStyle(.secondary); Button("重试") { Task { await load() } } }
-        }
-        .navigationTitle("云端预设")
-        .toolbar { NavigationLink("下载管理") { PresetDownloadCenter(ownerID: ownerID) } }
-        .task { downloads.activate(owner: ownerID); await load() }
-        .refreshable { await load() }
-    }
-    private func load() async {
-        error = nil
-        do { catalog = try await downloads.catalog() } catch { self.error = error.localizedDescription }
+        Label(downloaded ? "已下载" : "云端", systemImage: downloaded ? "checkmark.circle.fill" : "cloud")
+            .font(.caption2).foregroundStyle(downloaded ? Color.secondary : Color.blue)
+            .fixedSize().accessibilityLabel(downloaded ? "已下载" : "云端，尚未下载")
     }
 }
 
-private struct RemotePresetDetailScreen: View {
+private struct RemotePresetSelection: Identifiable {
+    let id = UUID()
+    let pageIDs: [String]
+    let wholeBook: Bool
+}
+
+struct RemotePresetDetailScreen: View {
     let ownerID: String
     let book: RemotePresetBook
     let targetBook: DiaryBook?
     let afterPageID: UUID?
+    let onImported: (DiaryBook) -> Void
     @ObservedObject private var downloads = PresetDownloadManager.shared
     @State private var pages: [RemotePresetPage] = []
+    @State private var manifest: PresetManifest?
+    @State private var pageData: [PresetPage] = []
     @State private var error: String?
-    @State private var preview: RemotePresetPage?
-    @State private var busy = false
-    @State private var showDownloads = false
+    @State private var previewID: String?
+    @State private var showingPreview = false
+    @State private var selection: RemotePresetSelection?
+    private var placeholderPackage: DiaryPresetPackage? {
+        manifest.map { DiaryPresetPackage(root: FileManager.default.temporaryDirectory.appendingPathComponent("remote-metadata"), manifest: $0) }
+    }
     var body: some View {
         ScrollView {
-            Button("整本添加到我的（新建一本）") { add(nil) }.disabled(busy || pages.isEmpty)
-            if let error { Text(error).foregroundStyle(.red) }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150))]) {
-                ForEach(pages) { page in
-                    VStack {
-                        Button { preview = page } label: {
-                            AsyncImage(url: URL(string: page.thumbnail_url)) { image in image.resizable().scaledToFit() }
-                                placeholder: { ProgressView() }.frame(height: 200)
+            VStack(alignment: .leading, spacing: 16) {
+                if let manifest {
+                    HStack {
+                        Text("\(pages.count) 页 · \(Int(manifest.pageSize.width)) × \(Int(manifest.pageSize.height))")
+                        PresetAvailabilityBadge(downloaded: downloads.hasDownloadedPage(bookID: book.id, version: book.version))
+                    }
+                    Button("整本添加到我的") {
+                        selection = RemotePresetSelection(pageIDs: pages.map(\.id), wholeBook: true)
+                    }.buttonStyle(.borderedProminent)
+                    DiaryPageListGrid(pages: pageData, shellID: manifest.shellPageID, coverID: manifest.coverPageID) { page in
+                        if let remote = pages.first(where: { $0.id == page.id }) {
+                            VStack {
+                                Button { previewID = page.id; showingPreview = true } label: {
+                                    remoteImage(remote.thumbnail_url, size: page.size.cg)
+                                }
+                                HStack {
+                                    Text(page.title).font(.caption)
+                                    PresetAvailabilityBadge(downloaded: downloads.hasDownloadedPage(bookID: book.id, version: book.version, pageID: page.id))
+                                }
+                                Button("使用这一页") { selection = RemotePresetSelection(pageIDs: [page.id], wholeBook: false) }
+                            }
                         }
-                        Text(page.title)
-                        Button(targetBook == nil ? "使用这一页（新建本）" : "加入当前本") { add([page.id]) }.disabled(busy)
-                    }.padding()
-                }
+                    }
+                } else if error == nil { ProgressView("正在读取预设…") }
+                if let error { Text(error).foregroundStyle(.red); Button("重试") { Task { await load() } } }
+            }.padding()
+        }.navigationTitle(book.title)
+        .toolbar {
+            NavigationLink { PresetDownloadCenter(ownerID: ownerID) } label: {
+                Image(systemName: "arrow.down.circle").accessibilityLabel("下载管理")
             }
         }
-        .navigationTitle(book.title)
-        .toolbar { Button("下载管理") { showDownloads = true } }
-        .navigationDestination(isPresented: $showDownloads) { PresetDownloadCenter(ownerID: ownerID) }
-        .sheet(item: $preview) { page in
+        .task { await load() }
+        .fullScreenCover(isPresented: $showingPreview) {
             NavigationStack {
-                AsyncImage(url: URL(string: page.preview_url)) { image in image.resizable().scaledToFit() }
-                    placeholder: { ProgressView() }.navigationTitle(page.title)
-                    .toolbar { Button("关闭") { preview = nil } }
+                TabView(selection: $previewID) {
+                    ForEach(pages) { page in
+                        VStack {
+                            if abs((pages.firstIndex { $0.id == page.id } ?? 0) - (pages.firstIndex { $0.id == previewID } ?? 0)) <= 1 {
+                                remoteImage(page.preview_url, size: manifest?.pageSize.cg ?? CGSize(width: 1, height: 1.4))
+                            } else { Color.clear }
+                            Text(page.title)
+                        }.padding().tag(Optional(page.id))
+                    }
+                }.tabViewStyle(.page)
+                    .navigationTitle("\((pages.firstIndex { $0.id == previewID } ?? 0) + 1) / \(pages.count)")
+                    .toolbar { Button("完成") { showingPreview = false } }
+                    .safeAreaInset(edge: .bottom) {
+                        Button("使用这一页") {
+                            if let previewID { showingPreview = false; selection = RemotePresetSelection(pageIDs: [previewID], wholeBook: false) }
+                        }.buttonStyle(.borderedProminent).padding()
+                    }
             }
         }
-        .task { do { pages = try await downloads.pages(book) } catch { self.error = error.localizedDescription } }
-    }
-    private func add(_ ids: [String]?) {
-        busy = true
-        Task {
-            defer { busy = false }
-            do {
-                try await downloads.enqueue(book: book, pageIDs: ids, owner: ownerID, target: targetBook, after: afterPageID)
-                showDownloads = true
-            } catch { self.error = error.localizedDescription }
+        .sheet(item: $selection) { value in
+            if let package = placeholderPackage {
+                DiaryPresetImportSheet(ownerID: ownerID, package: package, pageIDs: value.pageIDs,
+                    defaultTarget: value.wholeBook ? nil : targetBook, wholeBook: value.wholeBook,
+                    defaultAfterPageID: afterPageID, remoteBook: book) { result in
+                        selection = nil; onImported(result)
+                    }
+            }
         }
+    }
+    private func remoteImage(_ raw: String, size: CGSize) -> some View {
+        AsyncImage(url: URL(string: raw)) { phase in
+            switch phase {
+            case .success(let image): image.resizable().scaledToFit()
+            case .failure: Image(systemName: "photo.badge.exclamationmark").frame(maxWidth: .infinity)
+            default: Color.gray.opacity(0.1).overlay { ProgressView() }
+            }
+        }.aspectRatio(size.width / size.height, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+    private func load() async {
+        error = nil
+        do {
+            struct Detail: Decodable { let manifest: PresetManifest; let page_data: [PresetPage]; let pages: [RemotePresetPage] }
+            let value = try JSONDecoder().decode(Detail.self, from: await downloads.request("templates/\(book.id)/\(book.version)/"))
+            manifest = value.manifest; pageData = value.page_data; pages = value.pages
+        } catch { self.error = error.localizedDescription }
     }
 }
 
@@ -114,7 +137,7 @@ struct PresetDownloadCenter: View {
                     HStack {
                         if ["queued", "downloading", "verifying"].contains(job.status) { Button("暂停") { manager.pause(job.id) } }
                         if ["paused", "failed"].contains(job.status) { Button("继续") { manager.resume(job.id) } }
-                        if !["completed", "cancelled", "importing"].contains(job.status) { Button("取消", role: .destructive) { manager.cancel(job.id) } }
+                        if !["completed", "ready", "cancelled", "importing"].contains(job.status) { Button("取消", role: .destructive) { manager.cancel(job.id) } }
                         if job.status == "completed", let id = job.resultID {
                             Button("打开手帐") {
                                 Task {
@@ -133,6 +156,6 @@ struct PresetDownloadCenter: View {
         }
     }
     private func label(_ state: String) -> String {
-        ["queued":"等待下载", "downloading":"正在下载", "verifying":"正在校验", "importing":"正在添加", "completed":"已完成", "paused":"已暂停", "failed":"失败，可继续重试", "cancelled":"已取消"][state] ?? state
+        ["queued":"等待下载", "downloading":"正在下载", "verifying":"正在校验", "importing":"正在添加", "completed":"已完成", "ready":"已下载，可返回预设继续添加", "paused":"已暂停", "failed":"失败，可继续重试", "cancelled":"已取消"][state] ?? state
     }
 }
