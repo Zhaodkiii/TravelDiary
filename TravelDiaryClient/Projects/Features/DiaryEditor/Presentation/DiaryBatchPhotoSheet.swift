@@ -6,6 +6,10 @@ import ImageIO
 struct DiaryBatchPhotoSheet: View {
     let store: DiaryDocumentStore
     var session: DiaryEditorSession? = nil
+    var preset: DiaryPresetPackage? = nil
+    var presetPageIDs: [String] = []
+    var preparationDirectory: URL? = nil
+    var onPrepared: (([URL]) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var documents: [DiaryDocument] = []
     @State private var expectedBook: DiaryBook?
@@ -30,7 +34,7 @@ struct DiaryBatchPhotoSheet: View {
         NavigationStack {
             List {
                 Section {
-                    Text(session == nil ? "当前手帐共 \(slots.count) 张可替换照片" : "当前页共 \(slots.count) 张可替换照片")
+                    Text(session == nil && preset == nil ? "当前手帐共 \(slots.count) 张可替换照片" : "当前页共 \(slots.count) 张可替换照片")
                     Text("按页序、组内图层从底到顶替换。隐藏及锁定图层跳过。完整图片拉伸到原框，比例不同时会变形。")
                         .font(.caption).foregroundStyle(.secondary)
                     if ready && !slots.isEmpty {
@@ -40,6 +44,11 @@ struct DiaryBatchPhotoSheet: View {
                         }
                     }
                     if ready && slots.isEmpty { Text("没有可替换照片。背景、贴纸及相框不会计入。") }
+                }
+                if onPrepared != nil {
+                    Section {
+                        Button("保留原照片，继续") { onPrepared?([]); dismiss() }.disabled(!ready)
+                    }
                 }
                 Section("替换对应顺序") {
                     ForEach(Array(slots.enumerated()), id: \.element.id) { index, slot in
@@ -65,11 +74,11 @@ struct DiaryBatchPhotoSheet: View {
                 }
                 if let message { Text(message).foregroundStyle(.red) }
             }
-            .navigationTitle("一键替换照片")
+            .navigationTitle(onPrepared == nil ? "一键替换照片" : "第 2 步 · 选择照片")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(busy) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("替换全部") { Task { await replace() } }
+                    Button(onPrepared == nil ? "替换全部" : "下一步") { Task { await replace() } }
                         .disabled(!ready || busy || slots.isEmpty || selection.count != slots.count)
                 }
             }
@@ -110,7 +119,26 @@ struct DiaryBatchPhotoSheet: View {
                                         preview: source?.preparingThumbnail(of: CGSize(width: 88, height: 120))))
                 }
             }
-            if let session {
+            if let preset {
+                let assetIDs = Dictionary(uniqueKeysWithValues: preset.manifest.assetTable.keys.map { ($0, UUID()) })
+                let selected = try preset.pages.filter { presetPageIDs.contains($0.id) }
+                for (index, page) in selected.enumerated() {
+                    let document = try preset.instantiate(page, bookID: UUID(), targetSize: page.size.cg, assetIDs: assetIDs)
+                    var images: [UUID: UIImage] = [:]
+                    let needed = Set(document.replaceablePhotos().compactMap(\.assetID))
+                    for (key, asset) in preset.manifest.assetTable {
+                        guard let id = assetIDs[key], needed.contains(id) else { continue }
+                        let url = try preset.url(asset.path)
+                        if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                           let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                            kCGImageSourceCreateThumbnailFromImageAlways: true,
+                            kCGImageSourceCreateThumbnailWithTransform: true,
+                            kCGImageSourceThumbnailMaxPixelSize: 160
+                           ] as CFDictionary) { images[id] = UIImage(cgImage: cg) }
+                    }
+                    append(document, images: images, page: index + 1)
+                }
+            } else if let session {
                 session.finishInteraction()
                 append(session.document, images: session.images, page: 1)
             } else {
@@ -149,6 +177,23 @@ struct DiaryBatchPhotoSheet: View {
         busy = true; message = nil
         defer { busy = false }
         do {
+            if let onPrepared, let preparationDirectory {
+                try FileManager.default.createDirectory(at: preparationDirectory, withIntermediateDirectories: true)
+                var files: [URL] = []
+                do {
+                    for (index, item) in selection.enumerated() {
+                        progress = "正在准备第 \(index + 1)/\(selection.count) 张照片…"
+                        guard let data = try await item.loadTransferable(type: Data.self),
+                              CGImageSourceCreateWithData(data as CFData, nil) != nil else { throw DiaryEditorError.invalidImage }
+                        let url = preparationDirectory.appendingPathComponent(UUID().uuidString)
+                        try data.write(to: url, options: .atomic); files.append(url)
+                    }
+                } catch {
+                    for file in files { try? FileManager.default.removeItem(at: file) }
+                    throw error
+                }
+                onPrepared(files); dismiss(); return
+            }
             var updated = documents
             var replacements: [(UUID, DiaryAsset, UIImage, DiaryPhotoPlacement?)] = []
             // 逐张读取，失败时不提交任何图层修改；已导入的文件暂不被作品引用。
