@@ -184,18 +184,20 @@ struct PresetDownloadCenter: View {
                         }
                         if ["ready", "completed", "cancelled", "paused", "failed"].contains(job.status) {
                             Button("清理资源", role: .destructive) { confirmingRemovalID = job.id }
-                                .confirmationDialog("清理这份预设资源？", isPresented: Binding(
-                                    get: { confirmingRemovalID == job.id },
-                                    set: { if !$0 && confirmingRemovalID == job.id { confirmingRemovalID = nil } }
-                                ), titleVisibility: .visible) {
-                                    Button("清理「\(job.title)」", role: .destructive) { clearDownloads([job.id]) }
-                                    Button("取消", role: .cancel) { confirmingRemovalID = nil }
-                                } message: {
-                                    Text("将删除这条下载记录及本机缓存。其他任务共用的资源会保留；已添加到手帐的页面不受影响。")
-                                }
                         }
                     }.buttonStyle(.borderless)
-                }.padding(.vertical, 6)
+                }.padding(.vertical, 10)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+                    .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                    .confirmationDialog("清理这份预设资源？", isPresented: Binding(
+                        get: { confirmingRemovalID == job.id },
+                        set: { if !$0 && confirmingRemovalID == job.id { confirmingRemovalID = nil } }
+                    ), titleVisibility: .visible) {
+                        Button("清理「\(job.title)」", role: .destructive) { clearDownloads([job.id]) }
+                        Button("取消", role: .cancel) { confirmingRemovalID = nil }
+                    } message: {
+                        Text("将删除这条下载记录及本机缓存。其他任务共用的资源会保留；已添加到手帐的页面不受影响。")
+                    }
             }
         }.navigationTitle("下载管理")
         .task { manager.activate(owner: ownerID) }

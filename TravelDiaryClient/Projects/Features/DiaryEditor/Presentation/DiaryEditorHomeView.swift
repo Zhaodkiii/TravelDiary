@@ -35,6 +35,23 @@ struct DiaryEditorHomeView: View {
                         .contextMenu {
                             Button("删除整本手帐", systemImage: "trash", role: .destructive) { deletingBook = book }
                         }
+                        .confirmationDialog("删除整本手帐？", isPresented: Binding(
+                            get: { deletingBook?.id == book.id },
+                            set: { if !$0 && deletingBook?.id == book.id { deletingBook = nil } }
+                        ), titleVisibility: .visible) {
+                            Button("删除「\(book.title)」", role: .destructive) {
+                                deletingBook = nil
+                                Task {
+                                    do {
+                                        try await DiaryDocumentStore(ownerID: ownerID).deleteBook(book.id)
+                                        await reload()
+                                    } catch { message = error.localizedDescription }
+                                }
+                            }
+                            Button("取消", role: .cancel) { deletingBook = nil }
+                        } message: {
+                            Text("将永久删除这本手帐的所有页面、回收站和素材，无法恢复。预设下载资源会保留。")
+                        }
                     }
                 }.padding()
         }
@@ -55,22 +72,6 @@ struct DiaryEditorHomeView: View {
             }
         }
 
-        .confirmationDialog("删除整本手帐？", isPresented: Binding(get: { deletingBook != nil }, set: { if !$0 { deletingBook = nil } }), titleVisibility: .visible) {
-            if let book = deletingBook {
-                Button("删除「\(book.title)」", role: .destructive) {
-                    deletingBook = nil
-                    Task {
-                        do {
-                            try await DiaryDocumentStore(ownerID: ownerID).deleteBook(book.id)
-                            await reload()
-                        } catch { message = error.localizedDescription }
-                    }
-                }
-            }
-            Button("取消", role: .cancel) { deletingBook = nil }
-        } message: {
-            Text("将永久删除这本手帐的所有页面、回收站和素材，无法恢复。预设下载资源会保留。")
-        }
         .alert("手帐", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
                 Button("确定") { message = nil }
         } message: { Text(message ?? "") }
