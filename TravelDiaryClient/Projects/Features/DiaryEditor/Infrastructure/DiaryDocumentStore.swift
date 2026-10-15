@@ -96,27 +96,29 @@ nonisolated final class DiaryDocumentStore: Sendable {
     }
 
     func importImage(_ data: Data, documentID: UUID) async throws -> (DiaryAsset, UIImage) {
-        try await run {
-            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-                  let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
-                  let height = properties[kCGImagePropertyPixelHeight] as? NSNumber else {
-                throw DiaryEditorError.invalidImage.logged()
-            }
-            let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
-            let swapsAxes = (5...8).contains(orientation)
-            let size = CGSize(width: swapsAxes ? height.doubleValue : width.doubleValue,
-                              height: swapsAxes ? width.doubleValue : height.doubleValue)
-            guard size.width > 0, size.height > 0 else { throw DiaryEditorError.invalidImage.logged() }
-            let image = try Self.decode(data, maximumDimension: 1800)
-            let id = UUID()
-            // 保留选择器提供的源字节；预览和导出解码时统一处理 EXIF，不覆盖源照片。
-            let asset = DiaryAsset(id: id, path: "assets/\(id.uuidString).image", pixelSize: size)
-            let url = self.assetDirectory(documentID).appendingPathComponent(asset.path)
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: url, options: .atomic)
-            return (asset, image)
+        try await run { try self.writeImportedImage(data, documentID: documentID) }
+    }
+
+    private func writeImportedImage(_ data: Data, documentID: UUID) throws -> (DiaryAsset, UIImage) {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+              let height = properties[kCGImagePropertyPixelHeight] as? NSNumber else {
+            throw DiaryEditorError.invalidImage.logged()
         }
+        let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+        let swapsAxes = (5...8).contains(orientation)
+        let size = CGSize(width: swapsAxes ? height.doubleValue : width.doubleValue,
+                          height: swapsAxes ? width.doubleValue : height.doubleValue)
+        guard size.width > 0, size.height > 0 else { throw DiaryEditorError.invalidImage.logged() }
+        let image = try Self.decode(data, maximumDimension: 1800)
+        let id = UUID()
+        // 保留选择器提供的源字节；预览和导出解码时统一处理 EXIF，不覆盖源照片。
+        let asset = DiaryAsset(id: id, path: "assets/\(id.uuidString).image", pixelSize: size)
+        let url = assetDirectory(documentID).appendingPathComponent(asset.path)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url, options: .atomic)
+        return (asset, image)
     }
 
     /// 将应用内预设素材复制到手帐本自己的资源目录，之后页面不再依赖 Bundle 路径。
@@ -579,7 +581,7 @@ extension DiaryDocumentStore {
     /// 完整准备页面后一次发布目录。新本以目录移动发布，旧本以 book.json 原子写发布。
     /// operationID 由一次用户意图产生，错误重试沿用；已发布操作直接返回原结果。
     func importPreset(_ package: DiaryPresetPackage, pageIDs: [String], title: String,
-                      operationID: UUID, afterPageID: UUID? = nil, expectedRevision: UUID? = nil,
+                      operationID: UUID, replacementPhotos: [URL] = [], afterPageID: UUID? = nil, expectedRevision: UUID? = nil,
                       progress: @escaping @Sendable (String) -> Void = { _ in },
                       cancellation: DiaryPresetCancellation? = nil) async throws -> DiaryBook {
         try await run {
@@ -635,10 +637,11 @@ extension DiaryDocumentStore {
             let target = DiaryDocumentStore(ownerID: "preset-staging", baseDirectory: staging, bookID: destinationID)
             let assetIDs = Dictionary(uniqueKeysWithValues: package.manifest.assetTable.keys.map { ($0, UUID()) })
             var copied = Set<UUID>(); var entries: [DiaryPageEntry] = []
+            var photoIndex = 0
             for (index, page) in selected.enumerated() {
                 try cancellation?.check()
                 progress("正在准备第 \(index + 1) / \(selected.count) 页…")
-                let document = try package.instantiate(page, bookID: destinationID, targetSize: book.defaultPageSize, assetIDs: assetIDs)
+                var document = try package.instantiate(page, bookID: destinationID, targetSize: book.defaultPageSize, assetIDs: assetIDs)
                 for (key, source) in package.manifest.assetTable {
                     guard let id = assetIDs[key], document.assets[id] != nil, copied.insert(id).inserted else { continue }
                     let data = try Data(contentsOf: package.url(source.path))
@@ -652,12 +655,20 @@ extension DiaryDocumentStore {
                     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try data.write(to: url, options: .atomic)
                 }
+                for layer in document.replaceablePhotos() where photoIndex < replacementPhotos.count {
+                    let data = try Data(contentsOf: replacementPhotos[photoIndex])
+                    let (asset, _) = try target.writeImportedImage(data, documentID: document.id)
+                    document.replacePhoto(layer.id, with: asset)
+                    copied.insert(asset.id)
+                    photoIndex += 1
+                }
                 let path = try target.writeSnapshot(document, prefix: "revisions", directory: target.directory(document.id))
                 let revision = UUID(uuidString: String(path.split(separator: "/")[1]))!
                 var entry = DiaryPageEntry(id: document.id, title: page.title, revisionID: revision, size: book.defaultPageSize)
                 entry.presetSource = DiaryPresetSource(bookID: package.id, pageID: page.id, version: package.manifest.packageVersion)
                 entries.append(entry)
             }
+            guard photoIndex == replacementPhotos.count else { throw DiaryEditorError.invalidDocument.logged() }
             let insertion = afterPageID.flatMap { id in book.pages.firstIndex { $0.id == id }.map { $0 + 1 } } ?? book.pages.count
             book.pages.insert(contentsOf: entries, at: insertion)
             if isNew {

@@ -110,6 +110,50 @@ struct DiaryPresetTests {
         let error = zip(a,b).reduce(0.0) { $0 + abs(Double($1.0) - Double($1.1)) } / Double(a.count) / 255
         #expect(error < 0.035, "平均像素误差 \(error)")
     }
+    @Test func creationReplacesOnlySelectedPhotosAndRetriesWithoutDuplication() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let p = try twoPageFixture(in: base)
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 48)).image { context in
+            UIColor.red.setFill(); context.fill(CGRect(x: 0, y: 0, width: 32, height: 48))
+        }
+        let photo = base.appendingPathComponent("selected.png")
+        try #require(image.pngData()).write(to: photo)
+        let store = DiaryDocumentStore(ownerID: "owner", baseDirectory: base)
+        let operation = UUID()
+        let book = try await store.importPreset(p, pageIDs: p.manifest.pages.map(\.id), title: "选图创建",
+                                               operationID: operation, replacementPhotos: [photo])
+        let local = DiaryDocumentStore(ownerID: "owner", baseDirectory: base, bookID: book.id)
+        let first = try await local.load(book.pages[0].id)
+        let second = try await local.load(book.pages[1].id)
+        let replaced = try #require(first.document.replaceablePhotos().first)
+        let retained = try #require(second.document.replaceablePhotos().first)
+        let replacedAssetID = try #require(replaced.assetID)
+        let asset = try #require(first.document.assets[replacedAssetID])
+        #expect(asset.pixelSize == CGSize(width: 32, height: 48))
+        #expect(replaced.assetID != retained.assetID)
+        #expect(first.document.replaceablePhotos().count == second.document.replaceablePhotos().count)
+        let retry = try await store.importPreset(p, pageIDs: p.manifest.pages.map(\.id), title: "选图创建",
+                                                operationID: operation, replacementPhotos: [photo])
+        #expect(retry.id == book.id)
+        #expect(try await store.listBooks().count == 1)
+    }
+
+    @Test func invalidCreationPhotoDoesNotPublishBook() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let p = try twoPageFixture(in: base)
+        let photo = base.appendingPathComponent("invalid.image")
+        try Data("invalid image".utf8).write(to: photo)
+        let store = DiaryDocumentStore(ownerID: "owner", baseDirectory: base)
+        do {
+            _ = try await store.importPreset(p, pageIDs: p.manifest.pages.map(\.id), title: "失败创建",
+                                             operationID: UUID(), replacementPhotos: [photo])
+            Issue.record("无效照片不应创建成功")
+        } catch { }
+        #expect(try await store.listBooks().isEmpty)
+    }
+
     private func twoPageFixture(in base: URL) throws -> DiaryPresetPackage {
         let source = try package()
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)

@@ -7,9 +7,6 @@ struct DiaryEditorHomeView: View {
     @Binding var creating: Bool
     @State private var books: [DiaryBook] = []
     @State private var createdBookID: UUID?
-    @State private var title = "未命名手帐"
-    @State private var pagePreset: DiaryPagePreset = .a5
-    @State private var busy = false
     @State private var message: String?
 
     var body: some View {
@@ -37,7 +34,6 @@ struct DiaryEditorHomeView: View {
                     }
                 }.padding()
         }
-        .onChange(of: creating) { _, presented in if presented { pagePreset = .a5 } }
         .task { await reload(); _ = try? await Task.detached { try BundleDiaryPresetProvider().catalog() }.value }
         .onAppear { Task { await reload() } }
         .refreshable { await reload() }
@@ -48,32 +44,13 @@ struct DiaryEditorHomeView: View {
                 path.append(DiaryBookRoute(bookID: id))
             }
         }) {
-                NavigationStack {
-                    Form {
-                        TextField("手帐名称", text: $title)
-                        Picker("画布尺寸", selection: $pagePreset) {
-                            ForEach(DiaryPagePreset.allCases) { preset in
-                                Text(preset.title).tag(preset)
-                            }
-                        }
-                        if pagePreset == .a5 {
-                            Text("1748 × 2480 px · 148 × 210 mm · 300 DPI")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Text("默认透明背景；一本内页面保持相同尺寸。名称最多 60 个字符。")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    .navigationTitle("新建手帐本")
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) { Button("取消") { creating = false }.disabled(busy) }
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("创建") { Task { await create() } }
-                                .disabled(busy || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || title.count > 60)
-                        }
-                    }
-                    .interactiveDismissDisabled(busy)
-                }
+            DiaryCreateBookSheet(ownerID: ownerID) { book in
+                books.insert(book, at: 0)
+                createdBookID = book.id
+                creating = false
+            }
         }
+
         .alert("手帐", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
                 Button("确定") { message = nil }
         } message: { Text(message ?? "") }
@@ -82,15 +59,7 @@ struct DiaryEditorHomeView: View {
         do { books = try await DiaryDocumentStore(ownerID: ownerID).listBooks() }
         catch { message = error.localizedDescription }
     }
-    private func create() async {
-        guard !busy else { return }; busy = true
-        defer { busy = false }
-        do {
-            let book = try await DiaryDocumentStore(ownerID: ownerID).createBook(title: title, preset: pagePreset)
-            books.insert(book, at: 0); createdBookID = book.id; creating = false
-            title = "未命名手帐"; pagePreset = .a5
-        } catch { message = error.localizedDescription }
-    }
+
 }
 
 /// 卡片以版本作为任务身份。复用或滚出屏幕后，取消任务不会把旧结果贴到别的页面。

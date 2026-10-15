@@ -133,7 +133,7 @@ extension DiaryDocument {
     }
 
     /// 稳定 ID 定位，不将数组下标当作图层身份。
-    mutating func update(_ id: UUID, _ mutation: (inout DiaryLayer) -> Void) {
+    nonisolated mutating func update(_ id: UUID, _ mutation: (inout DiaryLayer) -> Void) {
         for contentID in Array(objects.keys) {
             guard let index = objects[contentID]?.layers.firstIndex(where: { $0.id == id }) else { continue }
             mutation(&objects[contentID]!.layers[index]); return
@@ -159,7 +159,7 @@ extension DiaryLayer {
 extension DiaryDocument {
     /// 顺序固定为页面图层从底到顶、组合深度优先；同一资源的不同实例分别计数。
     /// 隐藏或锁定的整组跳过，避免改动用户明确保护的内容。
-    func replaceablePhotos() -> [DiaryLayer] {
+    nonisolated func replaceablePhotos() -> [DiaryLayer] {
         var result: [DiaryLayer] = []
         var visited = Set<UUID>()
         func visit(_ id: UUID) {
@@ -174,7 +174,7 @@ extension DiaryDocument {
     }
 
     /// 保留原框、锚点、角度、拉伸和层级，仅换资源及其取景方式。
-    mutating func replacePhoto(_ id: UUID, with asset: DiaryAsset, placement: DiaryPhotoPlacement? = nil) {
+    nonisolated mutating func replacePhoto(_ id: UUID, with asset: DiaryAsset, placement: DiaryPhotoPlacement? = nil) {
         assets[asset.id] = asset
         update(id) { layer in
             layer.assetID = asset.id

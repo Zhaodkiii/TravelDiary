@@ -367,6 +367,7 @@ private struct DiaryBookPaper: View {
     let left: Bool
     let insideCover: Bool
     var body: some View {
+        GeometryReader { geometry in
         ZStack {
             Color(red: 0.96, green: 0.92, blue: 0.82)
             if insideCover {
@@ -383,6 +384,11 @@ private struct DiaryBookPaper: View {
                     .frame(width: 18)
                 if !left { Spacer(minLength: 0) }
             }.allowsHitTesting(false)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(width: geometry.size.width * (1 - DiaryBookSpine.halfGapFraction), height: geometry.size.height)
+        .clipped()
+        .shadow(color: .black.opacity(0.35), radius: 1.5, x: left ? 1.5 : -1.5)
+        .frame(width: geometry.size.width, height: geometry.size.height, alignment: left ? .leading : .trailing)
+        }
     }
 }

@@ -78,7 +78,7 @@ struct DiaryPresetLibraryScreen: View {
         }
     }
 }
-private struct DiaryPresetCover: View {
+struct DiaryPresetCover: View {
     let package: DiaryPresetPackage
     @State private var page: PresetPage?
     var body: some View {

@@ -22,7 +22,7 @@ struct DiaryBookOpeningStage<Pages: View>: View, Animatable {
         let closedHeight = closedWidth / coverRatio
         // 外沿占单侧外壳宽度的 4.5%；内页宽高仍严格遵循内容页比例。
         let rimFraction: CGFloat = 0.045
-        let openHeightPerWidth = (1 - rimFraction) / paperRatio + 2 * rimFraction
+        let openHeightPerWidth = (1 - rimFraction) * (1 - DiaryBookSpine.halfGapFraction) / paperRatio + 2 * rimFraction
         let openWidth = min(max(viewport.width - 24, 1) / 2,
                             max(viewport.height - 24, 1) / openHeightPerWidth)
         let openHeight = openWidth * openHeightPerWidth
@@ -33,17 +33,20 @@ struct DiaryBookOpeningStage<Pages: View>: View, Animatable {
         ZStack(alignment: .topLeading) {
             // 后壳略大于纸张；合上时被原始封面完整遮住。
             ZStack(alignment: .topLeading) {
-                Image("DiaryBookLeather").resizable()
-                    .frame(width: width, height: height)
-                    .position(x: spine + width / 2, y: viewport.height / 2)
                 if p >= 0.9999 {
                     Image("DiaryBookLeather").resizable()
+                        .frame(width: width * 2, height: height)
+                        .position(x: spine, y: viewport.height / 2)
+                } else {
+                    DiaryBookBackingHalf(left: false)
                         .frame(width: width, height: height)
-                        .position(x: spine - width / 2, y: viewport.height / 2)
-                } else if let firstPage {
+                        .position(x: spine + width / 2, y: viewport.height / 2)
+                }
+                if p < 0.9999, let firstPage {
                     DiaryPagePreview(page: firstPage, store: store, large: true, undecorated: true)
-                        .frame(width: width - rim, height: height - 2 * rim)
-                        .position(x: spine + (width - rim) / 2, y: viewport.height / 2)
+                        .frame(width: (width - rim) * (1 - DiaryBookSpine.halfGapFraction), height: height - 2 * rim)
+                        .clipped()
+                        .position(x: spine + (width - rim) * (1 + DiaryBookSpine.halfGapFraction) / 2, y: viewport.height / 2)
                 }
             }
             .frame(width: viewport.width, height: viewport.height)
@@ -54,6 +57,12 @@ struct DiaryBookOpeningStage<Pages: View>: View, Animatable {
             }
             // 闭合只显示原始封面，避免比例不同的内页从上下边缘露出。
             .opacity(min(p / 0.12, 1))
+            LinearGradient(colors: [.black.opacity(0.12), .black.opacity(0.48), .black.opacity(0.12)],
+                           startPoint: .leading, endPoint: .trailing)
+                .frame(width: 2 * (width - rim) * DiaryBookSpine.halfGapFraction, height: height - 2 * rim)
+                .position(x: spine, y: viewport.height / 2)
+                .opacity(min(p / 0.12, 1))
+                .allowsHitTesting(false)
             // 卷页控制器常驻并预载，避免动画完成时重新创建造成闪屏。
             pages()
                 .frame(width: 2 * (width - rim), height: height - 2 * rim)
@@ -69,7 +78,7 @@ struct DiaryBookOpeningStage<Pages: View>: View, Animatable {
                             DiaryPagePreview(page: cover, store: store, large: true, undecorated: true)
                         }
                     } else {
-                        Image("DiaryBookLeather").resizable()
+                        DiaryBookBackingHalf(left: true)
                             .overlay { DiaryBookLining().padding(rim) }
                             .rotation3DEffect(.degrees(180), axis: (x: 0, y: 1, z: 0))
                     }
@@ -82,4 +91,21 @@ struct DiaryBookOpeningStage<Pages: View>: View, Animatable {
         }
         .frame(width: viewport.width, height: viewport.height)
     }
+}
+
+/// 开合动画从同一张完整底板取左右半面，书脊处不会出现额外圆角或缝线。
+private struct DiaryBookBackingHalf: View {
+    let left: Bool
+    var body: some View {
+        GeometryReader { geometry in
+            Image("DiaryBookLeather").resizable()
+                .frame(width: geometry.size.width * 2, height: geometry.size.height)
+                .offset(x: left ? 0 : -geometry.size.width)
+        }.clipped()
+    }
+}
+
+/// 每张纸在书脊侧留出 1.8% 宽度，左右合成一条可见的装订缝。
+enum DiaryBookSpine {
+    static let halfGapFraction: CGFloat = 0.018
 }
