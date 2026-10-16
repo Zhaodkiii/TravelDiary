@@ -27,11 +27,7 @@ struct DiaryBookScreen: View {
     @State private var pageFrames: [UUID: CGRect] = [:]
     @State private var orderBeforeDrag: DiaryBook?
     @State private var dragStartPoint = CGPoint.zero
-    @State private var pdfTask: Task<Void, Never>?
-    @State private var pdfProgress: Int?
-    @State private var pdfTotal = 0
-    @State private var exportedPDF: DiaryBookPDFExport?
-    @State private var showingPDF = false
+    @State private var showingExport = false
 
     init(ownerID: String, book: DiaryBook) {
         self.ownerID = ownerID
@@ -106,7 +102,7 @@ struct DiaryBookScreen: View {
             } label: { Image(systemName: "book") }
                 .disabled(book.pages.isEmpty).accessibilityLabel("阅读整本")
             Menu {
-                Button("整本导出 PDF", systemImage: "doc.richtext") { exportPDF() }
+                Button("导出手帐", systemImage: "square.and.arrow.up") { showingExport = true }
                     .disabled(book.pages.isEmpty || draggingPage != nil)
                 Button("一键替换照片", systemImage: "photo.on.rectangle.angled") { replacingPhotos = true }
                     .disabled(book.pages.isEmpty)
@@ -123,20 +119,12 @@ struct DiaryBookScreen: View {
                 Button("最近删除（\(book.trashedPages.count)）") { showingTrash = true }
             } label: { Image(systemName: "ellipsis.circle") }
         }
-        .disabled(busy || pdfProgress != nil)
+        .disabled(busy)
         .overlay {
-            if let progress = pdfProgress {
-                VStack(spacing: 12) {
-                    ProgressView(value: Double(progress), total: Double(max(1, pdfTotal)))
-                    Text("正在导出 PDF · \(progress)/\(pdfTotal) 页").font(.subheadline)
-                    Button("取消导出") { pdfTask?.cancel() }
-                }.padding(20).frame(width: 260)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-            } else if busy {
+            if busy {
                 ProgressView("正在准备页面…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
         }
-        .onDisappear { pdfTask?.cancel() }
         .task { await refresh() }
         .photosPicker(isPresented: $pickingPhoto, selection: $photo, matching: .images)
         .onChange(of: photo) { _, value in
@@ -167,13 +155,8 @@ struct DiaryBookScreen: View {
                 book = updated
             }
         }
+        .sheet(isPresented: $showingExport) { DiaryBookExportSheet(book: book, store: store) }
         .sheet(isPresented: $showingTrash) { trashPanel }
-        .sheet(isPresented: $showingPDF, onDismiss: {
-            if let exportedPDF { DiaryBookPDFExporter.discard(exportedPDF) }
-            exportedPDF = nil
-        }) {
-            if let exportedPDF { DiaryBookPDFPreview(export: exportedPDF) }
-        }
         .alert("手帐", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("确定") { message = nil }
         } message: { Text(message ?? "") }
@@ -304,23 +287,6 @@ struct DiaryBookScreen: View {
     private func refresh() async {
         do { book = try await store.loadBook() }
         catch { message = error.localizedDescription }
-    }
-    private func exportPDF() {
-        guard !busy, pdfProgress == nil, draggingPage == nil, !book.pages.isEmpty else { return }
-        pdfProgress = 0; pdfTotal = book.pages.count
-        pdfTask = Task { @MainActor in
-            defer { pdfProgress = nil; pdfTask = nil }
-            do {
-                // 捕获当前已保存的页序和版本；导出期间其他入口保存不会混入这份 PDF。
-                let snapshot = try await store.loadBook()
-                let result = try await DiaryBookPDFExporter.export(book: snapshot, store: store) { done, total in
-                    pdfProgress = done; pdfTotal = total
-                }
-                if Task.isCancelled { DiaryBookPDFExporter.discard(result); return }
-                exportedPDF = result; showingPDF = true
-            } catch is CancellationError { }
-            catch { message = error.localizedDescription }
-        }
     }
     private func perform(_ operation: @escaping @MainActor () async throws -> Void) {
         guard !busy else { return }

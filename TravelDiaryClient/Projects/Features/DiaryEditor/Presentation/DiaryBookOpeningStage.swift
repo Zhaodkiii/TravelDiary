@@ -63,10 +63,10 @@ struct DiaryBookOpeningStage<Pages: View>: View, Animatable {
                 .position(x: spine, y: viewport.height / 2)
                 .opacity(min(p / 0.12, 1))
                 .allowsHitTesting(false)
-            // 卷页控制器常驻并预载，避免动画完成时重新创建造成闪屏。
+            // 卷页控制器常驻并预载。纸张弯曲时必须能伸出静止纸面的边界，
+            // 仅后壳保留 mask；这里裁剪会把卷页和阴影切在外皮内侧。
             pages()
                 .frame(width: 2 * (width - rim), height: height - 2 * rim)
-                .clipped()
                 .position(x: spine, y: viewport.height / 2)
                 .opacity(p >= 0.9999 ? 1 : 0)
                 .allowsHitTesting(p >= 0.9999)

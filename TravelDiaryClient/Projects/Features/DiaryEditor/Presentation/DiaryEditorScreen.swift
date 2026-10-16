@@ -1,5 +1,4 @@
 import SwiftUI
-import PhotosUI
 
 /// 主编辑页面只组织工具与状态；数据修改和保存均交给 Session。
 struct DiaryEditorScreen: View {
@@ -7,17 +6,12 @@ struct DiaryEditorScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var childEditor: DiaryEditorSession?
-    @State private var photoItem: PhotosPickerItem?
-    @State private var replacementID: UUID?
-    @State private var showPhotoPicker = false
+    @State private var showPhotos = false
     @State private var showText = false
     @State private var showCrop = false
     @State private var showLayers = false
     @State private var showDrawing = false
-    @State private var replacingPhotos = false
     @State private var showStickers = false
-    @State private var exportURL: URL?
-    @State private var confirmFontFallbackExport = false
     @State private var textLayer: DiaryLayer?
 
     var body: some View {
@@ -28,26 +22,10 @@ struct DiaryEditorScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { editorToolbar }
             .overlay { if session.busy { ProgressView("正在处理…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
-            .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
-            .onChange(of: photoItem) { _, item in
-                guard let item else { return }
-                let target = replacementID
-                Task {
-                    do {
-                        guard let data = try await item.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage.logged() }
-                        await session.importPhoto(data, replacing: target)
-                    } catch { session.errorMessage = error.localizedDescription }
-                    photoItem = nil
-                }
-            }
             .fullScreenCover(item: $childEditor) { child in
                 AnyView(DiaryEditorScreen(session: child))
             }
-            .confirmationDialog("部分文字的字体暂不可用，使用系统字体导出可能改变排版。", isPresented: $confirmFontFallbackExport, titleVisibility: .visible) {
-                Button("使用替代字体导出") { Task { exportURL = await session.export() } }
-                Button("取消", role: .cancel) { }
-            }
-            .sheet(isPresented: $replacingPhotos) { DiaryBatchPhotoSheet(store: session.store, session: session) }
+            .sheet(isPresented: $showPhotos) { DiaryPhotoManagerSheet(session: session) }
             .sheet(isPresented: $showText) { DiaryTextEditorSheet(session: session, layer: textLayer) }
             .fullScreenCover(isPresented: $showCrop) {
                 if let layer = session.selected { DiaryCropSheet(session: session, layer: layer) }
@@ -58,21 +36,6 @@ struct DiaryEditorScreen: View {
                 DiaryDrawingSheet(session: session)
                     .presentationDetents([.large])
                     .interactiveDismissDisabled()
-            }
-            .sheet(isPresented: Binding(get: { exportURL != nil }, set: { if !$0 { exportURL = nil } })) {
-                if let exportURL {
-                    NavigationStack {
-                        VStack(spacing: 20) {
-                            Image(systemName: "checkmark.circle.fill").font(.largeTitle).foregroundStyle(.green)
-                            Text("已生成 PNG 图片（保留透明区域）")
-                            ShareLink(item: exportURL) { Label("分享或保存图片", systemImage: "square.and.arrow.up") }
-                                .buttonStyle(.borderedProminent)
-                        }
-                        .navigationTitle("导出完成")
-                        .toolbar { Button("完成") { self.exportURL = nil } }
-                    }
-                    .presentationDetents([.medium])
-                }
             }
             .alert("手帐", isPresented: Binding(get: { session.errorMessage != nil }, set: { if !$0 { session.errorMessage = nil } })) {
                 Button("确定") { session.errorMessage = nil }
@@ -95,22 +58,11 @@ struct DiaryEditorScreen: View {
             .disabled(session.busy)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
-            if session.isRoot {
-                Button("一键替换", systemImage: "photo.on.rectangle.angled") { replacingPhotos = true }
-                    .disabled(session.busy)
-            }
             Button { session.undo() } label: { Image(systemName: "arrow.uturn.backward") }
                 .disabled(session.undoStack.isEmpty || session.busy).accessibilityLabel("撤销")
             Button { session.redo() } label: { Image(systemName: "arrow.uturn.forward") }
                 .disabled(session.redoStack.isEmpty || session.busy).accessibilityLabel("重做")
-//            Button {
-//                let missingFont = session.document.objects.values.flatMap(\.layers).contains {
-//                    $0.kind == .text && !DiaryFontCatalog.shared.available($0.font)
-//                }
-//                if missingFont { confirmFontFallbackExport = true }
-//                else { Task { exportURL = await session.export() } }
-//            } label: { Image(systemName: "square.and.arrow.up") }
-//                .disabled(session.busy).accessibilityLabel("导出图片")
+
         }
     }
 
@@ -177,7 +129,7 @@ struct DiaryEditorScreen: View {
 //            }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 18) {
-                        Button { replacementID = nil; showPhotoPicker = true } label: { Label("照片", systemImage: "photo") }
+                        Button { session.finishInteraction(); showPhotos = true } label: { Label("照片", systemImage: "photo") }
                         Button { session.select(nil); openText() } label: { Label("文字", systemImage: "textformat") }
                         Button { showStickers = true } label: { Label("贴纸", systemImage: "face.smiling") }
                         Button { session.finishInteraction(); session.select(nil); session.inkMode = true; showDrawing = true } label: { Label("画笔", systemImage: "pencil.tip") }

@@ -27,6 +27,65 @@ private struct RemotePresetSelection: Identifiable, Hashable {
     let wholeBook: Bool
 }
 
+struct RemotePresetReaderDestination: View {
+    let ownerID: String
+    let book: RemotePresetBook
+    let seriesTitle: String
+    let targetBook: DiaryBook?
+    let afterPageID: UUID?
+    var fixedTarget = false
+    let onImported: (DiaryBook) -> Void
+    @State private var browse: RemotePresetBrowse?
+    @State private var pages: [RemotePresetPage] = []
+    @State private var error: String?
+    @State private var retry = 0
+    @State private var selection: RemotePresetSelection?
+
+    var body: some View {
+        Group {
+            if let browse {
+                DiaryPresetBookReader<RemotePresetDetailScreen>(title: browse.title,
+                    pages: pages.compactMap { page in
+                        guard let url = URL(string: page.preview_url) else { return nil }
+                        return DiaryPresetBookReader<RemotePresetDetailScreen>.Page(id: page.id, url: url, size: browse.page_size.cg,
+                            thumbnailURL: URL(string: page.thumbnail_url))
+                    }, shellID: browse.shell_page_id, seriesTitle: seriesTitle,
+                    allowsWholeBook: !fixedTarget, onAdd: { ids, whole in
+                        selection = RemotePresetSelection(pageIDs: ids, wholeBook: whole)
+                    }) {
+                        RemotePresetDetailScreen(ownerID: ownerID, book: book, targetBook: targetBook,
+                            afterPageID: afterPageID, fixedTarget: fixedTarget, onImported: onImported)
+                    }
+            } else if let error {
+                VStack { Text(error); Button("重试") { retry += 1 } }.padding()
+            } else { ProgressView("正在打开预设…") }
+        }.sheet(item: $selection) { value in
+            RemotePresetImportDestination(ownerID: ownerID, book: book, pageIDs: value.pageIDs,
+                wholeBook: value.wholeBook, targetBook: value.wholeBook ? nil : targetBook,
+                afterPageID: afterPageID, fixedTarget: fixedTarget,
+                previewPage: pages.first { $0.id == value.pageIDs.first },
+                previewSize: browse?.page_size.cg ?? CGSize(width: 1, height: 1.4)) { result in
+                    selection = nil; onImported(result)
+                }
+        }.safeAreaInset(edge: .bottom) {
+            if browse != nil, let error {
+                VStack { Text(error).font(.caption); Button("重试") { retry += 1 } }.padding()
+            }
+        }.task(id: retry) {
+            do {
+                error = nil
+                repeat {
+                    let value = try await PresetDownloadManager.shared.browse(book, ownerID: ownerID)
+                    try Task.checkCancellation()
+                    pages = value.pages; browse = value
+                    try await Task.sleep(for: .seconds(max(5, value.expires_at - Date().timeIntervalSince1970)))
+                } while !Task.isCancelled
+            } catch is CancellationError { }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
 struct RemotePresetDetailScreen: View {
     let ownerID: String
     let book: RemotePresetBook
@@ -34,46 +93,42 @@ struct RemotePresetDetailScreen: View {
     let afterPageID: UUID?
     var fixedTarget = false
     let onImported: (DiaryBook) -> Void
-    @ObservedObject private var downloads = PresetDownloadManager.shared
+    private let downloads = PresetDownloadManager.shared
+    @ObservedObject private var availability = PresetDownloadManager.shared.availability
     @State private var pages: [RemotePresetPage] = []
-    @State private var manifest: PresetManifest?
-    @State private var pageData: [PresetPage] = []
+    @State private var browse: RemotePresetBrowse?
     @State private var error: String?
+    @State private var retry = 0
     @State private var previewID: String?
     @State private var showingPreview = false
     @State private var selection: RemotePresetSelection?
-    private var placeholderPackage: DiaryPresetPackage? {
-        manifest.map { DiaryPresetPackage(root: FileManager.default.temporaryDirectory.appendingPathComponent("remote-metadata"), manifest: $0) }
-    }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if let manifest {
+                if let browse {
                     HStack {
-                        Text("\(pages.count) 页 · \(Int(manifest.pageSize.width)) × \(Int(manifest.pageSize.height))")
-                        PresetBookAvailabilityBadge(downloadedCount: min(book.page_count, downloads.downloadedPageIDs(bookID: book.id, version: book.version).count), totalCount: book.page_count)
+                        Text("\(pages.count) 页 · \(Int(browse.page_size.width)) × \(Int(browse.page_size.height))")
+                        PresetBookAvailabilityBadge(downloadedCount: min(book.page_count, availability.downloadedPageIDs(bookID: book.id, version: book.version).count), totalCount: book.page_count)
                     }
                     if !fixedTarget {
                         Button("整本添加到我的") {
                             selection = RemotePresetSelection(pageIDs: pages.map(\.id), wholeBook: true)
                         }.buttonStyle(.borderedProminent)
                     }
-                    DiaryPageListGrid(pages: pageData, shellID: manifest.shellPageID, coverID: manifest.coverPageID) { page in
-                        if let remote = pages.first(where: { $0.id == page.id }) {
-                            VStack {
-                                Button { previewID = page.id; showingPreview = true } label: {
-                                    remoteImage(remote.thumbnail_url, size: page.size.cg)
-                                }
-                                HStack {
-                                    Text(page.title).font(.caption)
-                                    PresetAvailabilityBadge(downloaded: downloads.hasDownloadedPage(bookID: book.id, version: book.version, pageID: page.id))
-                                }
-                                Button("使用这一页") { selection = RemotePresetSelection(pageIDs: [page.id], wholeBook: false) }
+                    DiaryPageListGrid(pages: pages, shellID: browse.shell_page_id, coverID: browse.cover_page_id) { page in
+                        VStack {
+                            Button { previewID = page.id; showingPreview = true } label: {
+                                remoteImage(page.thumbnail_url, size: browse.page_size.cg)
                             }
+                            HStack {
+                                Text(page.title).font(.caption)
+                                PresetAvailabilityBadge(downloaded: availability.hasDownloadedPage(bookID: book.id, version: book.version, pageID: page.id))
+                            }
+                            Button("使用这一页") { selection = RemotePresetSelection(pageIDs: [page.id], wholeBook: false) }
                         }
                     }
                 } else if error == nil { ProgressView("正在读取预设…") }
-                if let error { Text(error).foregroundStyle(.red); Button("重试") { Task { await load() } } }
+                if let error { Text(error).foregroundStyle(.red); Button("重试") { retry += 1 } }
             }.padding()
         }.navigationTitle(book.title)
         .toolbar {
@@ -81,14 +136,14 @@ struct RemotePresetDetailScreen: View {
                 Image(systemName: "arrow.down.circle").accessibilityLabel("下载管理")
             }
         }
-        .task { await load() }
+        .task(id: retry) { await load() }
         .fullScreenCover(isPresented: $showingPreview) {
             NavigationStack {
                 TabView(selection: $previewID) {
                     ForEach(pages) { page in
                         VStack {
                             if abs((pages.firstIndex { $0.id == page.id } ?? 0) - (pages.firstIndex { $0.id == previewID } ?? 0)) <= 1 {
-                                remoteImage(page.preview_url, size: manifest?.pageSize.cg ?? CGSize(width: 1, height: 1.4))
+                                remoteImage(page.thumbnail_url, size: browse?.page_size.cg ?? CGSize(width: 1, height: 1.4))
                             } else { Color.clear }
                             Text(page.title)
                         }.padding().tag(Optional(page.id))
@@ -107,13 +162,13 @@ struct RemotePresetDetailScreen: View {
             importPage(value)
         }
     }
-    @ViewBuilder private func importPage(_ value: RemotePresetSelection) -> some View {
-            if let package = placeholderPackage {
-                DiaryPresetImportSheet(ownerID: ownerID, package: package, pageIDs: value.pageIDs,
-                    defaultTarget: value.wholeBook ? nil : targetBook, wholeBook: value.wholeBook,
-                    defaultAfterPageID: afterPageID, remoteBook: book, fixedTarget: fixedTarget) { result in
-                        selection = nil; onImported(result)
-                    }
+    private func importPage(_ value: RemotePresetSelection) -> some View {
+        RemotePresetImportDestination(ownerID: ownerID, book: book, pageIDs: value.pageIDs,
+            wholeBook: value.wholeBook, targetBook: value.wholeBook ? nil : targetBook,
+            afterPageID: afterPageID, fixedTarget: fixedTarget,
+            previewPage: pages.first(where: { $0.id == value.pageIDs.first }),
+            previewSize: browse?.page_size.cg ?? CGSize(width: 1, height: 1.4)) { result in
+                selection = nil; onImported(result)
             }
     }
     private func remoteImage(_ raw: String, size: CGSize) -> some View {
@@ -129,10 +184,86 @@ struct RemotePresetDetailScreen: View {
     private func load() async {
         error = nil
         do {
-            struct Detail: Decodable { let manifest: PresetManifest; let page_data: [PresetPage]; let pages: [RemotePresetPage] }
-            let value = try JSONDecoder().decode(Detail.self, from: await downloads.request("templates/\(book.id)/\(book.version)/"))
-            manifest = value.manifest; pageData = value.page_data; pages = value.pages
-        } catch { self.error = error.localizedDescription }
+            repeat {
+                let value = try await downloads.browse(book, ownerID: ownerID)
+                try Task.checkCancellation()
+                browse = value; pages = value.pages
+                try await Task.sleep(for: .seconds(max(5, value.expires_at - Date().timeIntervalSince1970)))
+            } while !Task.isCancelled
+        } catch is CancellationError { }
+        catch { self.error = error.localizedDescription }
+    }
+}
+
+/// Reuses the browsing thumbnail while editable resources are being prepared.
+struct RemotePresetLoadingPreview: View {
+    let page: RemotePresetPage
+    let size: CGSize
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AsyncImage(url: URL(string: page.thumbnail_url)) { phase in
+                switch phase {
+                case .success(let image): image.resizable().scaledToFit()
+                case .failure: Color.gray.opacity(0.1).overlay { Image(systemName: "photo") }
+                default: Color.gray.opacity(0.1).overlay { ProgressView() }
+                }
+            }.aspectRatio(size.width / max(1, size.height), contentMode: .fit)
+            Text(page.title).font(.headline)
+        }
+    }
+}
+
+/// Prefer local resources; otherwise prepare only the selected download plan.
+private struct RemotePresetImportDestination: View {
+    let ownerID: String
+    let book: RemotePresetBook
+    let pageIDs: [String]
+    let wholeBook: Bool
+    let targetBook: DiaryBook?
+    let afterPageID: UUID?
+    let fixedTarget: Bool
+    let previewPage: RemotePresetPage?
+    let previewSize: CGSize
+    let onImported: (DiaryBook) -> Void
+    @State private var preparation: PresetImportPreparation?
+    @State private var error: String?
+    @State private var retry = 0
+
+    var body: some View {
+        Group {
+            if let preparation {
+                DiaryPresetImportSheet(ownerID: ownerID, package: preparation.package, pageIDs: pageIDs,
+                    defaultTarget: targetBook, wholeBook: wholeBook, defaultAfterPageID: afterPageID,
+                    remoteBook: preparation.downloadID == nil ? nil : book,
+                    initialDownloadID: preparation.downloadID, loadingPreview: previewPage,
+                    loadingPreviewSize: previewSize, fixedTarget: fixedTarget, completed: onImported)
+            } else {
+                NavigationStack {
+                    ScrollView {
+                        VStack(spacing: 16) {
+                            if let previewPage {
+                                RemotePresetLoadingPreview(page: previewPage, size: previewSize)
+                            }
+                            if let error {
+                                Text(error).foregroundStyle(.red)
+                                Button("重试") { retry += 1 }
+                            } else {
+                                ProgressView("正在获取所选页面资源清单…")
+                            }
+                        }.padding()
+                    }.navigationTitle(wholeBook ? "添加预设" : "添加单页")
+                }
+            }
+        }.task(id: retry) {
+            error = nil
+            do {
+                let value = try await PresetDownloadManager.shared.prepareImport(book: book,
+                    pageIDs: pageIDs, wholeBook: wholeBook, ownerID: ownerID)
+                try Task.checkCancellation()
+                preparation = value
+            } catch is CancellationError { }
+            catch { self.error = error.localizedDescription }
+        }
     }
 }
 

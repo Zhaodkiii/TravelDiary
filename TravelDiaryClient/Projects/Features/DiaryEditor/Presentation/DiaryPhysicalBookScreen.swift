@@ -18,6 +18,7 @@ struct DiaryPhysicalBookScreen: View {
     @State private var pickingPhoto = false
     @State private var photo: PhotosPickerItem?
     @State private var choosingPreset = false
+    @State private var showingExport = false
     private var innerPages: [DiaryPageEntry] { book.contentPages }
     private var contentSpreadCount: Int { (innerPages.count + 2) / 2 }
     // An odd number of pages needs one virtual blank spread; an even number already
@@ -51,7 +52,8 @@ struct DiaryPhysicalBookScreen: View {
                         DiaryBookOpeningStage(progress: opened ? 1 : 0, viewport: geometry.size,
                                               paperRatio: paperRatio, cover: book.shell,
                                               firstPage: innerPages.first, store: store) {
-                            DiaryCurlBook(pages: innerPages, store: store, spreadCount: spreadCount, spread: $spread, reduceMotion: reduceMotion, onSelectPage: openEditor, onAddPage: handleAdd)
+                            DiaryCurlBook(pages: innerPages, store: store, spreadCount: spreadCount, spread: $spread,
+                                reduceMotion: reduceMotion, onSelectPage: openEditor, onAddPage: handleAdd)
                                 .id(book.catalogRevision)
                         }
                         .animation(reduceMotion ? nil : .easeInOut(duration: 0.85), value: opened)
@@ -92,6 +94,7 @@ struct DiaryPhysicalBookScreen: View {
                     photo = nil
                 }
             }
+            .sheet(isPresented: $showingExport) { DiaryBookExportSheet(book: book, store: store) }
             .sheet(isPresented: $choosingPreset) {
                 DiaryPresetPagePicker(ownerID: store.ownerID, targetBook: book) { updated in
                     book = updated
@@ -106,17 +109,22 @@ struct DiaryPhysicalBookScreen: View {
             .alert("无法打开页面", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("确定") { errorMessage = nil }
             } message: { Text(errorMessage ?? "") }
+            .task { await refreshAfterEditing() }
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle(book.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showingExport = true } label: { Image(systemName: "square.and.arrow.up") }
+                        .accessibilityLabel("导出手帐").disabled(book.pages.isEmpty || turningCover)
+                }
                 if onShowList == nil {
                     ToolbarItem(placement: .topBarLeading) { Button("完成") { dismiss() } }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if let onShowList {
                         Button(action: onShowList) { Image(systemName: "list.bullet") }
-                            .accessibilityLabel("列表模式")
+                            .accessibilityLabel("页面列表")
                             .disabled(turningCover)
                     } else if book.shell != nil {
                         Button(opened ? "合上" : "展开") { if opened { closeBook() } else { openBook() } }
@@ -184,37 +192,11 @@ struct DiaryPhysicalBookScreen: View {
     }
 
     private var thumbnailRail: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 14) {
-                    if let cover = book.shell {
-                        Button { closeBook() } label: {
-                            DiaryPagePreview(page: cover, store: store).frame(width: 54, height: 76)
-                                .padding(5).background(.background, in: RoundedRectangle(cornerRadius: 8))
-                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(!opened ? Color.accentColor : .clear, lineWidth: 3))
-                        }.buttonStyle(.plain).id(-1).accessibilityLabel("外壳")
-                            .accessibilityAddTraits(!opened ? .isSelected : [])
-                    }
-                    ForEach(0..<spreadCount, id: \.self) { index in
-                        Button { spread = index; openBook() } label: {
-                            HStack(spacing: 2) {
-                                thumbnail(index * 2 - 1)
-                                thumbnail(index * 2)
-                            }
-                            .padding(5).background(.background, in: RoundedRectangle(cornerRadius: 8))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(opened && spread == index ? Color.accentColor : .clear, lineWidth: 3))
-                        }.buttonStyle(.plain).id(index)
-                            .accessibilityLabel(spreadTitle(index))
-                            .accessibilityAddTraits(opened && spread == index ? .isSelected : [])
-                    }
-                }.padding(12)
-            }
-            .frame(height: 110)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
-            .padding(.horizontal, 16).padding(.bottom, 8)
-            .onChange(of: spread) { _, _ in scrollToSelection(proxy) }
-            .onChange(of: opened) { _, _ in scrollToSelection(proxy) }
-        }
+        DiaryBookThumbnailRail(hasCover: book.shell != nil, spreadCount: spreadCount,
+            spread: spread, opened: opened, title: spreadTitle,
+            onClose: closeBook, onSelect: { spread = $0; openBook() }) {
+                if let cover = book.shell { DiaryPagePreview(page: cover, store: store) }
+            } leaf: { index in thumbnail(index) }
     }
 
     @ViewBuilder private func thumbnail(_ index: Int) -> some View {
@@ -232,11 +214,6 @@ struct DiaryPhysicalBookScreen: View {
         let first = index * 2
         let last = min(first + 1, innerPages.count)
         return first == last ? "第 \(first) 页" : "第 \(first)–\(last) 页"
-    }
-    private func scrollToSelection(_ proxy: ScrollViewProxy) {
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
-            proxy.scrollTo(opened ? spread : -1, anchor: .center)
-        }
     }
     private func openBook() {
         guard spreadCount > 0, !turningCover else { return }
@@ -260,7 +237,7 @@ struct DiaryPhysicalBookScreen: View {
 }
 
 /// 静止时显示装订结构；卷页期间由 UIKit 协调淡出，避免覆盖在弯曲纸面上。
-private struct DiaryBindingRings: View {
+struct DiaryBindingRings: View {
     var body: some View {
         GeometryReader { geometry in
             // 九扣按三组三枚排列；固定在书脊，翻页时不跟随纸张旋转。
@@ -279,7 +256,7 @@ private struct DiaryBindingRings: View {
 /// 原生 pageCurl 提供交互卷页、取消回弹和纸张背面，无需模拟整张跨页滑动。
 private enum DiaryReaderAddAction { case blank, photo, preset }
 
-private struct DiaryCurlBook: UIViewControllerRepresentable {
+private struct DiaryCurlBook: View {
     let pages: [DiaryPageEntry]
     let store: DiaryDocumentStore
     let spreadCount: Int
@@ -287,6 +264,26 @@ private struct DiaryCurlBook: UIViewControllerRepresentable {
     let reduceMotion: Bool
     let onSelectPage: (DiaryPageEntry) -> Void
     let onAddPage: (DiaryReaderAddAction) -> Void
+
+    var body: some View {
+        DiaryPageCurlReader(spreadCount: spreadCount, spread: $spread, reduceMotion: reduceMotion) { index, canSelect in
+            DiaryPaperController(index: index, page: pages.indices.contains(index - 1) ? pages[index - 1] : nil,
+                store: store, onAdd: { if canSelect() { onAddPage($0) } },
+                onSelect: { if canSelect() { onSelectPage($0) } })
+        }
+    }
+}
+
+protocol DiaryIndexedPaper: AnyObject {
+    var index: Int { get }
+}
+
+/// Shared native curl engine for saved diaries and read-only preset previews.
+struct DiaryPageCurlReader: UIViewControllerRepresentable {
+    let spreadCount: Int
+    @Binding var spread: Int
+    let reduceMotion: Bool
+    let makePaper: (Int, @escaping () -> Bool) -> UIViewController
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIViewController(context: Context) -> UIPageViewController {
@@ -319,7 +316,7 @@ private struct DiaryCurlBook: UIViewControllerRepresentable {
     }
 
     @MainActor final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
-        var parent: DiaryCurlBook
+        var parent: DiaryPageCurlReader
         private var transitioning = false
         private var displayed = -1
         private let rings = UIHostingController(rootView: DiaryBindingRings())
@@ -343,18 +340,11 @@ private struct DiaryCurlBook: UIViewControllerRepresentable {
                 self.rings.view.alpha = visible ? 1 : 0
             }
         }
-        init(_ parent: DiaryCurlBook) { self.parent = parent }
+        init(_ parent: DiaryPageCurlReader) { self.parent = parent }
 
-        func page(_ index: Int) -> DiaryPaperController? {
-            let paddedCount = parent.spreadCount * 2
-            guard (0..<paddedCount).contains(index) else { return nil }
-            return DiaryPaperController(index: index, page: parent.pages.indices.contains(index - 1) ? parent.pages[index - 1] : nil, store: parent.store, onAdd: { [weak self] action in
-                guard let self, !self.transitioning else { return }
-                self.parent.onAddPage(action)
-            }) { [weak self] selected in
-                guard let self, !self.transitioning else { return }
-                self.parent.onSelectPage(selected)
-            }
+        func page(_ index: Int) -> UIViewController? {
+            guard (0..<(parent.spreadCount * 2)).contains(index) else { return nil }
+            return parent.makePaper(index) { [weak self] in self?.transitioning == false }
         }
         func show(_ target: Int, in controller: UIPageViewController, animated: Bool) {
             guard !transitioning, target != displayed,
@@ -375,11 +365,11 @@ private struct DiaryCurlBook: UIViewControllerRepresentable {
             }
         }
         func pageViewController(_ pageViewController: UIPageViewController, viewControllerBefore viewController: UIViewController) -> UIViewController? {
-            guard let paper = viewController as? DiaryPaperController else { return nil }
+            guard let paper = viewController as? any DiaryIndexedPaper else { return nil }
             return page(paper.index - 1)
         }
         func pageViewController(_ pageViewController: UIPageViewController, viewControllerAfter viewController: UIViewController) -> UIViewController? {
-            guard let paper = viewController as? DiaryPaperController else { return nil }
+            guard let paper = viewController as? any DiaryIndexedPaper else { return nil }
             return page(paper.index + 1)
         }
         func pageViewController(_ pageViewController: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
@@ -390,7 +380,7 @@ private struct DiaryCurlBook: UIViewControllerRepresentable {
             transitioning = false
             let requested = parent.spread
             let old = displayed
-            if let first = pageViewController.viewControllers?.compactMap({ ($0 as? DiaryPaperController)?.index }).min() {
+            if let first = pageViewController.viewControllers?.compactMap({ ($0 as? any DiaryIndexedPaper)?.index }).min() {
                 displayed = first / 2
             }
             if requested != old {
@@ -411,7 +401,7 @@ private struct DiaryCurlBook: UIViewControllerRepresentable {
 }
 
 /// 每次只加载 UIKit 请求的相邻页；复用现有带版本号的预览缓存，不解码整本原图。
-@MainActor private final class DiaryPaperController: UIHostingController<DiaryBookPaper>, UIPopoverPresentationControllerDelegate {
+@MainActor private final class DiaryPaperController: UIHostingController<DiaryBookPaper>, UIPopoverPresentationControllerDelegate, DiaryIndexedPaper {
     let index: Int
     private let selectedPage: DiaryPageEntry?
     private let onSelect: (DiaryPageEntry) -> Void

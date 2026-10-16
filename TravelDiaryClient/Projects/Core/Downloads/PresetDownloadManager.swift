@@ -21,6 +21,23 @@ nonisolated struct RemotePresetPage: Decodable, Identifiable, Sendable {
     let thumbnail_url: String
     let preview_url: String
 }
+/// Browsing never needs the import manifest or editable page documents.
+nonisolated struct RemotePresetBrowse: Decodable, Sendable {
+    let title: String
+    let page_size: PresetSize
+    let cover_page_id: String
+    let shell_page_id: String?
+    let expires_at: TimeInterval
+    let pages: [RemotePresetPage]
+    var isFresh: Bool { expires_at > Date().timeIntervalSince1970 + 5 }
+}
+
+/// A ready local package or the metadata of one existing/new download job.
+nonisolated struct PresetImportPreparation: Sendable {
+    let package: DiaryPresetPackage
+    let downloadID: UUID?
+}
+
 nonisolated struct PresetDownloadJob: Codable, Identifiable, Sendable, Equatable {
     let id: UUID
     let owner: String
@@ -39,54 +56,129 @@ nonisolated struct PresetDownloadJob: Codable, Identifiable, Sendable, Equatable
     var resultID: UUID?
 }
 
+/// A sheet subscribes to one job; unrelated downloads do not invalidate its view.
+@MainActor
+final class PresetDownloadObservation: ObservableObject {
+    @Published private(set) var job: PresetDownloadJob?
+    private var subscription: AnyCancellable?
+    func bind(_ id: UUID, manager: PresetDownloadManager) {
+        subscription = manager.$jobs.map { $0.first { $0.id == id } }
+            .removeDuplicates()
+            .sink { [weak self] in self?.job = $0 }
+    }
+}
+
+/// Catalog views observe availability only, never byte-level progress.
+@MainActor
+final class PresetAvailabilityIndex: ObservableObject {
+    @Published var pages: [String: Set<String>] = [:]
+    func downloadedPageIDs(bookID: String, version: Int) -> Set<String> {
+        pages["\(bookID):\(version)"] ?? []
+    }
+    func hasDownloadedPage(bookID: String, version: Int, pageID: String) -> Bool {
+        downloadedPageIDs(bookID: bookID, version: version).contains(pageID)
+    }
+}
+
 /// Application-wide jobs survive navigation. Completed 8 MiB ranges survive process termination.
 @MainActor
 final class PresetDownloadManager: ObservableObject {
     static let shared = PresetDownloadManager()
     @Published private(set) var jobs: [PresetDownloadJob] = []
+    let availability = PresetAvailabilityIndex()
+    private var packages: [UUID: DiaryPresetPackage] = [:]
+    private var saveTask: Task<Void, Never>?
+    private let saveQueue = DispatchQueue(label: "preset.download.persistence", qos: .utility)
+    private var lastProgress: [UUID: Date] = [:]
+    private var signedURLs: [String: (Date, [String: String])] = [:]
+    private var restoreTask: Task<Void, Never>?
     private var engine: SupportNetworkEngine?
     private var running: [UUID: Task<Void, Never>] = [:]
     private var lockedHashes = Set<String>()
+    private var browseCache: [String: RemotePresetBrowse] = [:]
+    private var browseRequests: [String: Task<RemotePresetBrowse, Error>] = [:]
     private var owner: String?
     private let root: URL
     private let chunkSize = 8 * 1024 * 1024
 
-    private init() {
-        root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    init(directory: URL? = nil) {
+        root = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("PresetDownloads", isDirectory: true)
-        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        var url = root
-        var values = URLResourceValues(); values.isExcludedFromBackup = true
-        try? url.setResourceValues(values)
-        if let data = try? Data(contentsOf: root.appendingPathComponent("jobs.json")),
-           let saved = try? JSONDecoder().decode([PresetDownloadJob].self, from: data) {
-            jobs = saved.map { value in var value = value; if !["completed", "ready", "cancelled"].contains(value.status) { value.status = "paused" }; return value }
+        let directory = root
+        restoreTask = Task {
+            let restored = await Task.detached(priority: .utility) {
+                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                var url = directory
+                var values = URLResourceValues(); values.isExcludedFromBackup = true
+                try? url.setResourceValues(values)
+                let data = try? Data(contentsOf: directory.appendingPathComponent("jobs.json"))
+                var saved = data.flatMap { try? JSONDecoder().decode([PresetDownloadJob].self, from: $0) } ?? []
+                var packages: [UUID: DiaryPresetPackage] = [:]
+                for i in saved.indices {
+                    if ["ready", "completed"].contains(saved[i].status),
+                       let manifest = try? JSONDecoder().decode(PresetManifest.self, from: saved[i].manifestData) {
+                        let root = directory.appendingPathComponent(saved[i].id.uuidString)
+                        if manifest.files.allSatisfy({ (try? root.appendingPathComponent($0.path).resourceValues(forKeys: [.fileSizeKey]).fileSize) == $0.byteCount }) {
+                            packages[saved[i].id] = DiaryPresetPackage(root: root, manifest: manifest)
+                        } else { saved[i].status = "paused" }
+                    } else if saved[i].status != "cancelled" { saved[i].status = "paused" }
+                }
+                return (saved, packages)
+            }.value
+            jobs = restored.0; packages = restored.1; rebuildAvailability()
         }
     }
-    func configure(engine: SupportNetworkEngine) { self.engine = engine }
+    private func rebuildAvailability() {
+        var pages: [String: Set<String>] = [:]
+        for package in packages.values {
+            let manifest = package.manifest
+            pages["\(manifest.templateBookID):\(manifest.packageVersion)", default: []].formUnion(manifest.pages.map(\.id))
+        }
+        if availability.pages != pages { availability.pages = pages }
+    }
+
+    func waitUntilRestored() async { await restoreTask?.value }
+    func configure(engine: SupportNetworkEngine) {
+        browseCache.removeAll()
+        self.engine = engine
+    }
     func activate(owner: String) {
         if self.owner != owner {
             for job in jobs where running[job.id] != nil { pause(job.id) }
             self.owner = owner
         }
     }
-    func request(_ path: String, body: [String: [String]]? = nil) async throws -> Data {
+    func request(_ path: String, body: [String: [String]]? = nil, allowETag: Bool = false) async throws -> Data {
         guard let engine else { throw URLError(.userAuthenticationRequired) }
         let response = try await engine.sendRaw(SupportNetworkRequest(method: body == nil ? .get : .post,
             path: "/api/v1/diary-presets/" + path,
             body: body.map { .json(AnyEncodable($0)) } ?? .none,
-            strategy: NetworkStrategy(requiresAuth: true)))
+            strategy: NetworkStrategy(requiresAuth: true, allowETag: allowETag, etagTTL: allowETag ? 300 : nil)))
         return response.data
     }
     func catalog() async throws -> RemotePresetCatalog {
         try JSONDecoder().decode(RemotePresetCatalog.self, from: await request("catalog/"))
     }
+    func browse(_ book: RemotePresetBook, ownerID: String) async throws -> RemotePresetBrowse {
+        let key = "\(ownerID):\(book.id):\(book.version)"
+        if let value = browseCache[key], value.isFresh { return value }
+        if let pending = browseRequests[key] { return try await pending.value }
+        let task = Task {
+            try JSONDecoder().decode(RemotePresetBrowse.self,
+                from: await request("templates/\(book.id)/\(book.version)/browse/", allowETag: true))
+        }
+        browseRequests[key] = task
+        defer { browseRequests[key] = nil }
+        let value = try await task.value
+        browseCache[key] = value
+        return value
+    }
     func pages(_ book: RemotePresetBook) async throws -> [RemotePresetPage] {
-        struct Result: Decodable { let pages: [RemotePresetPage] }
-        return try JSONDecoder().decode(Result.self, from: await request("templates/\(book.id)/\(book.version)/")).pages
+        try await browse(book, ownerID: owner ?? "").pages
     }
     @discardableResult
     func enqueue(book: RemotePresetBook, pageIDs: [String]?, owner: String, target: DiaryBook?, after: UUID?, downloadOnly: Bool = false) async throws -> UUID {
+        await restoreTask?.value
         activate(owner: owner)
         if downloadOnly, let existing = jobs.last(where: { job in
             guard job.owner == owner, job.downloadOnly == true, job.status != "cancelled",
@@ -107,40 +199,31 @@ final class PresetDownloadManager: ObservableObject {
         persist(); schedule()
         return jobID
     }
+    func prepareImport(book: RemotePresetBook, pageIDs: [String], wholeBook: Bool,
+                       ownerID: String) async throws -> PresetImportPreparation {
+        await restoreTask?.value
+        try Task.checkCancellation()
+        activate(owner: ownerID)
+        if let cached = cachedPackage(bookID: book.id, version: book.version, pageIDs: pageIDs) {
+            return PresetImportPreparation(package: cached, downloadID: nil)
+        }
+        let id = try await enqueue(book: book, pageIDs: wholeBook ? nil : pageIDs,
+                                   owner: ownerID, target: nil, after: nil, downloadOnly: true)
+        if let ready = preparedPackage(id) {
+            return PresetImportPreparation(package: ready, downloadID: nil)
+        }
+        guard let job = jobs.first(where: { $0.id == id }) else { throw DiaryEditorError.missingResource }
+        let manifest = try JSONDecoder().decode(PresetManifest.self, from: job.manifestData)
+        let package = DiaryPresetPackage(root: root.appendingPathComponent(id.uuidString), manifest: manifest)
+        return PresetImportPreparation(package: package, downloadID: id)
+    }
     func cachedPackage(bookID: String, version: Int, pageIDs: [String]) -> DiaryPresetPackage? {
-        for job in jobs.reversed() where ["ready", "completed"].contains(job.status) {
-            guard let manifest = try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData),
-                  manifest.templateBookID == bookID, manifest.packageVersion == version,
-                  Set(pageIDs).isSubset(of: Set(manifest.pages.map(\.id))) else { continue }
-            let directory = root.appendingPathComponent(job.id.uuidString)
-            guard manifest.files.allSatisfy({ FileManager.default.fileExists(atPath: directory.appendingPathComponent($0.path).path) }) else { continue }
-            return DiaryPresetPackage(root: directory, manifest: manifest)
+        packages.values.first {
+            $0.manifest.templateBookID == bookID && $0.manifest.packageVersion == version
+                && Set(pageIDs).isSubset(of: Set($0.manifest.pages.map(\.id)))
         }
-        return nil
     }
-    /// Count unique, locally available pages for this exact template version.
-    func downloadedPageIDs(bookID: String, version: Int) -> Set<String> {
-        var result = Set<String>()
-        for job in jobs where ["ready", "completed"].contains(job.status) {
-            guard let manifest = try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData),
-                  manifest.templateBookID == bookID, manifest.packageVersion == version else { continue }
-            let directory = root.appendingPathComponent(job.id.uuidString)
-            guard manifest.files.allSatisfy({ record in
-                let url = directory.appendingPathComponent(record.path)
-                return (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) == record.byteCount
-            }) else { continue }
-            result.formUnion(manifest.pages.map(\.id))
-        }
-        return result
-    }
-    func hasDownloadedPage(bookID: String, version: Int, pageID: String) -> Bool {
-        downloadedPageIDs(bookID: bookID, version: version).contains(pageID)
-    }
-    func preparedPackage(_ id: UUID) -> DiaryPresetPackage? {
-        guard let job = jobs.first(where: { $0.id == id }), ["ready", "completed"].contains(job.status),
-              let manifest = try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData) else { return nil }
-        return cachedPackage(bookID: manifest.templateBookID, version: manifest.packageVersion, pageIDs: manifest.pages.map(\.id))
-    }
+    func preparedPackage(_ id: UUID) -> DiaryPresetPackage? { packages[id] }
     func pause(_ id: UUID) {
         guard let i = jobs.firstIndex(where: { $0.id == id }), !["completed", "ready", "importing"].contains(jobs[i].status) else { return }
         jobs[i].status = "paused"; running[id]?.cancel(); persist()
@@ -183,14 +266,34 @@ final class PresetDownloadManager: ObservableObject {
             }
         }
         jobs = remaining
+        for id in removedIDs { packages.removeValue(forKey: id) }
+        rebuildAvailability()
         persist()
     }
 
-    private func persist() {
-        do { try JSONEncoder().encode(jobs).write(to: root.appendingPathComponent("jobs.json"), options: .atomic) }
-        catch { /* Existing jobs remain in memory; surface persistence failure. */
-            for i in jobs.indices where jobs[i].status == "queued" { jobs[i].error = "下载状态保存失败：\(error.localizedDescription)" }
+    private func persist(immediate: Bool = true) {
+        if !immediate, saveTask != nil { return }
+        saveTask?.cancel()
+        saveTask = Task {
+            if !immediate {
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            let snapshot = jobs, url = root.appendingPathComponent("jobs.json")
+            saveTask = nil
+            // A serial queue prevents older snapshots overwriting newer snapshots.
+            saveQueue.async {
+                do { try JSONEncoder().encode(snapshot).write(to: url, options: .atomic) }
+                catch { NSLog("Preset download state persistence failed: %@", error.localizedDescription) }
+            }
         }
+    }
+    private func progress(_ id: UUID, bytes: Int64) {
+        guard Date().timeIntervalSince(lastProgress[id] ?? .distantPast) >= 0.25,
+              let i = jobs.firstIndex(where: { $0.id == id }) else { return }
+        lastProgress[id] = Date()
+        jobs[i].bytes = bytes
+        persist(immediate: false)
     }
     private func schedule() {
         for job in jobs where running.count < 3 && job.owner == owner && job.status == "queued" && running[job.id] == nil {
@@ -203,29 +306,32 @@ final class PresetDownloadManager: ObservableObject {
     private func execute(_ id: UUID) async {
         guard let job = jobs.first(where: { $0.id == id }) else { return }
         do {
-            let manifest = try JSONDecoder().decode(PresetManifest.self, from: job.manifestData)
+            let manifest = try await Task.detached(priority: .utility) { try JSONDecoder().decode(PresetManifest.self, from: job.manifestData) }.value
             let directory = root.appendingPathComponent(id.uuidString)
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try await Task.detached(priority: .utility) { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }.value
             let package = DiaryPresetPackage(root: directory, manifest: manifest)
             update(id) { $0.status = "downloading"; $0.bytes = 0 }
             var complete: Int64 = 0
-            for file in manifest.files {
+            for (fileIndex, file) in manifest.files.enumerated() {
                 try Task.checkCancellation()
-                let destination = try package.url(file.path)
-                try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-                let cached = try await download(file, plan: job.planID) { bytes in
-                    self.update(id) { $0.bytes = complete + Int64(bytes) }
+                let destination = try await Task.detached(priority: .utility) { try package.url(file.path) }.value
+                let cached = try await download(file, plan: job.planID, paths: Array(manifest.files.dropFirst(fileIndex).prefix(50).map(\.path))) { bytes in
+                    self.progress(id, bytes: complete + Int64(bytes))
                 }
-                if !FileManager.default.fileExists(atPath: destination.path) {
-                    try FileManager.default.copyItem(at: cached, to: destination)
-                }
+                try await Task.detached(priority: .utility) {
+                    try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    if !FileManager.default.fileExists(atPath: destination.path) {
+                        try FileManager.default.copyItem(at: cached, to: destination)
+                    }
+                }.value
                 complete += Int64(file.byteCount)
-                update(id) { $0.bytes = complete }
+                progress(id, bytes: complete)
             }
             try Task.checkCancellation()
-            update(id) { $0.status = "verifying" }
-            try await Task.detached { try package.validate() }.value
+            update(id) { $0.status = "verifying"; $0.bytes = complete }
+            try await Task.detached(priority: .utility) { try package.validate() }.value
             try Task.checkCancellation()
+            packages[id] = package; rebuildAvailability()
             if job.downloadOnly == true {
                 update(id) { $0.status = "ready" }
                 return
@@ -237,49 +343,61 @@ final class PresetDownloadManager: ObservableObject {
                 afterPageID: job.targetID == nil ? nil : job.afterPageID, expectedRevision: job.expectedRevision)
             update(id) { $0.status = "completed"; $0.resultID = result.id }
         } catch {
+            if Task.isCancelled { return } // A quick resume must not be overwritten by the cancelled run.
             update(id) { value in
                 if !["paused", "cancelled"].contains(value.status) { value.status = "failed"; value.error = error.localizedDescription }
             }
         }
     }
-    private func download(_ file: PresetManifest.FileRecord, plan: String, progress: (Int) -> Void) async throws -> URL {
+    private func download(_ file: PresetManifest.FileRecord, plan: String, paths: [String], progress: (Int) -> Void) async throws -> URL {
         guard file.sha256.count == 64, file.sha256.allSatisfy({ $0.isHexDigit }), file.byteCount >= 0, file.byteCount <= 100_000_000 else { throw DiaryEditorError.invalidDocument }
         while lockedHashes.contains(file.sha256) { try await Task.sleep(for: .milliseconds(150)) }
         try Task.checkCancellation()
         lockedHashes.insert(file.sha256)
         defer { lockedHashes.remove(file.sha256) }
         let cache = root.appendingPathComponent("blobs")
-        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
         let final = cache.appendingPathComponent(file.sha256)
-        if FileManager.default.fileExists(atPath: final.path) { progress(file.byteCount); return final }
         let parts = cache.appendingPathComponent(file.sha256 + ".parts")
-        try FileManager.default.createDirectory(at: parts, withIntermediateDirectories: true)
+        let hit = try await Task.detached(priority: .utility) {
+            try FileManager.default.createDirectory(at: parts, withIntermediateDirectories: true)
+            return FileManager.default.fileExists(atPath: final.path)
+        }.value
+        if hit { progress(file.byteCount); return final }
         var offset = 0
         while offset < file.byteCount {
             try Task.checkCancellation()
             let length = min(chunkSize, file.byteCount - offset)
             let part = parts.appendingPathComponent(String(offset))
-            let existing = (try? part.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
+            let existing = await Task.detached(priority: .utility) { (try? part.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1 }.value
             if existing != length {
                 var lastError: Error = URLError(.cannotLoadFromNetwork)
                 var success = false
                 for attempt in 0..<3 {
                     do {
                         try Task.checkCancellation()
-                        let urls = try JSONDecoder().decode([String: String].self, from: await request("plans/\(plan)/urls/", body: ["paths": [file.path]]))
+                        if signedURLs[plan].map({ Date().timeIntervalSince($0.0) < 600 && $0.1[file.path] != nil }) != true {
+                            let urls = try JSONDecoder().decode([String: String].self, from: await request("plans/\(plan)/urls/", body: ["paths": paths]))
+                            signedURLs[plan] = (Date(), urls)
+                        }
+                        let urls = signedURLs[plan]?.1 ?? [:]
                         guard let raw = urls[file.path], let url = URL(string: raw), url.scheme == "https",
                               url.host?.hasSuffix(".aliyuncs.com") == true else { throw URLError(.badURL) }
                         var request = URLRequest(url: url); request.timeoutInterval = 120
                         request.setValue("bytes=\(offset)-\(offset + length - 1)", forHTTPHeaderField: "Range")
                         let (tmp, response) = try await URLSession.shared.download(for: request)
-                        defer { try? FileManager.default.removeItem(at: tmp) }
-                        guard let http = response as? HTTPURLResponse,
-                              http.statusCode == 206,
-                              http.value(forHTTPHeaderField: "Content-Range") == "bytes \(offset)-\(offset + length - 1)/\(file.byteCount)",
-                              (try tmp.resourceValues(forKeys: [.fileSizeKey])).fileSize == length else { throw URLError(.badServerResponse) }
+                        guard let http = response as? HTTPURLResponse, http.statusCode == 206,
+                              http.value(forHTTPHeaderField: "Content-Range") == "bytes \(offset)-\(offset + length - 1)/\(file.byteCount)" else {
+                            signedURLs.removeValue(forKey: plan)
+                            await Task.detached { try? FileManager.default.removeItem(at: tmp) }.value
+                            throw URLError(.badServerResponse)
+                        }
+                        try await Task.detached(priority: .utility) {
+                            defer { try? FileManager.default.removeItem(at: tmp) }
+                            guard (try tmp.resourceValues(forKeys: [.fileSizeKey])).fileSize == length else { throw URLError(.badServerResponse) }
+                            if FileManager.default.fileExists(atPath: part.path) { try FileManager.default.removeItem(at: part) }
+                            try FileManager.default.moveItem(at: tmp, to: part)
+                        }.value
                         try Task.checkCancellation()
-                        if FileManager.default.fileExists(atPath: part.path) { try FileManager.default.removeItem(at: part) }
-                        try FileManager.default.moveItem(at: tmp, to: part)
                         success = true; break
                     } catch {
                         try Task.checkCancellation(); lastError = error
@@ -291,7 +409,7 @@ final class PresetDownloadManager: ObservableObject {
             offset += length; progress(offset)
         }
         let size = file.byteCount, hash = file.sha256, chunk = chunkSize
-        try await Task.detached {
+        try await Task.detached(priority: .utility) {
             let assembling = parts.appendingPathComponent("assembled")
             FileManager.default.createFile(atPath: assembling.path, contents: nil)
             let out = try FileHandle(forWritingTo: assembling)

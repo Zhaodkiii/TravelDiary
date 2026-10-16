@@ -8,7 +8,8 @@ struct DiaryPresetLibraryScreen: View {
     var targetAfterPageID: UUID? = nil
     var singlePageOnly = false
     var onPageAdded: ((DiaryBook) -> Void)? = nil
-    @ObservedObject private var downloads = PresetDownloadManager.shared
+    private let downloads = PresetDownloadManager.shared
+    @ObservedObject private var availability = PresetDownloadManager.shared.availability
     @State private var remote: RemotePresetCatalog?
     @State private var pending: DiaryPresetImportIntent?
     @State private var resuming: DiaryPresetImportIntent?
@@ -20,7 +21,7 @@ struct DiaryPresetLibraryScreen: View {
     @State private var error: String?
     var body: some View {
         VStack {
-            if let catalog {
+            if let catalog = catalog ?? (remote == nil ? nil : DiaryPresetCatalog(series: [], books: [], issues: [])) {
                 if let pending, !singlePageOnly {
                     HStack {
                         Text("有未完成的预设导入").font(.caption)
@@ -41,7 +42,7 @@ struct DiaryPresetLibraryScreen: View {
                             // 书库既可位于根 Tab，也可从手帐详情进入。
                             // 直接提供目的地，避免 Tab 子树中的值路由注册对外层导航栈不可见。
                             NavigationLink {
-                                DiaryPresetDetailScreen(ownerID: ownerID, package: package, targetBook: targetBook,
+                                DiaryPresetReaderDestination(ownerID: ownerID, package: package, seriesTitle: combinedSeries(catalog).first { $0.id == package.manifest.seriesID }?.title ?? "预设系列", targetBook: targetBook,
                                                         targetAfterPageID: targetAfterPageID, fixedTarget: singlePageOnly) { book in
                                     if let onPageAdded { onPageAdded(book) } else { recovered = book }
                                 }
@@ -59,7 +60,7 @@ struct DiaryPresetLibraryScreen: View {
                             (search.isEmpty || book.title.localizedCaseInsensitiveContains(search))
                         }) { book in
                             NavigationLink {
-                                RemotePresetDetailScreen(ownerID: ownerID, book: book, targetBook: targetBook,
+                                RemotePresetReaderDestination(ownerID: ownerID, book: book, seriesTitle: combinedSeries(catalog).first { $0.id == book.series }?.title ?? "预设系列", targetBook: targetBook,
                                     afterPageID: targetAfterPageID, fixedTarget: singlePageOnly) { book in
                                     if let onPageAdded { onPageAdded(book) } else { recovered = book }
                                 }
@@ -70,7 +71,7 @@ struct DiaryPresetLibraryScreen: View {
                                         .clipShape(RoundedRectangle(cornerRadius: 10))
                                     HStack {
                                         Text(book.title).font(.headline)
-                                        PresetBookAvailabilityBadge(downloadedCount: min(book.page_count, downloads.downloadedPageIDs(bookID: book.id, version: book.version).count), totalCount: book.page_count)
+                                        PresetBookAvailabilityBadge(downloadedCount: min(book.page_count, availability.downloadedPageIDs(bookID: book.id, version: book.version).count), totalCount: book.page_count)
                                     }
                                     Text("\(book.page_count) 页").font(.caption).foregroundStyle(.secondary)
                                 }
@@ -113,6 +114,8 @@ struct DiaryPresetLibraryScreen: View {
             pending = DiaryPresetImportIntent.read(owner: ownerID)
             do { catalog = try await Task.detached { try BundleDiaryPresetProvider().catalog() }.value }
             catch { self.error = error.localizedDescription }
+        }
+        .task(id: reload) {
             do { remote = try await downloads.catalog() }
             catch { /* Local templates remain available when the network is unavailable. */ }
         }
@@ -160,6 +163,51 @@ private struct DiaryPresetImage: View {
     }
 }
 private struct PresetSelection: Identifiable, Hashable { let id = UUID(); let pageIDs: [String]; var wholeBook = false }
+private struct DiaryPresetReaderDestination: View {
+    let ownerID: String
+    let package: DiaryPresetPackage
+    let seriesTitle: String
+    let targetBook: DiaryBook?
+    let targetAfterPageID: UUID?
+    var fixedTarget = false
+    let onImported: (DiaryBook) -> Void
+    @State private var pages: [PresetPage] = []
+    @State private var error: String?
+    @State private var retry = 0
+    @State private var selection: PresetSelection?
+
+    var body: some View {
+        Group {
+            if !pages.isEmpty {
+                DiaryPresetBookReader<DiaryPresetDetailScreen>(title: package.manifest.title,
+                    pages: pages.compactMap { page in
+                        guard let url = try? package.url(page.preview.largePath) else { return nil }
+                        return DiaryPresetBookReader<DiaryPresetDetailScreen>.Page(id: page.id, url: url, size: page.size.cg,
+                            thumbnailURL: try? package.url(page.preview.thumbnailPath))
+                    },
+                    shellID: package.manifest.shellPageID, seriesTitle: seriesTitle,
+                    allowsWholeBook: !fixedTarget, onAdd: { ids, whole in
+                        selection = PresetSelection(pageIDs: ids, wholeBook: whole)
+                    }) {
+                        DiaryPresetDetailScreen(ownerID: ownerID, package: package, targetBook: targetBook,
+                            targetAfterPageID: targetAfterPageID, fixedTarget: fixedTarget, onImported: onImported)
+                    }
+            } else if let error {
+                VStack { Text(error); Button("重试") { retry += 1 } }.padding()
+            } else { ProgressView("正在打开预设…") }
+        }.sheet(item: $selection) { value in
+            DiaryPresetImportSheet(ownerID: ownerID, package: package, pageIDs: value.pageIDs,
+                defaultTarget: value.wholeBook ? nil : targetBook, wholeBook: value.wholeBook,
+                defaultAfterPageID: targetAfterPageID, fixedTarget: fixedTarget) { book in
+                    selection = nil; onImported(book)
+                }
+        }.task(id: retry) {
+            do { pages = try await Task.detached { try package.pages }.value }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
 private struct DiaryPresetDetailScreen: View {
     let ownerID: String
     let package: DiaryPresetPackage
@@ -267,9 +315,13 @@ struct DiaryPresetImportSheet: View {
     var defaultAfterPageID: UUID? = nil
     var resume: DiaryPresetImportIntent? = nil
     var remoteBook: RemotePresetBook? = nil
+    var initialDownloadID: UUID? = nil
+    var loadingPreview: RemotePresetPage? = nil
+    var loadingPreviewSize: CGSize = CGSize(width: 1, height: 1.4)
     var fixedTarget = false
     let completed: (DiaryBook) -> Void
-    @ObservedObject private var downloads = PresetDownloadManager.shared
+    private let downloads = PresetDownloadManager.shared
+    @StateObject private var downloadObservation = PresetDownloadObservation()
     @State private var downloadID: UUID?
     @State private var readyPackage: DiaryPresetPackage?
     @State private var planning = false
@@ -299,7 +351,7 @@ struct DiaryPresetImportSheet: View {
         NavigationStack(path: $path) { flow }
         .interactiveDismissDisabled(busy)
         .onDisappear { cleanupPhotos() }
-        .onChange(of: downloads.jobs) { _, _ in
+        .onChange(of: downloadObservation.job?.status) { _, _ in
             if let downloadID { readyPackage = downloads.preparedPackage(downloadID) }
         }
         .task(id: previewIdentity) { await preparePreview() }
@@ -320,6 +372,12 @@ struct DiaryPresetImportSheet: View {
     private func stage(_ step: Int) -> some View {
             Form {
                 Text(singlePage ? "第 \(fixedTarget ? min(step, 2) : step) 步 / \(fixedTarget ? 2 : 3) · \(step == 1 ? "预览单页" : (step == 2 || fixedTarget) ? "选择照片" : "选择帐本")" : "添加 \(pageIDs.count) 页")
+                if singlePage && step == 1 && preview == nil, let loadingPreview {
+                    Section {
+                        RemotePresetLoadingPreview(page: loadingPreview, size: loadingPreviewSize)
+                            .listRowInsets(EdgeInsets())
+                    }
+                }
                 if singlePage && step == 1, let availablePackage {
                     if let preview {
                         Section {
@@ -344,7 +402,7 @@ struct DiaryPresetImportSheet: View {
                 }
                 if remoteBook != nil && (!singlePage || step == 1) {
                     Section {
-                        if let job = downloads.jobs.first(where: { $0.id == downloadID }) {
+                        if let job = downloadObservation.job {
                             ProgressView(value: Double(job.bytes), total: Double(max(1, job.total)))
                             Text(readyPackage == nil ? "正在准备资源 · \(Int(min(1, Double(job.bytes) / Double(max(1, job.total))) * 100))%" : "资源已下载，可以添加")
                             if let error = job.error { Text(error).foregroundStyle(.red) }
@@ -447,8 +505,11 @@ struct DiaryPresetImportSheet: View {
         do {
             let ids = pageIDs
             let value = try await Task.detached {
-                let page = try availablePackage.pages.first { $0.id == ids.first }
-                guard let page else { throw DiaryEditorError.invalidDocument }
+                guard let id = ids.first,
+                      let reference = availablePackage.manifest.pages.first(where: { $0.id == id }) else {
+                    throw DiaryEditorError.invalidDocument
+                }
+                let page = try availablePackage.read(PresetPage.self, reference.path)
                 let assetIDs = Dictionary(uniqueKeysWithValues: availablePackage.manifest.assetTable.keys.map { ($0, UUID()) })
                 let document = try availablePackage.instantiate(page, bookID: UUID(), targetSize: page.size.cg, assetIDs: assetIDs)
                 let paths = Dictionary(uniqueKeysWithValues: availablePackage.manifest.assetTable.compactMap { key, asset in
@@ -482,9 +543,16 @@ struct DiaryPresetImportSheet: View {
         planning = true
         defer { planning = false }
         do {
-            downloadID = try await downloads.enqueue(book: remoteBook, pageIDs: wholeBook ? nil : pageIDs,
-                owner: ownerID, target: nil, after: nil, downloadOnly: true)
-            if let downloadID { readyPackage = downloads.preparedPackage(downloadID) }
+            if let initialDownloadID {
+                downloadID = initialDownloadID
+            } else {
+                downloadID = try await downloads.enqueue(book: remoteBook, pageIDs: wholeBook ? nil : pageIDs,
+                    owner: ownerID, target: nil, after: nil, downloadOnly: true)
+            }
+            if let downloadID {
+                downloadObservation.bind(downloadID, manager: downloads)
+                readyPackage = downloads.preparedPackage(downloadID)
+            }
         } catch { self.error = error.localizedDescription }
     }
     private func runImport() async {

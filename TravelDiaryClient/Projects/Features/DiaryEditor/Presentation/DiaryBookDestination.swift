@@ -17,7 +17,7 @@ struct DiaryBookDestination: View {
     var body: some View {
         Group {
             if let book {
-                if showingList || book.pages.isEmpty {
+                if book.pages.isEmpty {
                     DiaryBookScreen(ownerID: ownerID, book: book)
                 } else {
                     DiaryPhysicalBookScreen(
@@ -38,6 +38,9 @@ struct DiaryBookDestination: View {
                 ProgressView("正在打开手帐…")
             }
         }
+        .navigationDestination(isPresented: $showingList) {
+            DiaryBookPageListDestination(ownerID: ownerID, bookID: bookID)
+        }
         .task(id: retry) {
             error = nil
             do {
@@ -46,6 +49,43 @@ struct DiaryBookDestination: View {
                 book = loaded
             } catch is CancellationError { }
             catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
+/// A pushed page loads its own current catalog and uses the enclosing native stack.
+private struct DiaryBookPageListDestination: View {
+    let ownerID: String
+    let bookID: UUID
+    @State private var book: DiaryBook?
+    @State private var message: String?
+    @State private var retry = 0
+
+    var body: some View {
+        Group {
+            if let book {
+                DiaryBookScreen(ownerID: ownerID, book: book)
+            } else if let message {
+                ContentUnavailableView {
+                    Label("无法打开页面列表", systemImage: "list.bullet")
+                } description: {
+                    Text(message)
+                } actions: {
+                    Button("重试") { retry += 1 }
+                }
+            } else {
+                ProgressView("正在打开页面列表…")
+            }
+        }
+        .navigationTitle("页面列表")
+        .task(id: retry) {
+            message = nil
+            do {
+                let loaded = try await DiaryDocumentStore(ownerID: ownerID, bookID: bookID).loadBook()
+                try Task.checkCancellation()
+                book = loaded
+            } catch is CancellationError { }
+            catch { message = error.localizedDescription }
         }
     }
 }

@@ -479,6 +479,46 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         }
     }
 
+    struct ManagedPhoto: Identifiable {
+        let layer: DiaryLayer
+        let ownerID: UUID
+        let locked: Bool
+        let visible: Bool
+        var id: UUID { layer.id }
+    }
+
+    /// 从当前编辑范围递归展示照片，包含隐藏和锁定的组合。
+    var managedPhotos: [ManagedPhoto] {
+        var result: [ManagedPhoto] = []
+        var visited = Set<UUID>()
+        func visit(_ id: UUID, locked: Bool, visible: Bool) {
+            guard visited.insert(id).inserted, let object = document.objects[id] else { return }
+            for layer in object.layers {
+                let protected = locked || layer.locked
+                let shown = visible && layer.visible
+                if layer.kind == .photo {
+                    result.append(ManagedPhoto(layer: layer, ownerID: id, locked: protected, visible: shown))
+                } else if let child = layer.contentID {
+                    visit(child, locked: protected, visible: shown)
+                }
+            }
+        }
+        visit(contentID, locked: false, visible: true)
+        return result
+    }
+
+    func removePhoto(_ id: UUID) {
+        guard !busy, let photo = managedPhotos.first(where: { $0.id == id }), !photo.locked else { return }
+        edit {
+            document.objects[photo.ownerID]?.layers.removeAll { $0.id == id || $0.frameTargetID == id }
+            if document.objects[photo.ownerID]?.primaryLayerID == id {
+                document.objects[photo.ownerID]?.primaryLayerID = nil
+            }
+            if photo.ownerID != contentID { document.objects[photo.ownerID]?.revision += 1 }
+            if selectedID == id { selectedID = nil }
+        }
+    }
+
     func removeSelected() {
         guard let layer = selected, !layer.locked, layer.id != content.primaryLayerID else { return }
         edit {
