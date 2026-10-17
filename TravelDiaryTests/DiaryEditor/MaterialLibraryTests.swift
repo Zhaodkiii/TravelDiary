@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import UIKit
+import CryptoKit
 @testable import TravelDiary
 
 @MainActor
@@ -13,6 +14,28 @@ struct MaterialLibraryTests {
         let search = try MaterialCatalogRepository.networkRequest("items/?q=%E8%8A%B1%E8%8D%89%20%26%20%E8%83%B6%E5%B8%A6")
         #expect(search.path == "/api/v1/materials/items/")
         #expect(search.queryItems?.first?.value == "花草 & 胶带")
+    }
+    @Test func downloadAuthorizationUsesPostWithoutBody() throws {
+        let request = try MaterialCatalogRepository.networkRequest("revisions/36/download/", method: .post)
+        #expect(request.method == .post)
+        #expect(request.path == "/api/v1/materials/revisions/36/download/")
+    }
+    @Test func cachedOriginalWorksWithoutNetworkConfiguration() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let data = try png(.red)
+        let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let blobs = root.appendingPathComponent("blobs")
+        try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
+        try data.write(to: blobs.appendingPathComponent(hash))
+        let item = CloudMaterial(id: "cached", revision: 36, name: "cached", keywords: [], aliases: [],
+            kind: "illustration", subcategory: "object", thumbnail_sha256: String(repeating: "0", count: 64),
+            thumbnail_url: "https://example.invalid/thumb", sha256: hash, byte_size: data.count,
+            favorite_count: 0, is_favorited: false)
+        let manager = PresetDownloadManager(directory: root)
+        let result = try await manager.materialData(item) { _ in }
+        #expect(result == data)
+        #expect(await MaterialThumbnailCache.shared.cachedOriginal(item) == nil)
     }
     private func png(_ color: UIColor) throws -> Data {
         let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 60)).image { context in

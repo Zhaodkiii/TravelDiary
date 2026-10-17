@@ -391,10 +391,12 @@ final class PresetDownloadManager: ObservableObject {
     }
     /// Material and preset imports share hash locks, cached bytes, range resume and URL refresh.
     func materialData(_ item: CloudMaterial, progress: @escaping @MainActor @Sendable (Double) -> Void) async throws -> Data {
-        let descriptor: MaterialDownload = try await MaterialCatalogRepository.shared.request("revisions/\(item.revision)/download/")
-        guard descriptor.sha256 == item.sha256, descriptor.byte_size == item.byte_size else { throw DiaryEditorError.invalidDocument }
+        if let data = await MaterialThumbnailCache.shared.cachedOriginal(item) {
+            try Task.checkCancellation()
+            progress(1)
+            return data
+        }
         let key = "material-\(item.revision)"
-        signedURLs[key] = (Date(), [item.sha256: descriptor.url])
         let file = PresetManifest.FileRecord(path: item.sha256, byteCount: item.byte_size, sha256: item.sha256)
         let url = try await download(file, plan: key, paths: [], materialRevision: item.revision) { count in
             progress(Double(count) / Double(max(1, item.byte_size)))
@@ -413,7 +415,11 @@ final class PresetDownloadManager: ObservableObject {
         let parts = cache.appendingPathComponent(file.sha256 + ".parts")
         let hit = try await Task.detached(priority: .utility) {
             try FileManager.default.createDirectory(at: parts, withIntermediateDirectories: true)
-            return FileManager.default.fileExists(atPath: final.path)
+            guard let data = try? Data(contentsOf: final, options: .mappedIfSafe) else { return false }
+            if data.count == file.byteCount,
+               SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == file.sha256 { return true }
+            try FileManager.default.removeItem(at: final)
+            return false
         }.value
         if hit { progress(file.byteCount); return final }
         var offset = 0
@@ -431,7 +437,7 @@ final class PresetDownloadManager: ObservableObject {
                         if signedURLs[plan].map({ Date().timeIntervalSince($0.0) < 600 && $0.1[file.path] != nil }) != true {
                             let urls: [String: String]
                             if let materialRevision {
-                                let result: MaterialDownload = try await MaterialCatalogRepository.shared.request("revisions/\(materialRevision)/download/")
+                                let result: MaterialDownload = try await MaterialCatalogRepository.shared.request("revisions/\(materialRevision)/download/", method: .post)
                                 guard result.sha256 == file.sha256, result.byte_size == file.byteCount else { throw DiaryEditorError.invalidDocument }
                                 urls = [file.path: result.url]
                             } else {

@@ -43,29 +43,30 @@ final class MaterialCatalogRepository {
     var engine: SupportNetworkEngine?
     private(set) var owner = ""
     func activate(_ owner: String) { self.owner = owner }
-    static func networkRequest(_ path: String, body: [String: Bool]? = nil) throws -> SupportNetworkRequest {
+    static func networkRequest(_ path: String, body: [String: Bool]? = nil, method: SupportHTTPMethod? = nil) throws -> SupportNetworkRequest {
         guard let parts = URLComponents(string: path), parts.scheme == nil, parts.host == nil, parts.fragment == nil else { throw URLError(.badURL) }
-        return SupportNetworkRequest(method: body == nil ? .get : .post,
+        return SupportNetworkRequest(method: method ?? (body == nil ? .get : .post),
             path: "/api/v1/materials/" + parts.path, queryItems: parts.queryItems,
             body: body.map { .json(AnyEncodable($0)) } ?? .none,
             strategy: NetworkStrategy(requiresAuth: true))
     }
-    func request<T: Decodable>(_ path: String, body: [String: Bool]? = nil) async throws -> T {
+    func request<T: Decodable>(_ path: String, body: [String: Bool]? = nil, method: SupportHTTPMethod? = nil) async throws -> T {
         guard let engine else { throw URLError(.userAuthenticationRequired) }
+        let cacheable = (method ?? (body == nil ? .get : .post)) == .get
         let capturedOwner = owner
         let key = SHA256.hash(data: Data((owner + "|" + path).utf8)).map { String(format: "%02x", $0) }.joined()
         let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("MaterialCatalog")
         let cache = root.appendingPathComponent(key)
         do {
-            let response = try await engine.sendRaw(Self.networkRequest(path, body: body))
+            let response = try await engine.sendRaw(Self.networkRequest(path, body: body, method: method))
             guard owner == capturedOwner else { throw CancellationError() }
             let result = try JSONDecoder().decode(T.self, from: response.data)
-            if body == nil {
+            if cacheable {
                 try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
                 try? response.data.write(to: cache, options: .atomic)
             }
             return result
-        } catch let error as URLError where body == nil && [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotConnectToHost].contains(error.code) {
+        } catch let error as URLError where cacheable && [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotConnectToHost].contains(error.code) {
             guard owner == capturedOwner, let data = try? Data(contentsOf: cache) else { throw error }
             return try JSONDecoder().decode(T.self, from: data)
         }
@@ -290,14 +291,23 @@ struct MaterialLibraryBrowser: View {
     }
 }
 
-private actor MaterialThumbnailCache {
+actor MaterialThumbnailCache {
     static let shared = MaterialThumbnailCache()
+    func cachedOriginal(_ item: CloudMaterial) -> Data? {
+        guard item.thumbnail_sha256 == item.sha256, item.sha256.count == 64,
+              item.sha256.allSatisfy({ $0.isHexDigit }) else { return nil }
+        let path = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MaterialThumbnails").appendingPathComponent(item.sha256)
+        guard let data = try? Data(contentsOf: path), data.count == item.byte_size,
+              SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == item.sha256 else { return nil }
+        return data
+    }
     func load(_ item: CloudMaterial) async throws -> Data {
         guard item.thumbnail_sha256.count == 64, item.thumbnail_sha256.allSatisfy({ $0.isHexDigit }) else { throw URLError(.badURL) }
         let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("MaterialThumbnails")
         let path = root.appendingPathComponent(item.thumbnail_sha256)
         if let data = try? Data(contentsOf: path) { return data }
-        guard let url = URL(string: item.thumbnail_url), url.scheme == "https" else { throw URLError(.badURL) }
+        guard let url = URL(string: item.thumbnail_url), url.scheme == "https", url.host?.hasSuffix(".aliyuncs.com") == true else { throw URLError(.badURL) }
         let (data, response) = try await URLSession.shared.data(from: url)
         guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 2_000_000,
               SHA256.hash(data: data).map({String(format: "%02x", $0)}).joined() == item.thumbnail_sha256 else { throw URLError(.badServerResponse) }
