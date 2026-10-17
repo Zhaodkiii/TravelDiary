@@ -438,6 +438,25 @@ extension DiaryDocumentStore {
                 .sorted { $0.updatedAt == $1.updatedAt ? $0.id.uuidString < $1.id.uuidString : $0.updatedAt > $1.updatedAt }
         }
     }
+    /// 书架允许局部恢复；其他调用者继续使用严格的 listBooks() 事务语义。
+    nonisolated struct ShelfSnapshot: Sendable {
+        let books: [DiaryBook]
+        let unreadableIDs: [UUID]
+    }
+    nonisolated func loadShelf() async throws -> ShelfSnapshot {
+        try await run {
+            guard FileManager.default.fileExists(atPath: self.libraryRoot.path) else {
+                return ShelfSnapshot(books: [], unreadableIDs: [])
+            }
+            let urls = try FileManager.default.contentsOfDirectory(at: self.libraryRoot, includingPropertiesForKeys: nil)
+            var books: [DiaryBook] = [], failures: [UUID] = []
+            for url in urls {
+                guard let id = UUID(uuidString: url.lastPathComponent) else { continue }
+                do { books.append(try self.readBook(id)) } catch { failures.append(id) }
+            }
+            return ShelfSnapshot(books: DiaryShelfSort.updated.apply(to: books, search: ""), unreadableIDs: failures)
+        }
+    }
     /// 删除当前账号下整本手帐，包括页面、回收站和独立素材。
     nonisolated func deleteBook(_ id: UUID) async throws {
         try await run {

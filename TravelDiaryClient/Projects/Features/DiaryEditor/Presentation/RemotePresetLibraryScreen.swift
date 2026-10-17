@@ -14,7 +14,7 @@ struct PresetBookAvailabilityBadge: View {
     let totalCount: Int
     private var complete: Bool { totalCount > 0 && downloadedCount >= totalCount }
     var body: some View {
-        Label(complete ? "已下载" : "已下载 \(downloadedCount) / \(totalCount) 页",
+        Label(complete ? "已下载" : (downloadedCount == 0 ? "云端" : "已下载 \(downloadedCount) / \(totalCount) 页"),
               systemImage: complete ? "checkmark.circle.fill" : "cloud")
             .font(.caption2).foregroundStyle(complete ? Color.secondary : Color.blue)
             .fixedSize()
@@ -41,7 +41,19 @@ struct RemotePresetReaderDestination: View {
     @State private var retry = 0
     @State private var selection: RemotePresetSelection?
 
+    @State private var reading = true
     var body: some View {
+        VStack(spacing: 0) {
+            Picker("展示方式", selection: $reading) { Text("翻阅").tag(true); Text("总览").tag(false) }
+                .pickerStyle(.segmented).padding()
+            if reading { readerContent }
+            else {
+                RemotePresetDetailScreen(ownerID: ownerID, book: book, targetBook: targetBook,
+                    afterPageID: afterPageID, fixedTarget: fixedTarget, onImported: onImported)
+            }
+        }.background(DiaryLibraryStyle.background).tint(DiaryLibraryStyle.accent).navigationTitle(book.title)
+    }
+    private var readerContent: some View {
         Group {
             if let browse {
                 DiaryPresetBookReader<RemotePresetDetailScreen>(title: browse.title,
@@ -50,7 +62,7 @@ struct RemotePresetReaderDestination: View {
                         return DiaryPresetBookReader<RemotePresetDetailScreen>.Page(id: page.id, url: url, size: browse.page_size.cg,
                             thumbnailURL: URL(string: page.thumbnail_url))
                     }, shellID: browse.shell_page_id, seriesTitle: seriesTitle,
-                    allowsWholeBook: !fixedTarget, onAdd: { ids, whole in
+                    allowsWholeBook: !fixedTarget, remoteBook: book, ownerID: ownerID, onAdd: { ids, whole in
                         selection = RemotePresetSelection(pageIDs: ids, wholeBook: whole)
                     }) {
                         RemotePresetDetailScreen(ownerID: ownerID, book: book, targetBook: targetBook,
@@ -106,15 +118,14 @@ struct RemotePresetDetailScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if let browse {
+                    DiaryRemoteCover(url: URL(string: book.cover_url)).frame(maxWidth: .infinity).frame(height: 260)
+                        .padding(20).background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 16))
+                    Text(book.title).font(.title2.weight(.semibold))
                     HStack {
-                        Text("\(pages.count) 页 · \(Int(browse.page_size.width)) × \(Int(browse.page_size.height))")
+                        Text("\(pages.filter { $0.id != browse.shell_page_id }.count) 页")
                         PresetBookAvailabilityBadge(downloadedCount: min(book.page_count, availability.downloadedPageIDs(bookID: book.id, version: book.version).count), totalCount: book.page_count)
                     }
-                    if !fixedTarget {
-                        Button("整本添加到我的") {
-                            selection = RemotePresetSelection(pageIDs: pages.map(\.id), wholeBook: true)
-                        }.buttonStyle(.borderedProminent)
-                    }
+                    Text("页面总览").font(.headline)
                     DiaryPageListGrid(pages: pages, shellID: browse.shell_page_id, coverID: browse.cover_page_id) { page in
                         VStack {
                             Button { previewID = page.id; showingPreview = true } label: {
@@ -131,6 +142,14 @@ struct RemotePresetDetailScreen: View {
                 if let error { Text(error).foregroundStyle(.red); Button("重试") { retry += 1 } }
             }.padding()
         }.navigationTitle(book.title)
+        .background(DiaryLibraryStyle.background)
+        .safeAreaInset(edge: .bottom) {
+            if !fixedTarget {
+                Button("用这本模板") { selection = RemotePresetSelection(pageIDs: pages.map(\.id), wholeBook: true) }
+                    .buttonStyle(.borderedProminent).controlSize(.large).disabled(pages.isEmpty)
+                    .padding().frame(maxWidth: .infinity).background(.regularMaterial)
+            }
+        }
         .toolbar {
             NavigationLink { PresetDownloadCenter(ownerID: ownerID) } label: {
                 Image(systemName: "arrow.down.circle").accessibilityLabel("下载管理")
@@ -143,7 +162,7 @@ struct RemotePresetDetailScreen: View {
                     ForEach(pages) { page in
                         VStack {
                             if abs((pages.firstIndex { $0.id == page.id } ?? 0) - (pages.firstIndex { $0.id == previewID } ?? 0)) <= 1 {
-                                remoteImage(page.thumbnail_url, size: browse?.page_size.cg ?? CGSize(width: 1, height: 1.4))
+                                remoteImage(page.preview_url, size: browse?.page_size.cg ?? CGSize(width: 1, height: 1.4))
                             } else { Color.clear }
                             Text(page.title)
                         }.padding().tag(Optional(page.id))

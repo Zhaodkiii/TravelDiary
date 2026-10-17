@@ -41,6 +41,12 @@ struct DiaryEditorScreen: View {
                 Button("确定") { session.errorMessage = nil }
                 Button("重新保存") { Task { try? await session.save() } }
             } message: { Text(session.errorMessage ?? "") }
+            .task(id: session.id) {
+                if session.isRoot, let bookID = session.document.bookID {
+                    DiaryBookAccessStore(ownerID: session.store.ownerID)
+                        .record(bookID: bookID, pageID: session.document.id)
+                }
+            }
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active { session.finishInteraction(); Task { try? await session.save() } }
             }

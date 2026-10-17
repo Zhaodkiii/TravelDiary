@@ -31,7 +31,8 @@ do {
         for package in packages where package.pathExtension == "diarypreset" {
             let m = try json(package.appendingPathComponent("package.json"))
             guard m["format"] as? String == "TravelDiary.PresetBook", m["schemaVersion"] as? Int == 1,
-                  m["layerSchemaVersion"] as? Int == 1, m["seriesID"] as? String == category["id"] as? String,
+                  let layerSchema = m["layerSchemaVersion"] as? Int, [1, 2].contains(layerSchema),
+                  m["seriesID"] as? String == category["id"] as? String,
                   let id = m["templateBookID"] as? String, ids.insert(id).inserted,
                   let files = m["files"] as? [[String: Any]], let pages = m["pages"] as? [[String: Any]], !pages.isEmpty,
                   let objects = m["objectTable"] as? [String: String], let assets = m["assetTable"] as? [String: [String: Any]] else { fail(package.path) }
@@ -55,10 +56,29 @@ do {
                     let object = try json(safe(file, package))
                     guard object["id"] as? String == cid, let layers = object["layers"] as? [[String: Any]], layers.count <= 200 else { fail("对象无效") }
                     for layer in layers {
-                        if layer["kind"] as? String == "object" {
+                        let semanticKind = layer["kind"] as? String ?? ""
+                        let renderType = layerSchema == 1 ? semanticKind : (layer["renderType"] as? String ?? "")
+                        if layerSchema == 2 {
+                            let categories: [String: Set<String>] = [
+                                "background": ["paper_texture", "page", "scene"],
+                                "photo": ["slot", "fixed", "frame", "photo_card"],
+                                "paper": ["note", "checklist", "route", "ticket", "title_card"],
+                                "text": ["title", "body", "date", "quote", "caption"],
+                                "illustration": ["scene", "object", "botanical", "tape", "stamp", "ornament"],
+                                "branding": ["logo", "seal", "series_mark"]
+                            ]
+                            guard let subcategory = layer["subcategory"] as? String,
+                                  categories[semanticKind]?.contains(subcategory) == true,
+                                  ["group", "image", "native_text", "canvas", "frame"].contains(renderType) else { fail("图层分类无效") }
+                        }
+                        if renderType == "object" || renderType == "group" {
                             guard let child = layer["contentID"] as? String else { fail("缺少子对象") }; try visit(child, depth + 1)
-                        } else if ["photo", "sticker"].contains(layer["kind"] as? String ?? "") {
+                        } else if ["photo", "sticker", "image"].contains(renderType) {
                             guard let aid = layer["assetID"] as? String, let asset = assets[aid], let path = asset["path"] as? String, paths.contains(path) else { fail("素材引用缺失") }
+                        } else if renderType == "native_text" {
+                            guard semanticKind == "text", layer["text"] is String else { fail("原生文字分类无效") }
+                        } else if !["text", "frame", "canvas"].contains(renderType) {
+                            fail("绘制类型无效")
                         }
                     }
                 }

@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import ImageIO
 
 /// Read-only projection of preset previews; never imports pages into the user's library.
 struct DiaryPresetBookReader<Detail: View>: View {
@@ -17,6 +18,9 @@ struct DiaryPresetBookReader<Detail: View>: View {
     let shellID: String?
     let seriesTitle: String
     var allowsWholeBook = true
+    var localPackage: DiaryPresetPackage? = nil
+    var remoteBook: RemotePresetBook? = nil
+    var ownerID: String? = nil
     let onAdd: ([String], Bool) -> Void
     @ViewBuilder let detail: () -> Detail
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -24,6 +28,12 @@ struct DiaryPresetBookReader<Detail: View>: View {
     @State private var showingList = false
     @State private var spread = 0
     @State private var opened = false
+    @State private var hiddenCategories: Set<DiaryLayerSemanticKind> = []
+    @State private var filterRetry = 0
+    @StateObject private var categoryRenderer = PresetCategoryRenderer()
+    @State private var categoryDownload = PresetCategoryDownloadState()
+    @State private var categoryError: String?
+    private var supportsCategoryControls: Bool { localPackage != nil || remoteBook != nil }
     private var content: [Page] { pages.filter { $0.id != shellID } }
     private var shell: Page? { pages.first { $0.id == shellID } }
     private var spreadCount: Int { content.isEmpty ? 0 : (content.count + 2) / 2 }
@@ -87,6 +97,7 @@ struct DiaryPresetBookReader<Detail: View>: View {
                                   y: min(geometry.size.height - 24, geometry.size.height / 2 + bookHeight / 2 + 32))
                 }
             }.clipped()
+            if supportsCategoryControls && opened { categoryControls }
             HStack {
                 Button {
                     if spread > 0 { spread -= 1 } else { opened = false }
@@ -123,7 +134,82 @@ struct DiaryPresetBookReader<Detail: View>: View {
             previews.update(largePreviewURLs)
         }
         .onChange(of: largePreviewURLs) { _, urls in previews.update(urls) }
-        .onDisappear { previews.update([]) }
+        .onChange(of: spread) { _, _ in hiddenCategories = []; previews.clearCategoryFilter() }
+        .onChange(of: opened) { _, _ in hiddenCategories = []; previews.clearCategoryFilter() }
+        .task(id: categoryRequestID) { await updateCategoryPreview() }
+        .onDisappear { previews.update([]); previews.clearCategoryFilter(); categoryRenderer.reset(); categoryDownload.reset() }
+    }
+
+    private var categoryRequestID: String {
+        "\(spread)-\(opened)-\(filterRetry)-" + hiddenCategories.map(\.rawValue).sorted().joined(separator: ",") + [leftPage, rightPage].compactMap { $0?.url.absoluteString }.joined(separator: "|")
+    }
+
+    private var categoryControls: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                ForEach(DiaryLayerSemanticKind.allCases, id: \.self) { category in
+                    let visible = !hiddenCategories.contains(category)
+                    Button {
+                        if visible { hiddenCategories.insert(category) }
+                        else { hiddenCategories.remove(category) }
+                    } label: {
+                        VStack(spacing: 3) {
+                            Image(systemName: visible ? "eye" : "eye.slash")
+                            Text(category.title)
+                        }
+                        .font(.caption2.weight(.medium))
+                        .frame(maxWidth: .infinity).padding(.vertical, 7)
+                        .foregroundStyle(visible ? Color.accentColor : Color.secondary)
+                        .background(visible ? Color.accentColor.opacity(0.10) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(category.title) \(category.rawValue)")
+                    .accessibilityValue(visible ? "显示" : "隐藏")
+                    .accessibilityHint("控制当前左右两页的预览")
+                }
+            }
+            if remoteBook != nil {
+                PresetCategoryDownloadFeedback(state: categoryDownload).frame(minHeight: 52)
+            }
+            if let categoryError {
+                Text(categoryError).font(.caption).foregroundStyle(.secondary)
+                Button("重试分类预览") { filterRetry += 1 }.font(.caption)
+            }
+        }
+        .padding(.horizontal, 24)
+    }
+
+    private func updateCategoryPreview() async {
+        categoryError = nil
+        guard supportsCategoryControls, opened, !hiddenCategories.isEmpty else {
+            previews.clearCategoryFilter(); categoryRenderer.reset(); categoryDownload.reset(); return
+        }
+        let visiblePages = [leftPage, rightPage].compactMap { $0 }
+        let urls = visiblePages.map(\.url)
+        do {
+            try await Task.sleep(for: .milliseconds(100))
+            let package: DiaryPresetPackage
+            if let localPackage { package = localPackage }
+            else if let remoteBook, let ownerID {
+                // 素材准备期间保留完整预览，下载状态单独展示。
+                previews.clearCategoryFilter()
+                package = try await categoryDownload.load(book: remoteBook,
+                    pageIDs: visiblePages.map(\.id), ownerID: ownerID)
+            } else { return }
+            try Task.checkCancellation()
+            previews.beginCategoryFilter(urls)
+            let images = try await categoryRenderer.render(package: package,
+                pageIDs: visiblePages.map(\.id), hidden: hiddenCategories)
+            try Task.checkCancellation()
+            previews.finishCategoryFilter(Dictionary(uniqueKeysWithValues: visiblePages.compactMap { page in
+                images[page.id].map { (page.url, $0) }
+            }))
+        } catch is CancellationError { }
+        catch {
+            guard !Task.isCancelled else { return }
+            categoryError = error.localizedDescription
+            previews.failCategoryFilter()
+        }
     }
 
     private var leftPage: Page? {
@@ -244,7 +330,19 @@ private struct DiaryPresetPaper: View {
 final class PresetPreviewWindow: ObservableObject {
     @Published private(set) var images: [URL: UIImage] = [:]
     @Published private(set) var failed: Set<URL> = []
+    @Published private(set) var categoryImages: [URL: UIImage] = [:]
+    @Published private(set) var categoryURLs: Set<URL> = []
+    @Published private(set) var categoryFailed = false
     private var tasks: [URL: Task<Void, Never>] = [:]
+
+    func beginCategoryFilter(_ urls: [URL]) {
+        categoryImages = [:]; categoryFailed = false; categoryURLs = Set(urls)
+    }
+    func finishCategoryFilter(_ images: [URL: UIImage]) { categoryImages = images }
+    func failCategoryFilter() { categoryFailed = true }
+    func clearCategoryFilter() {
+        categoryURLs = []; categoryImages = [:]; categoryFailed = false
+    }
     private var active: Set<URL> = []
 
     nonisolated static func urls(content: [URL], spread: Int) -> [URL] {
@@ -300,7 +398,13 @@ private struct PresetLargePreview: View {
     @ObservedObject var previews: PresetPreviewWindow
     var body: some View {
         ZStack {
-            if let image = previews.images[url] {
+            if previews.categoryURLs.contains(url) {
+                if let image = previews.categoryImages[url] {
+                    Image(uiImage: image).resizable().scaledToFit()
+                } else if previews.categoryFailed {
+                    Text("预览生成失败").font(.caption).foregroundStyle(.secondary)
+                } else { ProgressView("正在更新预览…").font(.caption) }
+            } else if let image = previews.images[url] {
                 Image(uiImage: image).resizable().scaledToFit()
             } else {
                 if let thumbnailURL { DiaryPresetReaderImage(url: thumbnailURL) }
@@ -309,6 +413,136 @@ private struct PresetLargePreview: View {
                     Button("重试大图") { previews.retry(url) }.font(.caption)
                         .padding(6).background(.regularMaterial, in: Capsule())
                 }
+            }
+        }
+    }
+}
+
+/// 当前跨页的临时预览缓存。磁盘读取和图片解码在后台，绘制复用正式页面绘制器。
+@MainActor
+private final class PresetCategoryRenderer: ObservableObject {
+    private struct Prepared: Sendable {
+        let document: DiaryDocument
+        let images: [UUID: UIImage]
+    }
+    private var identity = ""
+    private var prepared: [String: Prepared] = [:]
+
+    func reset() { identity = ""; prepared = [:] }
+
+    func render(package: DiaryPresetPackage, pageIDs: [String], hidden: Set<DiaryLayerSemanticKind>) async throws -> [String: UIImage] {
+        let key = package.root.path + pageIDs.joined(separator: ",")
+        if identity != key { prepared = [:]; identity = key }
+        var result: [String: UIImage] = [:]
+        for id in pageIDs {
+            try Task.checkCancellation()
+            let page: Prepared
+            if let cached = prepared[id] { page = cached }
+            else {
+                let work = Task.detached(priority: .userInitiated) { try Self.prepare(package: package, pageID: id) }
+                page = try await withTaskCancellationHandler(operation: { try await work.value }, onCancel: { work.cancel() })
+                try Task.checkCancellation()
+                guard identity == key else { throw CancellationError() }
+                prepared[id] = page
+            }
+            let document = page.document.hidingPresetCategories(hidden)
+            let size = document.root.referenceSize
+            let scale = min(1, 1400 / max(size.width, size.height))
+            let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = false
+            let output = CGSize(width: size.width * scale, height: size.height * scale)
+            result[id] = UIGraphicsImageRenderer(size: output, format: format).image { renderer in
+                renderer.cgContext.scaleBy(x: scale, y: scale)
+                DiaryPageRenderer.draw(document, images: page.images, in: renderer.cgContext, cacheObjects: false)
+            }
+            await Task.yield()
+        }
+        return result
+    }
+
+    nonisolated private static func prepare(package: DiaryPresetPackage, pageID: String) throws -> Prepared {
+        guard let reference = package.manifest.pages.first(where: { $0.id == pageID }) else { throw DiaryEditorError.invalidDocument }
+        let page = try package.read(PresetPage.self, reference.path)
+        let ids = Dictionary(uniqueKeysWithValues: package.manifest.assetTable.keys.map { ($0, UUID()) })
+        let document = try package.instantiate(page, bookID: UUID(), targetSize: page.size.cg, assetIDs: ids)
+        var images: [UUID: UIImage] = [:]
+        for (key, asset) in package.manifest.assetTable {
+            try Task.checkCancellation()
+            guard let id = ids[key], document.assets[id] != nil else { continue }
+            guard let source = CGImageSourceCreateWithURL(try package.url(asset.path) as CFURL, nil),
+                  let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 1400
+                  ] as CFDictionary) else { throw DiaryEditorError.missingResource }
+            images[id] = UIImage(cgImage: cg)
+        }
+        return Prepared(document: document, images: images)
+    }
+}
+
+/// 下载属于全局下载中心；退出或翻页仅结束当前等待，不丢弃已完成的资源。
+@MainActor
+private final class PresetCategoryDownloadState: ObservableObject {
+    @Published private(set) var job: PresetDownloadJob?
+    @Published private(set) var preparing = false
+    @Published private(set) var ready = false
+    private var subscription: AnyCancellable?
+    private let manager = PresetDownloadManager.shared
+
+    func reset() { subscription = nil; job = nil; preparing = false; ready = false }
+    func pause() { if let job { manager.pause(job.id) } }
+    func resume() { if let job { manager.resume(job.id) } }
+    func cancel() { if let job { manager.cancel(job.id) } }
+
+    func load(book: RemotePresetBook, pageIDs: [String], ownerID: String) async throws -> DiaryPresetPackage {
+        reset(); preparing = true
+        defer { preparing = false }
+        let value = try await manager.prepareCategoryPreview(book: book, pageIDs: pageIDs, ownerID: ownerID)
+        try Task.checkCancellation()
+        guard let id = value.downloadID else { ready = true; return value.package }
+        subscription = manager.$jobs.map { $0.first { $0.id == id } }.removeDuplicates()
+            .sink { [weak self] in self?.job = $0 }
+        while true {
+            try Task.checkCancellation()
+            guard let current = manager.jobs.first(where: { $0.id == id }) else { throw DiaryEditorError.missingResource }
+            if let package = manager.preparedPackage(id) { ready = true; return package }
+            if current.status == "cancelled" {
+                throw NSError(domain: "PresetCategoryPreview", code: 2,
+                              userInfo: [NSLocalizedDescriptionKey: "素材下载已取消。"])
+            }
+            // 暂停或失败时保持等待，用户继续/重试后自动完成预览。
+            try await Task.sleep(for: .milliseconds(200))
+        }
+    }
+}
+
+private struct PresetCategoryDownloadFeedback: View {
+    @ObservedObject var state: PresetCategoryDownloadState
+    var body: some View {
+        VStack(spacing: 4) {
+            if state.ready {
+                Label("当前跨页素材已缓存", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
+            } else if let job = state.job {
+                let fraction = min(1, Double(job.bytes) / Double(max(1, job.total)))
+                ProgressView(value: fraction)
+                HStack {
+                    Text(job.status == "verifying" ? "正在校验素材…" : job.status == "queued" ? "等待下载…" : job.status == "paused" ? "下载已暂停" : job.status == "failed" ? "下载失败" : "下载素材 \(Int(fraction * 100))%")
+                    Spacer()
+                    Text("\(ByteCountFormatter.string(fromByteCount: job.bytes, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: job.total, countStyle: .file))")
+                }.font(.caption2).foregroundStyle(.secondary)
+                HStack {
+                    if ["queued", "downloading"].contains(job.status) {
+                        Button("暂停", action: state.pause)
+                    } else if ["paused", "failed"].contains(job.status) {
+                        Button(job.status == "failed" ? "重试下载" : "继续", action: state.resume)
+                    }
+                    if !["ready", "completed", "cancelled"].contains(job.status) { Button("取消下载", action: state.cancel) }
+                }.font(.caption)
+                if job.status == "failed", let error = job.error { Text(error).font(.caption2).foregroundStyle(.secondary) }
+            } else if state.preparing {
+                ProgressView("正在获取当前跨页资源清单…").font(.caption)
+            } else {
+                Text("首次筛选时下载当前跨页素材").font(.caption).foregroundStyle(.secondary)
             }
         }
     }

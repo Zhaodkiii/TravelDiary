@@ -25,8 +25,11 @@ nonisolated struct PresetTransform: Decodable, Sendable {
 nonisolated struct PresetNode: Decodable, Sendable {
     let id: String
     let name: String
+    /// 新格式表示素材语义；旧格式中的同名字段可能是绘制类型。
+    let kind: String
+    let subcategory: String?
+    let renderType: String?
     let category: DiaryLayerCategory?
-    let kind: DiaryLayer.Kind
     let size: PresetSize
     let transform: PresetTransform
     let visible: Bool
@@ -42,6 +45,43 @@ nonisolated struct PresetNode: Decodable, Sendable {
     let crop: Crop?
     let blendMode: DiaryBlendMode?
     nonisolated struct Crop: Decodable, Sendable { let zoom: Double; let offset: PresetPoint }
+
+    var drawingKind: DiaryLayer.Kind {
+        guard let renderType else { return DiaryLayer.Kind(rawValue: kind) ?? .sticker }
+        switch renderType {
+        case "group": return .object
+        case "image": return kind == "photo" && subcategory == "slot" ? .photo : .sticker
+        case "native_text": return .text
+        case "canvas": return .canvas
+        case "frame": return .frame
+        default: return DiaryLayer.Kind(rawValue: renderType) ?? .sticker
+        }
+    }
+
+    var semanticKind: DiaryLayerSemanticKind? {
+        guard renderType != nil else { return nil }
+        return DiaryLayerSemanticKind(rawValue: kind)
+    }
+
+    var isValidLayerSchemaV2: Bool {
+        guard let semanticKind, let subcategory, !subcategory.isEmpty, let renderType else { return false }
+        let allowed: [DiaryLayerSemanticKind: Set<String>] = [
+            .background: ["paper_texture", "page", "scene"],
+            .photo: ["slot", "fixed", "frame", "photo_card"],
+            .paper: ["note", "checklist", "route", "ticket", "title_card"],
+            .text: ["title", "body", "date", "quote", "caption"],
+            .illustration: ["scene", "object", "botanical", "tape", "stamp", "ornament"],
+            .branding: ["logo", "seal", "series_mark"]
+        ]
+        guard allowed[semanticKind]?.contains(subcategory) == true else { return false }
+        switch renderType {
+        case "group": return contentID != nil
+        case "image": return assetID != nil
+        case "native_text": return semanticKind == .text && text != nil
+        case "canvas", "frame": return true
+        default: return false
+        }
+    }
 }
 nonisolated struct PresetContent: Decodable, Sendable {
     let id: String
@@ -128,7 +168,7 @@ nonisolated struct DiaryPresetPackage: Identifiable, Sendable {
         let started = Date()
         log("validate.begin pages=\(manifest.pages.count) objects=\(manifest.objectTable.count) assets=\(manifest.assetTable.count) files=\(manifest.files.count)")
         guard manifest.format == "TravelDiary.PresetBook", manifest.schemaVersion == 1,
-              manifest.layerSchemaVersion == 1, manifest.packageVersion > 0,
+              [1, 2].contains(manifest.layerSchemaVersion), manifest.packageVersion > 0,
               !manifest.pages.isEmpty, manifest.pages.count <= 100,
               Set(manifest.pages.map(\.id)).count == manifest.pages.count,
               manifest.pages.contains(where: { $0.id == manifest.coverPageID }),
@@ -204,9 +244,14 @@ nonisolated struct DiaryPresetPackage: Identifiable, Sendable {
             content.primaryLayerID = source.primaryLayerID.flatMap { ids[$0] }
             if source.primaryLayerID != nil && content.primaryLayerID == nil { throw DiaryEditorError.invalidDocument.logged() }
             for node in source.layers {
-                var layer = DiaryLayer(id: ids[node.id]!, name: node.name, kind: node.kind, transform: node.transform.value, size: node.size.cg,
+                if manifest.layerSchemaVersion >= 2 && !node.isValidLayerSchemaV2 {
+                    throw invalid("预设图层语义或绘制字段无效 layer=\(node.name)")
+                }
+                var layer = DiaryLayer(id: ids[node.id]!, name: node.name, kind: node.drawingKind, transform: node.transform.value, size: node.size.cg,
                                        text: node.text ?? "", fontSize: node.fontSize ?? 36, visible: node.visible, locked: node.locked)
                 layer.category = node.category
+                layer.semanticKind = node.semanticKind
+                layer.subcategory = node.subcategory
                 layer.font = node.font
                 layer.blendMode = node.blendMode
                 if let assetID = node.assetID {
@@ -290,7 +335,7 @@ nonisolated struct BundleDiaryPresetProvider: DiaryPresetProviding {
             for url in packages {
                 do {
                     let manifest = try JSONDecoder().decode(PresetManifest.self, from: Data(contentsOf: url.appendingPathComponent("package.json")))
-                    guard manifest.seriesID == category.id, manifest.schemaVersion == 1, manifest.layerSchemaVersion == 1,
+                    guard manifest.seriesID == category.id, manifest.schemaVersion == 1, [1, 2].contains(manifest.layerSchemaVersion),
                           manifest.format == "TravelDiary.PresetBook", !manifest.pages.isEmpty else { throw DiaryEditorError.invalidDocument.logged() }
                     let package = DiaryPresetPackage(root: url, manifest: manifest)
                     package.log("catalog.discovered series=\(category.id) pages=\(manifest.pages.count) assets=\(manifest.assetTable.count) files=\(manifest.files.count)")

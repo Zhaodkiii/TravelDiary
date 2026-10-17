@@ -112,7 +112,7 @@ struct SupportMainCoordinatorView: View {
 //                    }
 //                    .tag(SupportRootTab.photoEditor)
 
-                DiaryEditorHomeView(ownerID: String(session.accountID), path: $path, creating: $showsCreateDiaryBookForm)
+                DiaryEditorHomeView(ownerID: String(session.accountID), path: $path, creating: $showsCreateDiaryBookForm, onBrowseTemplates: { selectedTab = .diaryPresets })
                     .id(session.accountID)
                     .tabItem {
                         Label("手帐", systemImage: "book.pages")
@@ -122,7 +122,7 @@ struct SupportMainCoordinatorView: View {
                 DiaryPresetLibraryScreen(ownerID: String(session.accountID))
                     .id(session.accountID)
                 .tabItem {
-                    Label("预设", systemImage: "books.vertical")
+                    Label("模板", systemImage: "books.vertical")
                 }
                 .tag(SupportRootTab.diaryPresets)
 
@@ -144,10 +144,10 @@ struct SupportMainCoordinatorView: View {
                 .tag(SupportRootTab.settings)
             }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { tabToolbar }
+            .toolbar { if path.isEmpty { tabToolbar } }
             // 路由在 TabView 外注册，所有标签中的链接都能由根导航栈解析。
             .navigationDestination(for: DiaryBookRoute.self) { route in
-                DiaryBookDestination(ownerID: String(session.accountID), bookID: route.bookID)
+                DiaryBookDestination(ownerID: String(session.accountID), bookID: route.bookID, managePages: route.managePages)
                     .id(route.bookID)
             }
             .navigationDestination(for: AccountRoute.self) { _ in
@@ -186,7 +186,7 @@ struct SupportMainCoordinatorView: View {
             }
         case .diaryEditor:
             ToolbarItem(placement: .principal) {
-                tabTitle("我的")
+                tabTitle("我的手帐")
             }
             if path.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -196,7 +196,7 @@ struct SupportMainCoordinatorView: View {
             }
         case .diaryPresets:
             ToolbarItem(placement: .principal) {
-                tabTitle("预设")
+                tabTitle("旅行模板")
             }
         case .secondCamera:
             // The camera deliberately presents an immersive, navigation-bar-free surface.

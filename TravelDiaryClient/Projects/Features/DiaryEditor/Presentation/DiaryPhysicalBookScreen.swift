@@ -307,11 +307,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
     }
     func updateUIViewController(_ controller: UIPageViewController, context: Context) {
         context.coordinator.parent = self
-        // 减少动态效果时关闭交互卷页，仍可通过按钮和缩略图无动画导航。
-        controller.gestureRecognizers.forEach {
-            // 单击用于编辑；卷页只保留拖动手势。
-            $0.isEnabled = !reduceMotion && !($0 is UITapGestureRecognizer)
-        }
+        context.coordinator.updateMotionPolicy(in: controller)
         context.coordinator.show(spread, in: controller, animated: !reduceMotion)
     }
 
@@ -319,6 +315,24 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
         var parent: DiaryPageCurlReader
         private var transitioning = false
         private var displayed = -1
+        private var motionSuspendedGestures: [UIGestureRecognizer] = []
+        private var motionIsReduced = false
+
+        func updateMotionPolicy(in controller: UIPageViewController) {
+            // UIKit owns the enabled state of its curl recognizers (including boundary
+            // recognizers). Never force-enable them on every SwiftUI update.
+            guard motionIsReduced != parent.reduceMotion else { return }
+            motionIsReduced = parent.reduceMotion
+            if motionIsReduced {
+                motionSuspendedGestures = controller.gestureRecognizers.filter {
+                    $0.isEnabled && !($0 is UITapGestureRecognizer)
+                }
+                motionSuspendedGestures.forEach { $0.isEnabled = false }
+            } else {
+                motionSuspendedGestures.forEach { $0.isEnabled = true }
+                motionSuspendedGestures.removeAll()
+            }
+        }
         private let rings = UIHostingController(rootView: DiaryBindingRings())
 
         func installRings(in controller: UIPageViewController) {
@@ -343,7 +357,8 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
         init(_ parent: DiaryPageCurlReader) { self.parent = parent }
 
         func page(_ index: Int) -> UIViewController? {
-            guard (0..<(parent.spreadCount * 2)).contains(index) else { return nil }
+            // A mid-spine controller must always start with two leaves, even for an empty book.
+            guard (0..<(max(1, parent.spreadCount) * 2)).contains(index) else { return nil }
             return parent.makePaper(index) { [weak self] in self?.transitioning == false }
         }
         func show(_ target: Int, in controller: UIPageViewController, animated: Bool) {

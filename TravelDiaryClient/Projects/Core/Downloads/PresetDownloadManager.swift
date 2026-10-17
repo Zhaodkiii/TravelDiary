@@ -2,16 +2,19 @@ import Foundation
 import Combine
 import CryptoKit
 
-nonisolated struct RemotePresetBook: Decodable, Identifiable, Sendable {
+nonisolated struct RemotePresetBook: Codable, Identifiable, Sendable {
     let id: String
     let title: String
     let series: String
     let version: Int
     let page_count: Int
     let cover_url: String
+    var content_page_count: Int? = nil
+    var style_tags: [String]? = nil
+    var usage_tags: [String]? = nil
 }
-nonisolated struct RemotePresetCatalog: Decodable, Sendable {
-    struct Series: Decodable, Sendable { let slug: String; let title: String }
+nonisolated struct RemotePresetCatalog: Codable, Sendable {
+    struct Series: Codable, Sendable { let slug: String; let title: String }
     let series: [Series]
     let books: [RemotePresetBook]
 }
@@ -177,7 +180,7 @@ final class PresetDownloadManager: ObservableObject {
         try await browse(book, ownerID: owner ?? "").pages
     }
     @discardableResult
-    func enqueue(book: RemotePresetBook, pageIDs: [String]?, owner: String, target: DiaryBook?, after: UUID?, downloadOnly: Bool = false) async throws -> UUID {
+    func enqueue(book: RemotePresetBook, pageIDs: [String]?, owner: String, target: DiaryBook?, after: UUID?, downloadOnly: Bool = false, minimumLayerSchema: Int? = nil) async throws -> UUID {
         await restoreTask?.value
         activate(owner: owner)
         if downloadOnly, let existing = jobs.last(where: { job in
@@ -185,12 +188,24 @@ final class PresetDownloadManager: ObservableObject {
                   let manifest = try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData),
                   manifest.templateBookID == book.id, manifest.packageVersion == book.version else { return false }
             return pageIDs.map { Set($0).isSubset(of: Set(manifest.pages.map(\.id))) } ?? job.wholeBook
-        }) { return existing.id }
+        }) {
+            if let minimumLayerSchema,
+               let manifest = try? JSONDecoder().decode(PresetManifest.self, from: existing.manifestData),
+               manifest.layerSchemaVersion < minimumLayerSchema {
+                throw NSError(domain: "PresetCategoryPreview", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                    "此云端模板尚未提供组件分类，请发布带分类信息的新版本后使用。"])
+            }
+            return existing.id
+        }
         let data = try await request("templates/\(book.id)/\(book.version)/", body: pageIDs.map { ["page_ids": $0] } ?? [:])
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let plan = json["id"] as? String, let manifest = json["manifest"] else { throw DiaryEditorError.invalidDocument }
         let bytes = try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
         let package = try JSONDecoder().decode(PresetManifest.self, from: bytes)
+        if let minimumLayerSchema, package.layerSchemaVersion < minimumLayerSchema {
+            throw NSError(domain: "PresetCategoryPreview", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                "此云端模板尚未提供组件分类，请发布带分类信息的新版本后使用。"])
+        }
         let jobID = UUID()
         jobs.append(PresetDownloadJob(id: jobID, owner: owner, planID: plan, title: book.title,
             manifestData: bytes, wholeBook: pageIDs == nil, targetID: pageIDs == nil ? nil : target?.id,
@@ -217,10 +232,32 @@ final class PresetDownloadManager: ObservableObject {
         let package = DiaryPresetPackage(root: root.appendingPathComponent(id.uuidString), manifest: manifest)
         return PresetImportPreparation(package: package, downloadID: id)
     }
+    /// 浏览过滤只下载指定页面，不创建用户手帐；首次仅请求轻量清单检查分类能力。
+    func prepareCategoryPreview(book: RemotePresetBook, pageIDs: [String], ownerID: String) async throws -> PresetImportPreparation {
+        await restoreTask?.value
+        try Task.checkCancellation()
+        activate(owner: ownerID)
+        if let cached = cachedPackage(bookID: book.id, version: book.version, pageIDs: pageIDs), cached.manifest.layerSchemaVersion >= 2 {
+            return PresetImportPreparation(package: cached, downloadID: nil)
+        }
+        let id = try await enqueue(book: book, pageIDs: pageIDs, owner: ownerID, target: nil, after: nil,
+                                   downloadOnly: true, minimumLayerSchema: 2)
+        if let ready = preparedPackage(id) { return PresetImportPreparation(package: ready, downloadID: nil) }
+        guard let job = jobs.first(where: { $0.id == id }) else { throw DiaryEditorError.missingResource }
+        let manifest = try JSONDecoder().decode(PresetManifest.self, from: job.manifestData)
+        return PresetImportPreparation(package: DiaryPresetPackage(root: root.appendingPathComponent(id.uuidString), manifest: manifest), downloadID: id)
+    }
+
     func cachedPackage(bookID: String, version: Int, pageIDs: [String]) -> DiaryPresetPackage? {
         packages.values.first {
             $0.manifest.templateBookID == bookID && $0.manifest.packageVersion == version
                 && Set(pageIDs).isSubset(of: Set($0.manifest.pages.map(\.id)))
+        }
+    }
+    func completeCachedPackage(for book: RemotePresetBook) -> DiaryPresetPackage? {
+        packages.values.first {
+            $0.id == book.id && $0.manifest.packageVersion == book.version
+                && book.page_count > 0 && $0.manifest.pages.count == book.page_count
         }
     }
     func preparedPackage(_ id: UUID) -> DiaryPresetPackage? { packages[id] }
@@ -290,9 +327,9 @@ final class PresetDownloadManager: ObservableObject {
     }
     private func progress(_ id: UUID, bytes: Int64) {
         guard Date().timeIntervalSince(lastProgress[id] ?? .distantPast) >= 0.25,
-              let i = jobs.firstIndex(where: { $0.id == id }) else { return }
+              let i = jobs.firstIndex(where: { $0.id == id }), jobs[i].status == "downloading" else { return }
         lastProgress[id] = Date()
-        jobs[i].bytes = bytes
+        jobs[i].bytes = min(jobs[i].total, max(jobs[i].bytes, bytes))
         persist(immediate: false)
     }
     private func schedule() {
@@ -315,8 +352,9 @@ final class PresetDownloadManager: ObservableObject {
             for (fileIndex, file) in manifest.files.enumerated() {
                 try Task.checkCancellation()
                 let destination = try await Task.detached(priority: .utility) { try package.url(file.path) }.value
+                let completedBytes = complete
                 let cached = try await download(file, plan: job.planID, paths: Array(manifest.files.dropFirst(fileIndex).prefix(50).map(\.path))) { bytes in
-                    self.progress(id, bytes: complete + Int64(bytes))
+                    self.progress(id, bytes: completedBytes + Int64(bytes))
                 }
                 try await Task.detached(priority: .utility) {
                     try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -349,7 +387,7 @@ final class PresetDownloadManager: ObservableObject {
             }
         }
     }
-    private func download(_ file: PresetManifest.FileRecord, plan: String, paths: [String], progress: (Int) -> Void) async throws -> URL {
+    private func download(_ file: PresetManifest.FileRecord, plan: String, paths: [String], progress: @escaping @MainActor @Sendable (Int) -> Void) async throws -> URL {
         guard file.sha256.count == 64, file.sha256.allSatisfy({ $0.isHexDigit }), file.byteCount >= 0, file.byteCount <= 100_000_000 else { throw DiaryEditorError.invalidDocument }
         while lockedHashes.contains(file.sha256) { try await Task.sleep(for: .milliseconds(150)) }
         try Task.checkCancellation()
@@ -384,7 +422,11 @@ final class PresetDownloadManager: ObservableObject {
                               url.host?.hasSuffix(".aliyuncs.com") == true else { throw URLError(.badURL) }
                         var request = URLRequest(url: url); request.timeoutInterval = 120
                         request.setValue("bytes=\(offset)-\(offset + length - 1)", forHTTPHeaderField: "Range")
-                        let (tmp, response) = try await URLSession.shared.download(for: request)
+                        let partOffset = offset
+                        let transfer = PresetTransferProgress { count in
+                            Task { @MainActor in progress(partOffset + min(length, Int(count))) }
+                        }
+                        let (tmp, response) = try await URLSession.shared.download(for: request, delegate: transfer)
                         guard let http = response as? HTTPURLResponse, http.statusCode == 206,
                               http.value(forHTTPHeaderField: "Content-Range") == "bytes \(offset)-\(offset + length - 1)/\(file.byteCount)" else {
                             signedURLs.removeValue(forKey: plan)
@@ -430,4 +472,15 @@ final class PresetDownloadManager: ObservableObject {
         }.value
         return final
     }
+}
+
+/// 提供区间内部的实时进度；已完成区间仍由下载管理器持久化。
+private nonisolated final class PresetTransferProgress: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    let report: @Sendable (Int64) -> Void
+    init(report: @escaping @Sendable (Int64) -> Void) { self.report = report }
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        report(totalBytesWritten)
+    }
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) { }
 }

@@ -133,20 +133,10 @@ struct DiaryExportSpread: View {
     let right: UIImage?
     let lining: Bool
     var body: some View {
-        GeometryReader { geometry in
-            let rim = geometry.size.width * 0.0225
-            let innerWidth = geometry.size.width - rim * 2
-            let gap = innerWidth * DiaryBookSpine.halfGapFraction
-            ZStack {
-                Image("DiaryBookLeather").resizable()
-                LinearGradient(colors: [.black.opacity(0.12), .black.opacity(0.48), .black.opacity(0.12)], startPoint: .leading, endPoint: .trailing)
-                    .frame(width: gap).padding(.vertical, rim)
-                HStack(spacing: gap) {
-                    leaf(left, lining: lining)
-                    leaf(right, lining: false)
-                }.padding(.horizontal, rim).padding(.vertical, rim)
-                DiaryBindingRings().padding(rim)
-            }
+        DiaryBoundSpread {
+            leaf(left, lining: lining)
+        } right: {
+            leaf(right, lining: false)
         }
     }
     @ViewBuilder private func leaf(_ image: UIImage?, lining: Bool) -> some View {

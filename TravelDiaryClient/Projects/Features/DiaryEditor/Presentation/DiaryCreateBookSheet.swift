@@ -38,6 +38,8 @@ struct DiaryCreateBookSheet: View {
                 if photoStep { photoPage } else { presetsPage }
                 if let error { Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal) }
             }
+            .background(DiaryLibraryStyle.background)
+            .tint(DiaryLibraryStyle.accent)
             .navigationTitle(photoStep ? "上传照片" : "新建手帐本")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -5,6 +5,33 @@ import UIKit
 
 @MainActor
 struct DiaryPresetTests {
+    @Test func categoryPreviewKeepsOtherCategoriesInsideMixedGroups() throws {
+        var doc = DiaryDocument()
+        func layer(_ name: String, _ category: DiaryLayerSemanticKind?) -> DiaryLayer {
+            var value = DiaryLayer(name: name, kind: .sticker,
+                transform: DiaryTransform(position: .zero, pivot: .zero), size: CGSize(width: 100, height: 100))
+            value.semanticKind = category
+            return value
+        }
+        let background = layer("背景", .background)
+        let text = layer("独立文字", .text)
+        let inherited = layer("继承背景类别的像素层", nil)
+        var protected = layer("原本隐藏的纸卡", .paper); protected.visible = false
+        let child = DiaryObjectContent(role: .canvas, referenceSize: CGSize(width: 100, height: 100),
+            layers: [background, text, inherited, protected])
+        doc.objects[child.id] = child
+        var group = layer("含独立文字的背景组合", .background)
+        group.kind = .object; group.contentID = child.id
+        doc.objects[doc.rootContentID]?.layers = [group]
+        let filtered = doc.hidingPresetCategories([.background])
+        let layers = try #require(filtered.objects[child.id]?.layers)
+        #expect(filtered.root.layers[0].visible)
+        #expect(layers.map(\.visible) == [false, true, false, false])
+        #expect(doc.objects[child.id]?.layers.map(\.visible) == [true, true, true, false])
+        #expect(doc.hidingPresetCategories([]) == doc)
+        #expect(doc.hidingPresetCategories(Set(DiaryLayerSemanticKind.allCases)).objects[child.id]?.layers.allSatisfy { !$0.visible } == true)
+    }
+
     private func package() throws -> DiaryPresetPackage {
         let catalog = try BundleDiaryPresetProvider().catalog()
         #expect(catalog.issues.isEmpty)

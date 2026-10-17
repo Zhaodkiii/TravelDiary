@@ -89,6 +89,9 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
     var size: CGSize
     /// 文字图片仍使用 sticker 绘制；独立分类供后续递归隐藏文字使用。
     var category: DiaryLayerCategory? = nil
+    /// 素材语义分类，与绘制类型 Kind 分开保存。
+    var semanticKind: DiaryLayerSemanticKind? = nil
+    var subcategory: String? = nil
     var assetID: UUID?
     var contentID: UUID?
     var frameTargetID: UUID?
@@ -120,6 +123,45 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
 /// 语义分类独立于绘制类型；nil 表示普通图层，不从显示名称推断。
 nonisolated enum DiaryLayerCategory: String, Codable, Sendable {
     case textImage
+}
+
+nonisolated enum DiaryLayerSemanticKind: String, Codable, CaseIterable, Sendable {
+    case background, photo, paper, text, illustration, branding
+
+    var title: String {
+        switch self {
+        case .background: return "背景"
+        case .photo: return "照片"
+        case .paper: return "纸卡"
+        case .text: return "文字"
+        case .illustration: return "装饰"
+        case .branding: return "品牌"
+        }
+    }
+}
+
+extension DiaryDocument {
+    /// 只过滤预览副本的绘制层；组合中的独立子类保留自己的语义和可见性。
+    nonisolated func hidingPresetCategories(_ hidden: Set<DiaryLayerSemanticKind>) -> DiaryDocument {
+        var copy = self
+        var visited = Set<UUID>()
+        func visit(_ id: UUID, inherited: DiaryLayerSemanticKind?) {
+            guard visited.insert(id).inserted, var content = copy.objects[id] else { return }
+            if hidden.contains(.background), inherited == .background { content.background = nil }
+            for index in content.layers.indices {
+                let layer = content.layers[index]
+                let category = layer.semanticKind ?? inherited
+                if let child = layer.contentID {
+                    visit(child, inherited: category)
+                } else if let category, hidden.contains(category) {
+                    content.layers[index].visible = false
+                }
+            }
+            copy.objects[id] = content
+        }
+        visit(rootContentID, inherited: nil)
+        return copy
+    }
 }
 
 nonisolated enum DiaryBlendMode: String, Codable, Sendable {

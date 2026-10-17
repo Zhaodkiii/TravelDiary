@@ -3,12 +3,14 @@ import SwiftUI
 /// 专用路由避免与页面、素材等其他 UUID 跳转混淆。
 struct DiaryBookRoute: Hashable {
     let bookID: UUID
+    var managePages = false
 }
 
 /// 根导航栈根据 ID 读取最新目录，不依赖书架子页面的加载状态。
 struct DiaryBookDestination: View {
     let ownerID: String
     let bookID: UUID
+    var managePages = false
     @State private var book: DiaryBook?
     @State private var error: String?
     @State private var retry = 0
@@ -17,7 +19,7 @@ struct DiaryBookDestination: View {
     var body: some View {
         Group {
             if let book {
-                if book.pages.isEmpty {
+                if managePages || book.pages.isEmpty {
                     DiaryBookScreen(ownerID: ownerID, book: book)
                 } else {
                     DiaryPhysicalBookScreen(
