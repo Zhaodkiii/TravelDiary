@@ -5,6 +5,15 @@ import UIKit
 
 @MainActor
 struct MaterialLibraryTests {
+    @Test func queryParametersStayOutOfURLPath() throws {
+        let request = try MaterialCatalogRepository.networkRequest("libraries/?type=sticker&template=21a8759e-e59f-58a0-b92e-86d41d88848a&template_version=2")
+        #expect(request.path == "/api/v1/materials/libraries/")
+        #expect(request.queryItems?.first(where: { $0.name == "type" })?.value == "sticker")
+        #expect(request.queryItems?.first(where: { $0.name == "template_version" })?.value == "2")
+        let search = try MaterialCatalogRepository.networkRequest("items/?q=%E8%8A%B1%E8%8D%89%20%26%20%E8%83%B6%E5%B8%A6")
+        #expect(search.path == "/api/v1/materials/items/")
+        #expect(search.queryItems?.first?.value == "花草 & 胶带")
+    }
     private func png(_ color: UIColor) throws -> Data {
         let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 60)).image { context in
             color.setFill(); context.fill(CGRect(x: 0, y: 0, width: 40, height: 60))

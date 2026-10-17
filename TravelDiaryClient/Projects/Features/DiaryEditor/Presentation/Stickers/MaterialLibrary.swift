@@ -43,6 +43,13 @@ final class MaterialCatalogRepository {
     var engine: SupportNetworkEngine?
     private(set) var owner = ""
     func activate(_ owner: String) { self.owner = owner }
+    static func networkRequest(_ path: String, body: [String: Bool]? = nil) throws -> SupportNetworkRequest {
+        guard let parts = URLComponents(string: path), parts.scheme == nil, parts.host == nil, parts.fragment == nil else { throw URLError(.badURL) }
+        return SupportNetworkRequest(method: body == nil ? .get : .post,
+            path: "/api/v1/materials/" + parts.path, queryItems: parts.queryItems,
+            body: body.map { .json(AnyEncodable($0)) } ?? .none,
+            strategy: NetworkStrategy(requiresAuth: true))
+    }
     func request<T: Decodable>(_ path: String, body: [String: Bool]? = nil) async throws -> T {
         guard let engine else { throw URLError(.userAuthenticationRequired) }
         let capturedOwner = owner
@@ -50,9 +57,7 @@ final class MaterialCatalogRepository {
         let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("MaterialCatalog")
         let cache = root.appendingPathComponent(key)
         do {
-            let response = try await engine.sendRaw(SupportNetworkRequest(method: body == nil ? .get : .post,
-                path: "/api/v1/materials/" + path, body: body.map { .json(AnyEncodable($0)) } ?? .none,
-                strategy: NetworkStrategy(requiresAuth: true)))
+            let response = try await engine.sendRaw(Self.networkRequest(path, body: body))
             guard owner == capturedOwner else { throw CancellationError() }
             let result = try JSONDecoder().decode(T.self, from: response.data)
             if body == nil {
