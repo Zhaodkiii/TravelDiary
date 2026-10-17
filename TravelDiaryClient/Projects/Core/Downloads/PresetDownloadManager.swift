@@ -144,8 +144,10 @@ final class PresetDownloadManager: ObservableObject {
     func configure(engine: SupportNetworkEngine) {
         browseCache.removeAll()
         self.engine = engine
+        MaterialCatalogRepository.shared.engine = engine
     }
     func activate(owner: String) {
+        MaterialCatalogRepository.shared.activate(owner)
         if self.owner != owner {
             for job in jobs where running[job.id] != nil { pause(job.id) }
             self.owner = owner
@@ -387,7 +389,20 @@ final class PresetDownloadManager: ObservableObject {
             }
         }
     }
-    private func download(_ file: PresetManifest.FileRecord, plan: String, paths: [String], progress: @escaping @MainActor @Sendable (Int) -> Void) async throws -> URL {
+    /// Material and preset imports share hash locks, cached bytes, range resume and URL refresh.
+    func materialData(_ item: CloudMaterial, progress: @escaping @MainActor @Sendable (Double) -> Void) async throws -> Data {
+        let descriptor: MaterialDownload = try await MaterialCatalogRepository.shared.request("revisions/\(item.revision)/download/")
+        guard descriptor.sha256 == item.sha256, descriptor.byte_size == item.byte_size else { throw DiaryEditorError.invalidDocument }
+        let key = "material-\(item.revision)"
+        signedURLs[key] = (Date(), [item.sha256: descriptor.url])
+        let file = PresetManifest.FileRecord(path: item.sha256, byteCount: item.byte_size, sha256: item.sha256)
+        let url = try await download(file, plan: key, paths: [], materialRevision: item.revision) { count in
+            progress(Double(count) / Double(max(1, item.byte_size)))
+        }
+        return try await Task.detached(priority: .utility) { try Data(contentsOf: url) }.value
+    }
+
+    private func download(_ file: PresetManifest.FileRecord, plan: String, paths: [String], materialRevision: Int? = nil, progress: @escaping @MainActor @Sendable (Int) -> Void) async throws -> URL {
         guard file.sha256.count == 64, file.sha256.allSatisfy({ $0.isHexDigit }), file.byteCount >= 0, file.byteCount <= 100_000_000 else { throw DiaryEditorError.invalidDocument }
         while lockedHashes.contains(file.sha256) { try await Task.sleep(for: .milliseconds(150)) }
         try Task.checkCancellation()
@@ -414,7 +429,14 @@ final class PresetDownloadManager: ObservableObject {
                     do {
                         try Task.checkCancellation()
                         if signedURLs[plan].map({ Date().timeIntervalSince($0.0) < 600 && $0.1[file.path] != nil }) != true {
-                            let urls = try JSONDecoder().decode([String: String].self, from: await request("plans/\(plan)/urls/", body: ["paths": paths]))
+                            let urls: [String: String]
+                            if let materialRevision {
+                                let result: MaterialDownload = try await MaterialCatalogRepository.shared.request("revisions/\(materialRevision)/download/")
+                                guard result.sha256 == file.sha256, result.byte_size == file.byteCount else { throw DiaryEditorError.invalidDocument }
+                                urls = [file.path: result.url]
+                            } else {
+                                urls = try JSONDecoder().decode([String: String].self, from: await request("plans/\(plan)/urls/", body: ["paths": paths]))
+                            }
                             signedURLs[plan] = (Date(), urls)
                         }
                         let urls = signedURLs[plan]?.1 ?? [:]

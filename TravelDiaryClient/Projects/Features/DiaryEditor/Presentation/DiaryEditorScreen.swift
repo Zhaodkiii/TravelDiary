@@ -12,6 +12,7 @@ struct DiaryEditorScreen: View {
     @State private var showLayers = false
     @State private var showDrawing = false
     @State private var showStickers = false
+    @State private var showBackgrounds = false
     @State private var textLayer: DiaryLayer?
 
     var body: some View {
@@ -30,7 +31,8 @@ struct DiaryEditorScreen: View {
             .fullScreenCover(isPresented: $showCrop) {
                 if let layer = session.selected { DiaryCropSheet(session: session, layer: layer) }
             }
-            .sheet(isPresented: $showStickers) { DiaryStickerPickerSheet(session: session) }
+            .sheet(isPresented: $showStickers) { MaterialLibraryBrowser(session: session) }
+            .sheet(isPresented: $showBackgrounds) { MaterialLibraryBrowser(session: session, type: "background") }
             .sheet(isPresented: $showLayers) { layerPanel }
             .sheet(isPresented: $showDrawing, onDismiss: { session.inkMode = false }) {
                 DiaryDrawingSheet(session: session)
@@ -137,6 +139,7 @@ struct DiaryEditorScreen: View {
                 HStack(spacing: 18) {
                         Button { session.finishInteraction(); showPhotos = true } label: { Label("照片", systemImage: "photo") }
                         Button { session.select(nil); openText() } label: { Label("文字", systemImage: "textformat") }
+                        if session.isRoot { Button { showBackgrounds = true } label: { Label("背景", systemImage: "photo.fill") } }
                         Button { showStickers = true } label: { Label("贴纸", systemImage: "face.smiling") }
                         Button { session.finishInteraction(); session.select(nil); session.inkMode = true; showDrawing = true } label: { Label("画笔", systemImage: "pencil.tip") }
                         Menu {

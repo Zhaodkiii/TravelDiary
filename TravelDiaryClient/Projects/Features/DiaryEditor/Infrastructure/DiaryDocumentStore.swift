@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import ImageIO
+import CryptoKit
 import PencilKit
 
 nonisolated enum DiaryEditorError: String, LocalizedError {
@@ -114,12 +115,15 @@ nonisolated final class DiaryDocumentStore: Sendable {
                           height: swapsAxes ? width.doubleValue : height.doubleValue)
         guard size.width > 0, size.height > 0 else { throw DiaryEditorError.invalidImage.logged() }
         let image = try Self.decode(data, maximumDimension: 1800)
-        let id = UUID()
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let hex = Array(digest.prefix(32))
+        let stableID = [String(hex[0..<8]), String(hex[8..<12]), String(hex[12..<16]), String(hex[16..<20]), String(hex[20..<32])].joined(separator: "-")
+        let id = UUID(uuidString: stableID)!
         // 保留选择器提供的源字节；预览和导出解码时统一处理 EXIF，不覆盖源照片。
         let asset = DiaryAsset(id: id, path: "assets/\(id.uuidString).image", pixelSize: size)
         let url = assetDirectory(documentID).appendingPathComponent(asset.path)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: url, options: .atomic)
+        if !FileManager.default.fileExists(atPath: url.path) { try data.write(to: url, options: .atomic) }
         return (asset, image)
     }
 

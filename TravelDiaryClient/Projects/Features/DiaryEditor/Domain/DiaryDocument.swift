@@ -109,6 +109,7 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
     var crop = DiaryCrop()
     var visible = true
     var locked = false
+    var isLibraryBackground: Bool? = nil
     /// PSD 混合效果。旧作品缺少该字段时按 normal 绘制。
     var blendMode: DiaryBlendMode? = nil
     static func photo(asset: DiaryAsset, center: CGPoint) -> DiaryLayer {

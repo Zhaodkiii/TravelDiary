@@ -42,8 +42,10 @@ struct RemotePresetReaderDestination: View {
     @State private var selection: RemotePresetSelection?
 
     @State private var reading = true
+    @State private var materialType: String?
     var body: some View {
         VStack(spacing: 0) {
+            HStack { Button("贴纸库") { materialType = "sticker" }; Button("背景库") { materialType = "background" } }.padding(.top)
             Picker("展示方式", selection: $reading) { Text("翻阅").tag(true); Text("总览").tag(false) }
                 .pickerStyle(.segmented).padding()
             if reading { readerContent }
@@ -52,6 +54,9 @@ struct RemotePresetReaderDestination: View {
                     afterPageID: afterPageID, fixedTarget: fixedTarget, onImported: onImported)
             }
         }.background(DiaryLibraryStyle.background).tint(DiaryLibraryStyle.accent).navigationTitle(book.title)
+        .sheet(isPresented: Binding(get: { materialType != nil }, set: { if !$0 { materialType = nil } })) {
+            MaterialLibraryBrowser(templateID: book.id, templateVersion: book.version, type: materialType ?? "sticker")
+        }
     }
     private var readerContent: some View {
         Group {
