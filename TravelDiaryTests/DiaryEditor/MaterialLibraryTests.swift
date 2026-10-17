@@ -55,7 +55,7 @@ struct MaterialLibraryTests {
         #expect(session.content.layers.count == 2)
         #expect(session.content.layers[0].id != session.content.layers[1].id)
     }
-    @Test func backgroundReplacementIsSingleUndoAndPreservesContent() async throws {
+    @Test func backgroundInsertionIsEditableFitsCanvasAndPreservesExistingLayers() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = DiaryDocumentStore(ownerID: "materials-test", baseDirectory: root)
@@ -63,10 +63,18 @@ struct MaterialLibraryTests {
         #expect(await session.importPhoto(try png(.red), asSticker: true))
         #expect(await session.importMaterialBackground(try png(.blue)))
         let before = session.document
-        #expect(await session.importMaterialBackground(try png(.green), fit: true))
-        #expect(session.content.layers.filter { $0.isLibraryBackground == true }.count == 1)
-        #expect(session.content.layers.count == 2)
-        #expect(session.content.layers.first?.locked == true)
+        #expect(await session.importMaterialBackground(try png(.green), name: "新背景"))
+        #expect(session.content.layers.filter { $0.isLibraryBackground == true }.count == 2)
+        #expect(session.content.layers.count == 3)
+        let layer = try #require(session.content.layers.first)
+        #expect(layer.locked == false)
+        #expect(layer.name == "新背景")
+        #expect(session.selectedID == layer.id)
+        #expect(layer.size.width <= session.content.referenceSize.width)
+        #expect(layer.size.height <= session.content.referenceSize.height)
+        #expect(abs(layer.size.width / layer.size.height - 40.0 / 60.0) < 0.001)
+        #expect(Array(session.content.layers.dropFirst()) == before.root.layers)
+        #expect(session.content.background == before.root.background)
         session.undo()
         #expect(session.content.layers == before.root.layers)
         #expect(session.document.assets == before.assets)

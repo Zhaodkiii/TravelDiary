@@ -88,21 +88,18 @@ struct MaterialLibraryBrowser: View {
     @State private var progress: Double = 0
     @State private var addition: Task<Void, Never>?
     @State private var generation = UUID()
-    @State private var fitBackground = false
     @State private var query = ""
     @State private var onlyFavorites = false
     @State private var kind = ""
     @State private var subcategory = ""
     @State private var taxonomy: [MaterialCategory] = []
     @State private var pausedItem: CloudMaterial?
-    @State private var backgroundOwner: String?
     @State private var items: [CloudMaterial] = []
     @State private var cursor: Int?
     @State private var loading = false
     @State private var error: String?
     @State private var adding = false
     @State private var preview: CloudMaterial?
-    @State private var backgroundData: Data?
     @State private var requestID = UUID()
     private var current: CloudMaterialLibrary? { libraries.first { $0.id == selected } }
     private var displayedLibraries: [CloudMaterialLibrary] { libraries.filter { (scope != "favorites" || $0.is_favorited) && (scope != "current" || sourceTemplates.contains($0.template_id)) } }
@@ -158,16 +155,37 @@ struct MaterialLibraryBrowser: View {
                 } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 90))]) {
                     ForEach(items) { item in
+                        VStack(spacing: 6) {
                         Button { if session == nil { preview = item } else { addition = Task { await add(item) } } } label: {
                             VStack {
                                 MaterialThumbnail(item: item)
                                     .frame(height: 90)
+                                    .overlay {
+                                        if adding && pausedItem?.id == item.id {
+                                            VStack(spacing: 4) {
+                                                ProgressView(value: progress)
+                                                Text(progress >= 1 ? "正在添加…" : "下载中 \(Int(progress * 100))%")
+                                                    .font(.caption2)
+                                            }.padding(8).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                                        }
+                                    }
                                 Text(item.name).font(.caption).lineLimit(2)
                                 if item.is_favorited { Image(systemName: "heart.fill").foregroundStyle(.pink) }
                             }.frame(maxWidth: .infinity).padding(6)
-                        }.buttonStyle(.plain).contextMenu {
+                        }.buttonStyle(.plain).disabled(adding).contextMenu {
                             Button(item.is_favorited ? "取消收藏" : "收藏贴纸") { Task { await favoriteItem(item) } }
                             Button("查看详情") { preview = item }
+                        }
+                        if pausedItem?.id == item.id {
+                            if adding {
+                                HStack {
+                                    Button("暂停") { generation = UUID(); addition?.cancel(); adding = false }
+                                    Button("取消") { generation = UUID(); addition?.cancel(); adding = false; pausedItem = nil }
+                                }.font(.caption)
+                            } else {
+                                Button("继续添加") { addition = Task { await add(item) } }.font(.caption)
+                            }
+                        }
                         }
                     }
                 }.padding(.horizontal)
@@ -175,24 +193,6 @@ struct MaterialLibraryBrowser: View {
                 if loading { ProgressView() }
                 if !loading && items.isEmpty { ContentUnavailableView("暂无素材", systemImage: "square.grid.2x2", description: Text("选择素材库或调整搜索条件")) }
             }
-            }
-            if adding {
-                ProgressView(value: progress) { Text("正在下载并校验素材…") }.padding(.horizontal)
-                HStack {
-                    Button("暂停") { generation = UUID(); addition?.cancel(); adding = false }
-                    Button("取消添加") { generation = UUID(); addition?.cancel(); adding = false; pausedItem = nil }
-                }
-            }
-            if !adding, let item = pausedItem {
-                Button("继续下载：" + item.name) { addition = Task { await add(item) } }
-            }
-            if let data = backgroundData, let image = UIImage(data: data) {
-                Image(uiImage: image).resizable().scaledToFit().frame(height: 130)
-                Toggle("完整显示（关闭则填满）", isOn: $fitBackground).padding(.horizontal)
-                HStack { Button("取消预览") { backgroundData = nil }; Button("应用背景") { Task {
-                    guard let session, backgroundOwner == MaterialCatalogRepository.shared.owner else { backgroundData = nil; return }
-                    if await session.importMaterialBackground(data, fit: fitBackground) { dismiss() } else { error = session.errorMessage }
-                } } }
             }
         }.padding(.vertical)
         .presentationDetents([.medium, .large])
@@ -276,7 +276,7 @@ struct MaterialLibraryBrowser: View {
     }
     private func add(_ item: CloudMaterial) async {
         guard !adding, let session else { return }
-        adding = true; progress = 0; pausedItem = item
+        adding = true; progress = 0; pausedItem = item; error = nil
         let intent = UUID(); generation = intent
         defer { if generation == intent { adding = false } }
         let owner = MaterialCatalogRepository.shared.owner
@@ -284,8 +284,13 @@ struct MaterialLibraryBrowser: View {
             let data = try await PresetDownloadManager.shared.materialData(item) { value in if generation == intent { progress = value } }
             try Task.checkCancellation()
             guard generation == intent, MaterialCatalogRepository.shared.owner == owner else { throw CancellationError() }
-            if type == "background" { backgroundData = data; backgroundOwner = owner; pausedItem = nil }
-            else if await session.importPhoto(data, asSticker: true, stickerName: item.name) { pausedItem = nil; dismiss() }
+            let imported: Bool
+            if type == "background" {
+                imported = await session.importMaterialBackground(data, name: item.name)
+            } else {
+                imported = await session.importPhoto(data, asSticker: true, stickerName: item.name)
+            }
+            if imported { pausedItem = nil; dismiss() }
             else { error = session.errorMessage }
         } catch { if generation == intent && !Task.isCancelled { self.error = error.localizedDescription } }
     }

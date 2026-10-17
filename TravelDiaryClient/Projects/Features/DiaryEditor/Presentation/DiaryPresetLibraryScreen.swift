@@ -53,16 +53,16 @@ struct DiaryPresetLibraryScreen: View {
                         Text("翻一翻，找到适合你的那一本。").font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
                     }
                 }
-//                DiaryLibrarySearch(text: $search, prompt: "搜索模板名称")
-//                ScrollView(.horizontal, showsIndicators: false) {
-//                    HStack(spacing: 8) {
-//                        DiaryLibraryChip(title: "全部", selected: selectedSeries.isEmpty) { selectedSeries = "" }
-//                        ForEach(series) { entry in
-//                            DiaryLibraryChip(title: entry.title, selected: selectedSeries == entry.id) { selectedSeries = entry.id }
-//                        }
-//                    }
-//                }
-//                filterBar
+                DiaryLibrarySearch(text: $search, prompt: "搜索模板名称")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        DiaryLibraryChip(title: "全部", selected: selectedSeries.isEmpty) { selectedSeries = "" }
+                        ForEach(series) { entry in
+                            DiaryLibraryChip(title: entry.title, selected: selectedSeries == entry.id) { selectedSeries = entry.id }
+                        }
+                    }
+                }
+                filterBar
                 if let pending, !singlePageOnly {
                     DiaryLibraryNotice(message: "有未完成的模板导入", actionTitle: "继续导入") { resuming = pending }
                 }

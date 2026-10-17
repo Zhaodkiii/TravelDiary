@@ -367,26 +367,25 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     var scopeCenter: CGPoint { CGPoint(x: content.referenceSize.width / 2, y: content.referenceSize.height / 2) }
 
     @discardableResult
-    /// A locked bottom layer keeps older document readers compatible; one undo restores the previous background.
-    func importMaterialBackground(_ data: Data, fit: Bool = false) async -> Bool {
+    /// Insert an editable image at the bottom without changing canvas background or existing layers.
+    func importMaterialBackground(_ data: Data, name: String = "背景") async -> Bool {
         guard !busy else { return false }
         busy = true
         defer { busy = false }
         do {
             let (asset, image) = try await store.importImage(data, documentID: document.id)
             let size = content.referenceSize
-            let ratio = fit ? min(size.width / asset.pixelSize.width, size.height / asset.pixelSize.height) : max(size.width / asset.pixelSize.width, size.height / asset.pixelSize.height)
+            let ratio = min(size.width / asset.pixelSize.width, size.height / asset.pixelSize.height)
             let fitted = CGSize(width: asset.pixelSize.width * ratio, height: asset.pixelSize.height * ratio)
-            var layer = DiaryLayer(name: "背景", kind: .sticker,
+            var layer = DiaryLayer(name: name, kind: .sticker,
                 transform: DiaryTransform(position: CGPoint(x: size.width / 2, y: size.height / 2), pivot: CGPoint(x: fitted.width / 2, y: fitted.height / 2)),
                 size: fitted, assetID: asset.id)
-            layer.semanticKind = .background; layer.locked = true; layer.isLibraryBackground = true
+            layer.semanticKind = .background; layer.isLibraryBackground = true
             images[asset.id] = image
             edit {
                 document.assets[asset.id] = asset
-                document.objects[contentID]?.layers.removeAll { $0.isLibraryBackground == true || $0.semanticKind == .background }
                 document.objects[contentID]?.layers.insert(layer, at: 0)
-                selectedID = nil
+                selectedID = layer.id
             }
             return true
         } catch { errorMessage = error.localizedDescription; return false }
