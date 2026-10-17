@@ -33,6 +33,7 @@ struct DiaryPresetBookReader<Detail: View>: View {
     @StateObject private var categoryRenderer = PresetCategoryRenderer()
     @State private var categoryDownload = PresetCategoryDownloadState()
     @State private var categoryError: String?
+    @State private var updatingCategories = false
     private var supportsCategoryControls: Bool { localPackage != nil || remoteBook != nil }
     private var content: [Page] { pages.filter { $0.id != shellID } }
     private var shell: Page? { pages.first { $0.id == shellID } }
@@ -48,79 +49,79 @@ struct DiaryPresetBookReader<Detail: View>: View {
     }
 
     var body: some View {
-        VStack(spacing: 16) {
-            GeometryReader { geometry in
-                DiaryBookZoomViewport(contentSize: geometry.size, resetToken: opened ? spread + 1 : 0) {
-                    if let shell, !opened {
-                        PresetLargePreview(url: shell.url, thumbnailURL: shell.thumbnailURL, previews: previews).frame(width: geometry.size.width * 0.8, height: geometry.size.height * 0.88)
-                            .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
-                            .onTapGesture { opened = true }
-                    } else {
-                        GeometryReader { viewport in
-                            let heightPerWidth = (0.955 * (1 - DiaryBookSpine.halfGapFraction) / ratio + 0.09) / 2
-                            let width = min(max(1, viewport.size.width - 24), max(1, viewport.size.height - 24) / heightPerWidth)
-                            let rim = width * 0.0225
-                            ZStack {
-                                Image("DiaryBookLeather").resizable()
-                                DiaryPageCurlReader(spreadCount: spreadCount, spread: $spread, reduceMotion: reduceMotion) { index, _ in
-                                    DiaryPresetPaperController(index: index,
-                                        url: content.indices.contains(index - 1) ? content[index - 1].url : nil,
-                                        thumbnailURL: content.indices.contains(index - 1) ? content[index - 1].thumbnailURL : nil,
-                                        previews: previews)
-                                }.id(content.map(\.url)).padding(rim)
-                            }
-                            .frame(width: width, height: width * heightPerWidth)
-                            .position(x: viewport.size.width / 2, y: viewport.size.height / 2)
-                        }
-                    }
-                }
-                .overlay(alignment: .top) {
+        GeometryReader { available in
+            ScrollView(.vertical) {
+                VStack(spacing: 12) {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(seriesTitle).font(.subheadline).lineLimit(2)
+                            Text(seriesTitle).font(.subheadline.weight(.medium)).lineLimit(2)
                             Text("共 \(content.count) 页").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 8)
                         if allowsWholeBook {
                             Button("整本添加") { onAdd(pages.map(\.id), true) }
-                                .buttonStyle(.bordered).controlSize(.small)
+                                .font(.subheadline).buttonStyle(.bordered)
+                                .buttonBorderShape(.capsule).fixedSize()
+                                .frame(minHeight: 44)
+                        }
+                    }.padding(.horizontal, 24)
+                    GeometryReader { geometry in
+                        DiaryBookZoomViewport(contentSize: geometry.size, resetToken: opened ? spread + 1 : 0) {
+                            if let shell, !opened {
+                                PresetLargePreview(url: shell.url, thumbnailURL: shell.thumbnailURL, previews: previews).frame(width: geometry.size.width * 0.8, height: geometry.size.height * 0.88)
+                                    .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                                    .onTapGesture { opened = true }
+                            } else {
+                                GeometryReader { viewport in
+                                    let heightPerWidth = (0.955 * (1 - DiaryBookSpine.halfGapFraction) / ratio + 0.09) / 2
+                                    let width = min(max(1, viewport.size.width - 24), max(1, viewport.size.height - 24) / heightPerWidth)
+                                    let rim = width * 0.0225
+                                    ZStack {
+                                        Image("DiaryBookLeather").resizable()
+                                        DiaryPageCurlReader(spreadCount: spreadCount, spread: $spread, reduceMotion: reduceMotion) { index, _ in
+                                            DiaryPresetPaperController(index: index,
+                                                url: content.indices.contains(index - 1) ? content[index - 1].url : nil,
+                                                thumbnailURL: content.indices.contains(index - 1) ? content[index - 1].thumbnailURL : nil,
+                                                previews: previews)
+                                        }.id(content.map(\.url)).padding(rim)
+                                    }
+                                    .frame(width: width, height: width * heightPerWidth)
+                                    .position(x: viewport.size.width / 2, y: viewport.size.height / 2)
+                                }
+                            }
                         }
                     }
-                    .padding(.horizontal, 28)
-                    .padding(.top, max(12, geometry.size.height * 0.08))
-                }
-                .overlay {
-                    let heightPerWidth = (0.955 * (1 - DiaryBookSpine.halfGapFraction) / ratio + 0.09) / 2
-                    let bookHeight = min(max(1, geometry.size.width - 24) * heightPerWidth, max(1, geometry.size.height - 24))
+                    .frame(height: max(200, min(available.size.width * 0.78, available.size.height - 380)))
+                    .clipped()
                     addCurrentPageMenu
-                        .position(x: geometry.size.width / 2,
-                                  y: min(geometry.size.height - 24, geometry.size.height / 2 + bookHeight / 2 + 32))
-                }
-            }.clipped()
-            if supportsCategoryControls && opened { categoryControls }
-            HStack {
-                Button {
-                    if spread > 0 { spread -= 1 } else { opened = false }
-                } label: { Image(systemName: "chevron.left") }
-                    .disabled(!opened || (spread == 0 && shell == nil))
-                Spacer()
-                Text(!opened && shell != nil ? "外壳" : spread == 0 ? "第 1 页 / \(content.count)" : "第 \(spread * 2)–\(min(spread * 2 + 1, content.count)) 页 / \(content.count)")
-                    .font(.subheadline.monospacedDigit())
-                Spacer()
-                Button {
-                    if !opened { opened = true } else { spread += 1 }
-                } label: { Image(systemName: "chevron.right") }
-                    .disabled(content.isEmpty || (opened && spread >= spreadCount - 1))
-            }.padding(.horizontal, 28)
-            DiaryBookThumbnailRail(hasCover: shell != nil, spreadCount: spreadCount,
-                spread: spread, opened: opened, title: spreadTitle,
-                onClose: { spread = 0; opened = false },
-                onSelect: { spread = $0; opened = true }) {
-                    if let shell { preview(shell) }
-                } leaf: { index in leaf(index) }
+                        .frame(minHeight: 44)
+                    if supportsCategoryControls && opened { categoryControls }
+                    HStack {
+                        Button {
+                            if spread > 0 { spread -= 1 } else { opened = false }
+                        } label: { Image(systemName: "chevron.left") }
+                            .disabled(!opened || (spread == 0 && shell == nil))
+                        Spacer()
+                        Text(!opened && shell != nil ? "外壳" : spread == 0 ? "第 1 页 / \(content.count)" : "第 \(spread * 2)–\(min(spread * 2 + 1, content.count)) 页 / \(content.count)")
+                            .font(.subheadline.monospacedDigit())
+                        Spacer()
+                        Button {
+                            if !opened { opened = true } else { spread += 1 }
+                        } label: { Image(systemName: "chevron.right") }
+                            .disabled(content.isEmpty || (opened && spread >= spreadCount - 1))
+                    }.frame(minHeight: 44).padding(.horizontal, 28)
+                    DiaryBookThumbnailRail(hasCover: shell != nil, spreadCount: spreadCount,
+                        spread: spread, opened: opened, title: spreadTitle,
+                        onClose: { spread = 0; opened = false },
+                        onSelect: { spread = $0; opened = true }) {
+                            if let shell { preview(shell) }
+                        } leaf: { index in leaf(index) }
 
+                }.padding(.top, 12).padding(.bottom, 8)
+            }.scrollIndicators(.hidden)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
+        .tint(DiaryLibraryStyle.accent)
+        .background(DiaryLibraryStyle.background)
         .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -145,45 +146,32 @@ struct DiaryPresetBookReader<Detail: View>: View {
     }
 
     private var categoryControls: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                ForEach(DiaryLayerSemanticKind.allCases, id: \.self) { category in
-                    let visible = !hiddenCategories.contains(category)
-                    Button {
-                        if visible { hiddenCategories.insert(category) }
-                        else { hiddenCategories.remove(category) }
-                    } label: {
-                        VStack(spacing: 3) {
-                            Image(systemName: visible ? "eye" : "eye.slash")
-                            Text(category.title)
-                        }
-                        .font(.caption2.weight(.medium))
-                        .frame(maxWidth: .infinity).padding(.vertical, 7)
-                        .foregroundStyle(visible ? Color.accentColor : Color.secondary)
-                        .background(visible ? Color.accentColor.opacity(0.10) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(category.title) \(category.rawValue)")
-                    .accessibilityValue(visible ? "显示" : "隐藏")
-                    .accessibilityHint("控制当前左右两页的预览")
-                }
-            }
-            if remoteBook != nil {
-                PresetCategoryDownloadFeedback(state: categoryDownload).frame(minHeight: 52)
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            DiaryPreviewContentPanel(hiddenCategories: $hiddenCategories)
+            if remoteBook != nil { PresetCategoryDownloadFeedback(state: categoryDownload) }
             if let categoryError {
-                Text(categoryError).font(.caption).foregroundStyle(.secondary)
-                Button("重试分类预览") { filterRetry += 1 }.font(.caption)
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("预览未更新", systemImage: "exclamationmark.circle")
+                    Text(categoryError).foregroundStyle(DiaryLibraryStyle.secondary)
+                    Button("重试预览") { filterRetry += 1 }.frame(minHeight: 44)
+                }.font(.caption)
+            } else if updatingCategories && (remoteBook == nil || categoryDownload.ready) {
+                ProgressView("正在更新预览…").font(.caption)
             }
         }
+        .tint(DiaryLibraryStyle.accent)
         .padding(.horizontal, 24)
     }
 
     private func updateCategoryPreview() async {
+        let requestID = categoryRequestID
         categoryError = nil
+        updatingCategories = false
         guard supportsCategoryControls, opened, !hiddenCategories.isEmpty else {
             previews.clearCategoryFilter(); categoryRenderer.reset(); categoryDownload.reset(); return
         }
+        updatingCategories = true
+        defer { if requestID == categoryRequestID { updatingCategories = false } }
         let visiblePages = [leftPage, rightPage].compactMap { $0 }
         let urls = visiblePages.map(\.url)
         do {
@@ -521,7 +509,7 @@ private struct PresetCategoryDownloadFeedback: View {
     var body: some View {
         VStack(spacing: 4) {
             if state.ready {
-                Label("当前跨页素材已缓存", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
+                EmptyView()
             } else if let job = state.job {
                 let fraction = min(1, Double(job.bytes) / Double(max(1, job.total)))
                 ProgressView(value: fraction)
@@ -541,8 +529,6 @@ private struct PresetCategoryDownloadFeedback: View {
                 if job.status == "failed", let error = job.error { Text(error).font(.caption2).foregroundStyle(.secondary) }
             } else if state.preparing {
                 ProgressView("正在获取当前跨页资源清单…").font(.caption)
-            } else {
-                Text("首次筛选时下载当前跨页素材").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
