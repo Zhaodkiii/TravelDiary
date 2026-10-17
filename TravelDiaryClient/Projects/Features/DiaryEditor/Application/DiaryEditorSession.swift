@@ -405,8 +405,11 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                 if let replacing {
                     document.update(replacing) { $0.assetID = asset.id; $0.crop = DiaryCrop(); $0.photoCrop = nil }
                 } else if asSticker {
-                    let edge = min(240, min(content.referenceSize.width, content.referenceSize.height) * 0.25)
-                    let ratio = edge / max(asset.pixelSize.width, asset.pixelSize.height)
+                    // Use the active canvas coordinate space, including nested object editing.
+                    // Fit within 40% of each dimension so tall/wide stickers remain usable.
+                    let canvas = content.referenceSize
+                    let ratio = min(canvas.width * 0.4 / asset.pixelSize.width,
+                                    canvas.height * 0.4 / asset.pixelSize.height)
                     let size = CGSize(width: asset.pixelSize.width * ratio, height: asset.pixelSize.height * ratio)
                     let center = scopeCenter
                     let sticker = DiaryLayer(name: stickerName, kind: .sticker,
