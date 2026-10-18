@@ -38,13 +38,13 @@ extension DiaryDocument {
     mutating func appendObject(containing layer: DiaryLayer, to destination: UUID? = nil) -> UUID {
         let parentID = destination ?? rootContentID
         var primary = layer
-        primary.id = UUID(); primary.visible = true; primary.locked = false
+        primary.id = UUID(); primary.visible = true; primary.locked = false; primary.opacity = nil
         primary.transform = DiaryTransform(position: layer.transform.pivot, pivot: layer.transform.pivot)
         let content = DiaryObjectContent(role: layer.kind, primaryLayerID: primary.id,
                                          referenceSize: layer.size, layers: [primary])
         let object = DiaryLayer(id: layer.id, name: layer.name, kind: .object,
                                 transform: layer.transform, size: layer.size, contentID: content.id,
-                                visible: layer.visible, locked: layer.locked)
+                                visible: layer.visible, locked: layer.locked, opacity: layer.opacity)
         objects[content.id] = content
         objects[parentID]?.layers.append(object)
         return object.id

@@ -9,10 +9,8 @@ struct DiaryEditorScreen: View {
     @State private var showPhotos = false
     @State private var showText = false
     @State private var showCrop = false
-    @State private var showLayers = false
+    @State private var activeTool: DiaryEditorTool?
     @State private var showDrawing = false
-    @State private var showStickers = false
-    @State private var showBackgrounds = false
     @State private var textLayer: DiaryLayer?
 
     var body: some View {
@@ -22,6 +20,7 @@ struct DiaryEditorScreen: View {
             .navigationTitle(session.isRoot ? "画布编辑器" : "对象编辑器")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { editorToolbar }
+            .toolbar(activeTool == nil ? .visible : .hidden, for: .navigationBar)
             .overlay { if session.busy { ProgressView("正在处理…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
             .fullScreenCover(item: $childEditor) { child in
                 AnyView(DiaryEditorScreen(session: child))
@@ -31,9 +30,7 @@ struct DiaryEditorScreen: View {
             .fullScreenCover(isPresented: $showCrop) {
                 if let layer = session.selected { DiaryCropSheet(session: session, layer: layer) }
             }
-            .sheet(isPresented: $showStickers) { MaterialLibraryBrowser(session: session) }
-            .sheet(isPresented: $showBackgrounds) { MaterialLibraryBrowser(session: session, type: "background") }
-            .sheet(isPresented: $showLayers) { layerPanel }
+
             .sheet(isPresented: $showDrawing, onDismiss: { session.inkMode = false }) {
                 DiaryDrawingSheet(session: session)
                     .presentationDetents([.large])
@@ -76,19 +73,22 @@ struct DiaryEditorScreen: View {
 
     private var editorContent: some View {
             VStack(spacing: 0) {
-                HStack {
+                if activeTool == nil { HStack {
                     Text(session.inkMode ? "单指绘画，双指缩放或移动画布" : "单击选择，再点取消；双指缩放或移动画布")
                     Spacer()
                     Text(session.saveStatus).foregroundStyle(.secondary)
                 }
-                .font(.caption).padding(.horizontal).padding(.vertical, 8)
+                .font(.caption).padding(.horizontal).padding(.vertical, 8) }
                 GeometryReader { geometry in
                     let size = session.canvasBounds.size
-                    // 页面初始尽量接近屏幕宽度，左右留 20pt；画布高度过长时再按高度缩小。
-                    let margin = DiaryCanvasSurface.controlMargin
-                    let scale = max(0.01, min((geometry.size.width - 40) / size.width,
-                                             (geometry.size.height - margin * 2 - 24) / size.height))
-                    DiaryZoomableCanvas(contentSize: CGSize(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2), sessionID: session.id, inkMode: session.inkMode, minimumScale: 0.65) {
+                    // 工具模式用紧凑边距适配全部可见高度，普通模式保留完整手柄空间。
+                    let toolOpen = activeTool != nil
+                    let margin = toolOpen ? DiaryCanvasSurface.toolControlMargin : DiaryCanvasSurface.controlMargin
+                    let horizontalPadding: CGFloat = toolOpen ? margin * 2 : 40
+                    let verticalPadding: CGFloat = toolOpen ? 0 : 24
+                    let scale = max(0.01, min((geometry.size.width - horizontalPadding) / size.width,
+                                             (geometry.size.height - margin * 2 - verticalPadding) / size.height))
+                    DiaryZoomableCanvas(contentSize: CGSize(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2), sessionID: session.id, inkMode: session.inkMode, minimumScale: 0.65, toolViewport: activeTool != nil) {
                       ZStack(alignment: .topLeading) {
                         DiaryCanvasView(session: session, onEdit: {
                             guard let layer = session.selected else { return }
@@ -105,90 +105,38 @@ struct DiaryEditorScreen: View {
                     .clipped()
                 }
                 .background(Color(uiColor: .systemGroupedBackground))
-                controls
+                if let activeTool {
+                    DiaryEditorToolPanel(title: activeTool.title, onBack: closeTool, onDone: closeTool) {
+                        switch activeTool {
+                        case .layers: DiaryLayerToolContent(session: session)
+                        }
+                    }
+                    .disabled(session.busy)
+                } else { controls }
             }
     }
 
     private var controls: some View {
-        VStack(spacing: 8) {
-//            if let layer = session.selected, !session.inkMode {
-//                HStack {
-//                    Text(layer.name).font(.caption).lineLimit(1)
-//                    Spacer()
-//                    if layer.kind == .object { Button("打开对象") { childEditor = session.openObject() } }
-//                    if layer.kind == .photo {
-//                        Button("替换") { replacementID = layer.id; showPhotoPicker = true }
-//                        Button("裁剪") { showCrop = true }
-//                        if layer.photoCrop != nil { Button("恢复原图") { session.restoreOriginalPhoto() } }
-//                        Button("相框") { session.addFrame() }
-//                    }
-//                    if layer.kind == .text { Button("编辑文字") { openText() } }
-//                    if layer.id != session.content.primaryLayerID { Button("删除", role: .destructive) { session.removeSelected() } }
-//                }.font(.caption).disabled(layer.locked)
-//                HStack {
-//                    Text("大小").font(.caption)
-//                    Slider(value: Binding(get: { session.selected?.transform.scale ?? 1 }, set: { session.previewScale($0) }),
-//                           in: 0.2...3, onEditingChanged: { interactionChanged($0) })
-//                    Text("方向").font(.caption)
-//                    Slider(value: Binding(get: { session.selected?.transform.rotationDegrees ?? 0 }, set: { session.previewAngle($0) }),
-//                           in: -180...180, onEditingChanged: { interactionChanged($0) })
-//                }
-//                .disabled(layer.locked)
-//            }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 18) {
-                        Button { session.finishInteraction(); showPhotos = true } label: { Label("照片", systemImage: "photo") }
-                        Button { session.select(nil); openText() } label: { Label("文字", systemImage: "textformat") }
-                        if session.isRoot { Button { showBackgrounds = true } label: { Label("背景", systemImage: "photo.fill") } }
-                        Button { showStickers = true } label: { Label("贴纸", systemImage: "face.smiling") }
-                        Button { session.finishInteraction(); session.select(nil); session.inkMode = true; showDrawing = true } label: { Label("画笔", systemImage: "pencil.tip") }
-                        Menu {
-                            Button("透明") { session.setBackground(nil) }
-                            Button("白色") { session.setBackground(.white) }
-                            Button("暖黄") { session.setBackground(.yellow) }
-                            Button("粉色") { session.setBackground(.pink) }
-                            Button("薄荷绿") { session.setBackground(.mint) }
-                        } label: { Label("背景", systemImage: "paintpalette") }
-                        Button { showLayers = true } label: { Label("图层", systemImage: "square.3.layers.3d") }
-                }.font(.subheadline)
-            }
-        }
-        .padding(12).background(.regularMaterial).disabled(session.busy)
-    }
-    private func interactionChanged(_ editing: Bool) {
-        if editing { session.beginInteraction() } else { session.finishInteraction() }
+        DiaryContextToolbar(session: session,
+            onPhotos: { session.finishInteraction(); showPhotos = true },
+            onDrawing: { session.finishInteraction(); session.select(nil); session.inkMode = true; showDrawing = true },
+            onLayers: { session.finishInteraction(); session.layerMode = true; activeTool = .layers },
+            onOpenObject: { childEditor = session.openObject() })
     }
     private func openText() {
         textLayer = session.selected?.kind == .text ? session.selected : nil
         showText = true
     }
-    private var layerPanel: some View {
-        NavigationStack {
-            List {
-                ForEach(session.scopeLayers.reversed()) { layer in
-                    HStack {
-                        Button(layer.name) { session.select(layer.id) }
-                            .fontWeight(session.selectedID == layer.id ? .bold : .regular)
-                        Spacer()
-                        Button { session.toggleVisibility(layer.id) } label: { Image(systemName: layer.visible ? "eye" : "eye.slash") }
-                            .accessibilityLabel(layer.visible ? "隐藏" : "显示")
-                        Button { session.toggleLock(layer.id) } label: { Image(systemName: layer.locked ? "lock.fill" : "lock.open") }
-                            .accessibilityLabel(layer.locked ? "解锁" : "锁定")
-                    }.buttonStyle(.borderless)
-                }
-                if session.selectedID != nil {
-                    Button("上移一层") { session.reorderSelected(forward: true) }
-                    Button("下移一层") { session.reorderSelected(forward: false) }
-                }
-            }
-            .navigationTitle("图层（上方盖住下方）")
-            .toolbar { Button("完成") { showLayers = false } }
-        }
+    private func closeTool() {
+        session.finishInteraction()
+        session.layerMode = false
+        activeTool = nil
     }
+
 }
 
 /// 独立全屏裁剪只加载照片原图，装饰始终留在对象的其他图层中。
-private struct DiaryCropSheet: View {
+struct DiaryCropSheet: View {
     @ObservedObject var session: DiaryEditorSession
     let layer: DiaryLayer
     @Environment(\.dismiss) private var dismiss

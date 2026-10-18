@@ -75,6 +75,7 @@ final class MaterialCatalogRepository {
 
 struct MaterialLibraryBrowser: View {
     var session: DiaryEditorSession? = nil
+    var replacingID: UUID? = nil
     var templateID: String? = nil
     var templateVersion: Int? = nil
     var type = "sticker"
@@ -269,7 +270,7 @@ struct MaterialLibraryBrowser: View {
     private func addLocal(_ item: DiaryStickerItem) async {
         guard !adding, let session, let data = item.image()?.pngData() else { return }
         adding = true; defer { adding = false }
-        if await session.importPhoto(data, asSticker: true, stickerName: item.title) {
+        if await session.importPhoto(data, replacing: replacingID, asSticker: true, stickerName: item.title) {
             localRecent.removeAll { $0 == item.id }; localRecent.insert(item.id, at: 0); localRecent = Array(localRecent.prefix(30))
             saveLocalPreferences(); dismiss()
         } else { error = session.errorMessage }
@@ -285,10 +286,12 @@ struct MaterialLibraryBrowser: View {
             try Task.checkCancellation()
             guard generation == intent, MaterialCatalogRepository.shared.owner == owner else { throw CancellationError() }
             let imported: Bool
-            if type == "background" {
+            if let replacingID {
+                imported = await session.importPhoto(data, replacing: replacingID)
+            } else if type == "background" {
                 imported = await session.importMaterialBackground(data, name: item.name)
             } else {
-                imported = await session.importPhoto(data, asSticker: true, stickerName: item.name)
+                imported = await session.importPhoto(data, asSticker: true, stickerName: item.name, semanticKind: DiaryLayerSemanticKind(rawValue: item.kind))
             }
             if imported { pausedItem = nil; dismiss() }
             else { error = session.errorMessage }

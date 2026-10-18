@@ -23,6 +23,7 @@ final class DiaryCanvasRenderCache {
         var transform: DiaryTransform
         var visible: Bool
         var blend: DiaryBlendMode?
+        var opacity: Double
     }
     private var placements: [Placement] = []
     private var background: DiaryColor?
@@ -104,7 +105,7 @@ final class DiaryCanvasRenderCache {
         ordered = content.layers.map { layer in
             var local = layer
             local.transform = DiaryTransform(position: .zero, pivot: .zero)
-            local.name = ""; local.locked = false; local.visible = true; local.blendMode = .normal
+            local.name = ""; local.locked = false; local.visible = true; local.blendMode = .normal; local.opacity = nil
             let stamp = LayerStamp(local: local, contentVersion: layer.contentID.flatMap { versions[$0] },
                 resource: layer.assetID.flatMap { images[$0] }.map(ObjectIdentifier.init),
                 asset: layer.assetID.flatMap { document.assets[$0] },
@@ -122,7 +123,7 @@ final class DiaryCanvasRenderCache {
         }
         entries = retained
         let nextPlacements = ordered.map { Placement(id: $0.id, version: $0.version, transform: $0.source.transform,
-                                                     visible: $0.source.visible, blend: $0.source.blendMode) }
+                                                     visible: $0.source.visible, blend: $0.source.blendMode, opacity: $0.source.effectiveOpacity) }
         if placements != nextPlacements || background != content.background || referenceSize != content.referenceSize || drawingData != content.drawing {
             placements = nextPlacements; background = content.background; referenceSize = content.referenceSize
             visualVersion &+= 1
@@ -160,7 +161,7 @@ final class DiaryCanvasRenderCache {
         format.preferredRange = .standard
         // 外层变换、混合由合成器处理；位图只包含本地像素。
         var local = entry.source
-        local.blendMode = .normal
+        local.blendMode = .normal; local.opacity = nil
         let image = UIGraphicsImageRenderer(size: entry.rect.size, format: format).image { renderer in
             renderer.cgContext.translateBy(x: -entry.rect.minX, y: -entry.rect.minY)
             if local.kind == .object, let child = local.contentID {

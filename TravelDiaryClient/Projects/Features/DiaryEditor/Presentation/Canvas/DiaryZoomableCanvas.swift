@@ -8,6 +8,7 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
     let sessionID: UUID
     let inkMode: Bool
     var minimumScale: CGFloat = 1
+    var toolViewport = false
     var refreshContent = false
     @ViewBuilder let content: () -> Content
 
@@ -26,6 +27,7 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
         scroll.showsHorizontalScrollIndicator = false
         scroll.panGestureRecognizer.minimumNumberOfTouches = 2
         scroll.backgroundColor = .clear
+        scroll.contentInsetAdjustmentBehavior = .never
         let canvas = context.coordinator.host.view!
         canvas.backgroundColor = .clear
         scroll.addSubview(canvas)
@@ -44,7 +46,11 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
     }
 
     private func configure(_ scroll: UIScrollView, coordinator: Coordinator) {
-        // 同一个对象编辑过程中保留查看倍率；参考尺寸变化时恢复适应视口状态。
+        // 工具面板改变可用区域时重新适配，素材选择不会改变尺寸或浏览倍率。
+        if coordinator.toolViewport != toolViewport {
+            coordinator.toolViewport = toolViewport
+            coordinator.needsInitialCenter = true
+        }
         if coordinator.size != contentSize {
             scroll.setZoomScale(1, animated: false)
             coordinator.size = contentSize
@@ -61,6 +67,7 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
         var needsInitialCenter = true
         var sessionID: UUID?
         var inkMode = false
+        var toolViewport = false
         init(content: Content) { host = UIHostingController(rootView: content) }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { host.view }
@@ -75,13 +82,13 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
         }
         func center(_ scroll: UIScrollView) {
             let horizontal = max(0, (scroll.bounds.width - size.width * scroll.zoomScale) / 2)
-            let vertical = max(0, (scroll.bounds.height - size.height * scroll.zoomScale) / 2)
+            let vertical = toolViewport ? 0 : max(0, (scroll.bounds.height - size.height * scroll.zoomScale) / 2)
             let inset = UIEdgeInsets(top: vertical, left: horizontal, bottom: vertical, right: horizontal)
             if scroll.contentInset != inset { scroll.contentInset = inset }
             guard needsInitialCenter, scroll.bounds.width > 0, scroll.bounds.height > 0 else { return }
             // 初始将页面主体居中；横向内容略宽于视口时，用滚动偏移把两侧手柄留白均分。
             let x = max(-inset.left, (size.width * scroll.zoomScale - scroll.bounds.width) / 2)
-            let y = max(-inset.top, (size.height * scroll.zoomScale - scroll.bounds.height) / 2)
+            let y = toolViewport ? -inset.top : max(-inset.top, (size.height * scroll.zoomScale - scroll.bounds.height) / 2)
             scroll.setContentOffset(CGPoint(x: x, y: y), animated: false)
             needsInitialCenter = false
         }

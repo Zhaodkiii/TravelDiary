@@ -4,7 +4,7 @@ import PhotosUI
 struct DiaryPhotoManagerSheet: View {
     @ObservedObject var session: DiaryEditorSession
     @Environment(\.dismiss) private var dismiss
-    @State private var photoItem: PhotosPickerItem?
+    @State private var photoItems: [PhotosPickerItem] = []
     @State private var replacementID: UUID?
     @State private var showPicker = false
     @State private var importing = false
@@ -18,7 +18,7 @@ struct DiaryPhotoManagerSheet: View {
                         replacementID = nil
                         showPicker = true
                     } label: {
-                        Label("添加新照片", systemImage: "photo.badge.plus")
+                        Label("添加照片（可多选）", systemImage: "photo.badge.plus")
                     }
                     if session.isRoot && !session.document.replaceablePhotos().isEmpty {
                         NavigationLink {
@@ -65,24 +65,26 @@ struct DiaryPhotoManagerSheet: View {
                     ProgressView("正在处理照片…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
             }
-            .photosPicker(isPresented: $showPicker, selection: $photoItem, matching: .images)
-            .onChange(of: photoItem) { _, item in
-                guard let item else { return }
+            .photosPicker(isPresented: $showPicker, selection: $photoItems,
+                          maxSelectionCount: replacementID == nil ? 30 : 1, matching: .images)
+            .onChange(of: photoItems) { _, items in
+                guard !items.isEmpty else { return }
                 let target = replacementID
                 importing = true
                 Task { @MainActor in
-                    defer { photoItem = nil; importing = false }
+                    defer { photoItems = []; importing = false }
                     do {
-                        guard let data = try await item.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage }
-                        if let target {
-                            guard let photo = session.managedPhotos.first(where: { $0.id == target }), !photo.locked else {
-                                errorMessage = "照片已变化，请重新选择。"
-                                return
+                        for item in items {
+                            guard let data = try await item.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage }
+                            if let target {
+                                guard let photo = session.managedPhotos.first(where: { $0.id == target }), !photo.locked else {
+                                    errorMessage = "照片已变化，请重新选择。"; return
+                                }
                             }
-                        }
-                        if !(await session.importPhoto(data, replacing: target)) {
-                            errorMessage = session.errorMessage ?? "照片处理失败，请重试。"
-                            session.errorMessage = nil
+                            if !(await session.importPhoto(data, replacing: target)) {
+                                errorMessage = session.errorMessage ?? "照片处理失败，请重试。"
+                                session.errorMessage = nil; return
+                            }
                         }
                     } catch { errorMessage = error.localizedDescription }
                 }

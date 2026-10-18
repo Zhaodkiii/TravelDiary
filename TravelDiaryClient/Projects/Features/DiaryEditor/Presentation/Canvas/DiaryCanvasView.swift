@@ -53,7 +53,9 @@ final class DiaryCanvasSurface: UIView {
     private var draggingID: UUID?
     private var parentAtStart = CGAffineTransform.identity
     static let controlMargin: CGFloat = 56
-    private var fit: CGFloat { (bounds.width - Self.controlMargin * 2) / (session?.canvasBounds.width ?? 1000) }
+    static let toolControlMargin: CGFloat = 8
+    private var contentMargin: CGFloat { session?.layerMode == true ? Self.toolControlMargin : Self.controlMargin }
+    private var fit: CGFloat { (bounds.width - contentMargin * 2) / (session?.canvasBounds.width ?? 1000) }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -106,7 +108,7 @@ final class DiaryCanvasSurface: UIView {
             // backing store 按屏幕像素分配，不能按数千点设计尺寸乘设备倍率。
             artwork.contentScaleFactor = max(0.01, min(fit * (window?.screen.scale ?? traitCollection.displayScale) * viewportZoom,
                 sqrt(4 * 1024 * 1024 / max(1, session.canvasBounds.width * session.canvasBounds.height))))
-            artwork.layer.position = CGPoint(x: Self.controlMargin, y: Self.controlMargin)
+            artwork.layer.position = CGPoint(x: contentMargin, y: contentMargin)
             artwork.transform = CGAffineTransform(scaleX: fit, y: fit)
             artwork.cache = renderCache
             artwork.composited = renderCache.ordered.contains { $0.source.visible && ($0.source.blendMode ?? .normal) != .normal }
@@ -135,6 +137,7 @@ final class DiaryCanvasSurface: UIView {
             layer.name = entry.id.uuidString
             layer.zPosition = CGFloat(index)
             layer.isHidden = artwork.composited || !entry.source.visible
+            layer.opacity = Float(entry.source.effectiveOpacity)
             layer.contents = entry.image?.cgImage
             layer.contentsGravity = .resize
             if entry.source.displayBounds != nil, let child = entry.source.contentID,
@@ -213,7 +216,7 @@ final class DiaryCanvasSurface: UIView {
         if !session.inkMode, let layer = displayedSelection, layer.visible,
            let entry = renderCache.entries[layer.id] {
             context.saveGState()
-            context.translateBy(x: Self.controlMargin, y: Self.controlMargin)
+            context.translateBy(x: contentMargin, y: contentMargin)
             context.scaleBy(x: fit, y: fit)
             context.translateBy(x: -session.canvasBounds.minX, y: -session.canvasBounds.minY)
             context.concatenate(displayMatrix(layer))
@@ -249,7 +252,7 @@ final class DiaryCanvasSurface: UIView {
         }
         let target = hit(gesture.location(in: self))
         // 再次单击当前素材取消选中；选择状态仅影响编辑，不改变作品数据。
-        session.select(target == session.selectedID ? nil : target)
+        session.select(target == session.selectedID && !session.layerMode ? nil : target)
     }
     @objc private func panned(_ gesture: UIPanGestureRecognizer) {
         guard let session, !session.inkMode, !session.busy, fit > 0 else { return }
@@ -314,12 +317,12 @@ final class DiaryCanvasSurface: UIView {
         return 1
     }
     private func designPoint(_ p: CGPoint) -> CGPoint {
-        CGPoint(x: (p.x - Self.controlMargin) / fit + (session?.canvasBounds.minX ?? 0),
-                y: (p.y - Self.controlMargin) / fit + (session?.canvasBounds.minY ?? 0))
+        CGPoint(x: (p.x - contentMargin) / fit + (session?.canvasBounds.minX ?? 0),
+                y: (p.y - contentMargin) / fit + (session?.canvasBounds.minY ?? 0))
     }
     private func screenPoint(_ p: CGPoint) -> CGPoint {
-        CGPoint(x: (p.x - (session?.canvasBounds.minX ?? 0)) * fit + Self.controlMargin,
-                y: (p.y - (session?.canvasBounds.minY ?? 0)) * fit + Self.controlMargin)
+        CGPoint(x: (p.x - (session?.canvasBounds.minX ?? 0)) * fit + contentMargin,
+                y: (p.y - (session?.canvasBounds.minY ?? 0)) * fit + contentMargin)
     }
     private func handles() -> [(Handle, CGPoint)] {
         guard let session, !session.inkMode, let layer = displayedSelection, layer.visible, !layer.locked else { return [] }
@@ -334,6 +337,7 @@ final class DiaryCanvasSurface: UIView {
                        (.left, CGPoint(x:b.minX,y:b.midY)), (.right, CGPoint(x:b.maxX,y:b.midY)),
                        (.rotate, CGPoint(x:b.maxX + 44 / max(0.01, fit * viewportZoom * layer.transform.scale * layer.transform.stretchX),y:b.midY))]
         }
+        if session.layerMode { points.removeAll { $0.0 != .scale && $0.0 != .rotate } }
         if layer.id == session.content.primaryLayerID { points.removeAll { $0.0 == .delete } }
         return points.map { ($0.0, screenPoint($0.1.applying(m))) }
     }
@@ -434,10 +438,18 @@ struct DiaryDrawingSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var drawing: PKDrawing
     @State private var clearConfirmation = false
+    @State private var erasing = false
+    @State private var inkColor: Color = .black
+    @State private var inkWidth: Double = 5
+    @State private var showWidth = false
+    @State private var checkpoint: PKDrawing
+    @State private var undoDrawings: [PKDrawing] = []
+    @State private var redoDrawings: [PKDrawing] = []
 
     init(session: DiaryEditorSession) {
         self.session = session
         _drawing = State(initialValue: session.drawing)
+        _checkpoint = State(initialValue: session.drawing)
     }
 
     var body: some View {
@@ -456,7 +468,9 @@ struct DiaryDrawingSheet: View {
                         .frame(width: size.width + margin * 2, height: size.height + margin * 2)
                         .offset(x: -margin, y: -margin)
                         .allowsHitTesting(false)
-                    DiaryDrawingCanvasView(drawing: $drawing, bounds: bounds, displayScale: scale)
+                    DiaryDrawingCanvasView(drawing: $drawing, bounds: bounds, displayScale: scale,
+                        tool: erasing ? PKEraserTool(.bitmap, width: inkWidth) : PKInkingTool(.pen, color: UIColor(inkColor), width: inkWidth),
+                        onStrokeEnded: recordStroke)
                         .frame(width: size.width, height: size.height)
                 }
                 .frame(width: size.width, height: size.height, alignment: .topLeading)
@@ -466,17 +480,34 @@ struct DiaryDrawingSheet: View {
 
             }
             .background(Color(uiColor: .systemGroupedBackground))
-            // Reserve room for the native palette so the bottom of the page remains reachable.
-            .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 110).allowsHitTesting(false) }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 8) {
+                    if showWidth { HStack {
+                        Text("粗细 \(Int(inkWidth))").font(.caption)
+                        Slider(value: $inkWidth, in: 1...40, step: 1)
+                    }.padding(.horizontal) }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 20) {
+                            drawingButton("完成", symbol: "checkmark", action: finish)
+                            drawingButton("画笔", symbol: "pencil.tip", active: !erasing) { erasing = false }
+                            drawingButton("橡皮", symbol: "eraser", active: erasing) { erasing = true }
+                            VStack(spacing: 4) {
+                                ColorPicker("颜色", selection: $inkColor, supportsOpacity: false).labelsHidden()
+                                Text("颜色").font(.caption)
+                            }
+                            drawingButton("粗细", symbol: "lineweight", active: showWidth) { showWidth.toggle() }
+                            drawingButton("撤销", symbol: "arrow.uturn.backward") { undoDrawing() }.disabled(undoDrawings.isEmpty)
+                            drawingButton("重做", symbol: "arrow.uturn.forward") { redoDrawing() }.disabled(redoDrawings.isEmpty)
+                        }.padding(.horizontal, 16).padding(.vertical, 10)
+                    }
+                }.background(.regularMaterial)
+            }
             .navigationTitle("绘画").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") {
-                        session.beginInteraction()
-                        session.previewDrawing(drawing)
-                        session.finishInteraction()
-                        dismiss()
+                        finish()
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -484,10 +515,35 @@ struct DiaryDrawingSheet: View {
                 }
             }
             .confirmationDialog("清空当前页面的笔迹？", isPresented: $clearConfirmation, titleVisibility: .visible) {
-                Button("清空笔迹", role: .destructive) { drawing = PKDrawing() }
+                Button("清空笔迹", role: .destructive) { drawing = PKDrawing(); recordStroke() }
             } message: { Text("只清空绘画草稿，点击完成后保存。") }
         }
     }
+    private func finish() {
+        session.beginInteraction(); session.previewDrawing(drawing); session.finishInteraction(); dismiss()
+    }
+    private func recordStroke() {
+        guard drawing.dataRepresentation() != checkpoint.dataRepresentation() else { return }
+        undoDrawings.append(checkpoint)
+        if undoDrawings.count > 60 { undoDrawings.removeFirst() }
+        checkpoint = drawing; redoDrawings.removeAll()
+    }
+    private func undoDrawing() {
+        recordStroke()
+        guard let previous = undoDrawings.popLast() else { return }
+        redoDrawings.append(drawing); drawing = previous; checkpoint = previous
+    }
+    private func redoDrawing() {
+        guard let next = redoDrawings.popLast() else { return }
+        undoDrawings.append(drawing); drawing = next; checkpoint = next
+    }
+    private func drawingButton(_ title: String, symbol: String, active: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 5) { Image(systemName: symbol).font(.title3); Text(title).font(.caption) }
+                .frame(minWidth: 40, minHeight: 48).foregroundStyle(active ? Color.purple : Color.primary)
+        }.accessibilityLabel(title)
+    }
+
 }
 
 /// PKCanvasView uses screen points, so native tool widths don't shrink with high-resolution pages.
@@ -495,6 +551,8 @@ struct DiaryDrawingCanvasView: UIViewRepresentable {
     @Binding var drawing: PKDrawing
     let bounds: CGRect
     let displayScale: CGFloat
+    let tool: PKTool
+    var onStrokeEnded: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
     func makeUIView(context: Context) -> PKCanvasView {
@@ -504,7 +562,6 @@ struct DiaryDrawingCanvasView: UIViewRepresentable {
         view.isScrollEnabled = false; view.drawingPolicy = .anyInput
         view.delegate = context.coordinator
         context.coordinator.canvas = view
-        context.coordinator.toolPicker.addObserver(view)
         view.onWindowChanged = { [weak coordinator = context.coordinator] in coordinator?.showTools() }
         configure(view, coordinator: context.coordinator)
         return view
@@ -512,8 +569,6 @@ struct DiaryDrawingCanvasView: UIViewRepresentable {
     func updateUIView(_ view: PKCanvasView, context: Context) { configure(view, coordinator: context.coordinator) }
     static func dismantleUIView(_ view: PKCanvasView, coordinator: Coordinator) {
         (view as? DiaryNativeDrawingCanvas)?.onWindowChanged = nil
-        coordinator.toolPicker.setVisible(false, forFirstResponder: view)
-        coordinator.toolPicker.removeObserver(view)
         view.resignFirstResponder(); view.delegate = nil
     }
     private func configure(_ view: PKCanvasView, coordinator: Coordinator) {
@@ -529,24 +584,24 @@ struct DiaryDrawingCanvasView: UIViewRepresentable {
             coordinator.lastData = data
             coordinator.replaying = false
         }
+        view.tool = tool
         coordinator.showTools()
     }
     final class Coordinator: NSObject, PKCanvasViewDelegate {
         var parent: DiaryDrawingCanvasView
         weak var canvas: PKCanvasView?
-        let toolPicker = PKToolPicker()
         var replaying = false
         var lastData: Data?
         init(parent: DiaryDrawingCanvasView) {
             self.parent = parent
             super.init()
-            // Palette chrome may be dark, but its colors must target the light artwork canvas.
-            toolPicker.colorUserInterfaceStyle = .light
         }
         func showTools() {
             guard let canvas, canvas.window != nil else { return }
-            toolPicker.setVisible(true, forFirstResponder: canvas)
             if !canvas.isFirstResponder { canvas.becomeFirstResponder() }
+        }
+        func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+            parent.onStrokeEnded()
         }
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             guard !replaying else { return }

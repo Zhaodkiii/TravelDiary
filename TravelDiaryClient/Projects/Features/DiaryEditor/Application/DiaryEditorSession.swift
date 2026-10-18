@@ -39,6 +39,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     }
     @Published var selectedID: UUID?
     @Published var inkMode = false
+    @Published var layerMode = false
     @Published var eraser = false
     @Published var errorMessage: String?
     @Published private(set) var saveStatus = "已保存"
@@ -194,10 +195,55 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     }
     func setBackground(_ color: DiaryColor?) { edit { document.objects[contentID]?.background = color } }
     func addFrame() {
-        guard let layer = selected, layer.kind == .photo, !layer.locked else { return }
+        guard let layer = selectedEditingLayer, layer.kind == .photo, editableLayer(layer.id) != nil,
+              let owner = document.objects.values.first(where: { $0.layers.contains(where: { $0.id == layer.id }) }) else { return }
+        if let existing = owner.layers.first(where: { $0.frameTargetID == layer.id }) {
+            if owner.id == contentID { select(existing.id) }
+            return
+        }
         let frame = DiaryLayer(name: "相框", kind: .frame, transform: layer.transform,
                                size: layer.size, frameTargetID: layer.id, frameColor: .white, frameWidth: 20)
-        edit { document.objects[contentID]?.layers.append(frame) }
+        edit {
+            document.objects[owner.id]?.layers.append(frame)
+            if owner.id == contentID { selectedID = frame.id }
+        }
+    }
+
+    func updateFrame(_ id: UUID, color: DiaryColor, width: CGFloat) {
+        guard editableLayer(id)?.kind == .frame, width.isFinite, (0...100).contains(width) else { return }
+        edit { document.update(id) { $0.frameColor = color; $0.frameWidth = width } }
+    }
+
+    func setLayerOpacity(_ id: UUID, value: Double) {
+        guard editableLayer(id) != nil, value.isFinite else { return }
+        edit { document.update(id) { $0.opacity = min(1, max(0, value)) } }
+    }
+
+    func flipSelected(horizontal: Bool) {
+        guard let layer = selected, !layer.locked, layer.kind != .frame else { return }
+        edit {
+            document.update(layer.id) {
+                if horizontal { $0.transform.flippedHorizontally = !($0.transform.flippedHorizontally ?? false) }
+                else { $0.transform.flippedVertically = !($0.transform.flippedVertically ?? false) }
+            }
+        }
+    }
+
+    /// A draft panel commits one operation against the captured target.
+    func updatePlacement(_ id: UUID, position: CGPoint, scale: CGFloat, angle: CGFloat) {
+        guard let layer = editableLayer(id), layer.kind != .frame,
+              position.x.isFinite, position.y.isFinite, scale.isFinite, angle.isFinite,
+              (0.05...20).contains(scale) else { return }
+        edit { document.update(id) { $0.transform.position = position; $0.transform.scale = scale; $0.transform.rotationDegrees = angle } }
+    }
+
+    func restoreOriginalPhoto(_ id: UUID) {
+        guard let layer = editableLayer(id), let original = layer.photoCrop else { return }
+        edit { document.update(id) {
+            $0.assetID = original.originalAssetID; $0.size = original.originalSize
+            $0.transform.pivot = original.originalPivot; $0.photoFill = original.originalFill
+            $0.crop = original.originalCrop; $0.photoCrop = nil
+        } }
     }
 
     /// 一次拖动/滑块调节只提交一条历史；中间状态实时显示，结束后再自动保存。
@@ -237,6 +283,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         redoStack.append(snapshot); restore(previous); changed()
     }
     func redo() {
+        finishInteraction()
         guard let next = redoStack.popLast() else { return }
         undoStack.append(snapshot); restore(next); changed()
     }
@@ -281,6 +328,45 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
 
     func select(_ id: UUID?) { finishInteraction(); selectedID = id }
 
+    func previewOpacity(_ value: Double) {
+        guard value.isFinite, let layer = selected, !layer.locked else { return }
+        beginInteraction()
+        document.update(layer.id) { $0.opacity = min(1, max(0, value)) }
+    }
+
+    var canDeleteSelected: Bool {
+        guard let layer = selected else { return false }
+        return !layer.locked && layer.id != content.primaryLayerID
+    }
+
+    func canMoveSelected(forward: Bool) -> Bool {
+        guard let layer = selected, !layer.locked, layer.kind != .frame,
+              let index = scopeLayers.firstIndex(where: { $0.id == layer.id }) else { return false }
+        return scopeLayers.indices.contains(index + (forward ? 1 : -1))
+    }
+
+    /// Interactive rail movement previews the stack, but records history only on release.
+    func previewLayerOrder(_ id: UUID, to destination: Int) {
+        guard let index = scopeLayers.firstIndex(where: { $0.id == id }),
+              !scopeLayers[index].locked, scopeLayers[index].kind != .frame,
+              scopeLayers.indices.contains(destination), index != destination else { return }
+        beginInteraction()
+        let layer = document.objects[contentID]!.layers.remove(at: index)
+        document.objects[contentID]!.layers.insert(layer, at: destination)
+    }
+
+    /// Destination is in the current object's bottom-to-top ordering.
+    func moveLayer(_ id: UUID, to destination: Int) {
+        guard let index = scopeLayers.firstIndex(where: { $0.id == id }),
+              !scopeLayers[index].locked, scopeLayers[index].kind != .frame,
+              scopeLayers.indices.contains(destination), index != destination else { return }
+        edit {
+            let layer = document.objects[contentID]!.layers.remove(at: index)
+            document.objects[contentID]!.layers.insert(layer, at: destination)
+            selectedID = id
+        }
+    }
+
     func previewPosition(_ point: CGPoint) {
         guard let id = selectedID, selected?.locked == false, selected?.kind != .frame else { return }
         document.update(id) { $0.transform.position = point }
@@ -295,7 +381,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     }
     /// 只替换选定照片的素材；原图与参数随文档保存，整次提交进入一条撤销记录。
     func commitPhotoCrop(layerID: UUID, image: UIImage, parameters: ImageCropParameters) async -> Bool {
-        guard !busy, let layer = document.layer(layerID), !layer.locked,
+        guard !busy, let layer = editableLayer(layerID),
               let sourceID = layer.assetID, parameters.isValid else { return false }
         busy = true
         defer { busy = false }
@@ -335,18 +421,24 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         edit { document.update(id) { $0.crop = crop } }
     }
     /// 目标 ID 在打开弹窗时固定，避免提交时修改其他选中层。
-    func applyTextEdit(targetID: UUID?, text: String, fontSize: CGFloat, font: DiaryFontReference?) -> Bool {
+    func applyTextEdit(targetID: UUID?, text: String, fontSize: CGFloat, font: DiaryFontReference?, color: DiaryColor? = nil,
+                       alignment: DiaryTextAlignment? = nil, lineHeight: Double? = nil, letterSpacing: Double? = nil) -> Bool {
         guard !busy, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               fontSize.isFinite, (1...300).contains(fontSize) else { return false }
         if let targetID {
-            guard let layer = scopeLayers.first(where: { $0.id == targetID }), layer.kind == .text, !layer.locked else {
+            guard let layer = editableLayer(targetID), layer.kind == .text else {
                 errorMessage = "文字图层已不可编辑"; return false
             }
-            edit { document.update(targetID) { $0.text = text; $0.fontSize = fontSize; $0.font = font } }
+            edit { document.update(targetID) {
+                $0.text = text; $0.fontSize = fontSize; $0.font = font
+                $0.textColor = color ?? $0.textColor; $0.textAlignment = alignment ?? $0.textAlignment
+                $0.textLineHeight = lineHeight ?? $0.textLineHeight; $0.textLetterSpacing = letterSpacing ?? $0.textLetterSpacing
+            } }
         } else {
             let layer = DiaryLayer(name: "文字", kind: .text,
                 transform: DiaryTransform(position: scopeCenter, pivot: CGPoint(x: 200, y: 0)),
-                size: CGSize(width: 400, height: 60), text: text, fontSize: fontSize, font: font)
+                size: CGSize(width: 400, height: 60), text: text, fontSize: fontSize,
+                textColor: color, textAlignment: alignment, textLineHeight: lineHeight, textLetterSpacing: letterSpacing, font: font)
             edit { document.appendObject(containing: layer, to: contentID); selectedID = layer.id }
         }
         return true
@@ -391,13 +483,16 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         } catch { errorMessage = error.localizedDescription; return false }
     }
 
-    func importPhoto(_ data: Data, replacing: UUID? = nil, asSticker: Bool = false, stickerName: String = "贴纸") async -> Bool {
+    func importPhoto(_ data: Data, replacing: UUID? = nil, asSticker: Bool = false, stickerName: String = "贴纸", semanticKind: DiaryLayerSemanticKind? = nil) async -> Bool {
         guard !busy else { return false }
         busy = true
         defer { busy = false }
         do {
             let (asset, image) = try await store.importImage(data, documentID: document.id)
-            guard replacing == nil || document.layer(replacing) != nil else { return false }
+            if let replacing {
+                guard let target = editableLayer(replacing), target.assetID != nil,
+                      target.kind == .photo || target.kind == .sticker else { return false }
+            }
             images[asset.id] = image
             edit {
                 document.assets[asset.id] = asset
@@ -411,9 +506,11 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                                     canvas.height * 0.4 / asset.pixelSize.height)
                     let size = CGSize(width: asset.pixelSize.width * ratio, height: asset.pixelSize.height * ratio)
                     let center = scopeCenter
-                    let sticker = DiaryLayer(name: stickerName, kind: .sticker,
+                    var sticker = DiaryLayer(name: stickerName, kind: .sticker,
                                              transform: DiaryTransform(position: center, pivot: CGPoint(x: size.width / 2, y: size.height / 2)),
                                              size: size, assetID: asset.id)
+                    sticker.semanticKind = semanticKind
+                    if semanticKind == .text { sticker.category = .textImage }
                     document.appendObject(containing: sticker, to: contentID); selectedID = sticker.id
                 } else {
                     let photo = DiaryLayer.photo(asset: asset, center: scopeCenter)
@@ -548,10 +645,11 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
 
     func removeSelected() {
         guard let layer = selected, !layer.locked, layer.id != content.primaryLayerID else { return }
+        let index = scopeLayers.firstIndex(where: { $0.id == layer.id }) ?? 0
         edit {
             document.objects[contentID]?.layers.removeAll { $0.id == layer.id || $0.frameTargetID == layer.id }
-            if content.primaryLayerID == layer.id { document.objects[contentID]?.primaryLayerID = nil }
-            selectedID = nil
+            let remaining = scopeLayers
+            selectedID = layerMode && !remaining.isEmpty ? remaining[min(index, remaining.count - 1)].id : nil
         }
     }
     func reorderSelected(forward: Bool) {

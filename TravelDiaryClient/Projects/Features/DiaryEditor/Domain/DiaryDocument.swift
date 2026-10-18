@@ -39,6 +39,8 @@ nonisolated struct DiaryTransform: Codable, Equatable, Sendable {
     var rotationDegrees: CGFloat = 0
     /// 四边手柄的单轴拉伸；旧存档没有此字段时，两轴都按 1 显示。
     var stretch: CGSize? = nil
+    var flippedHorizontally: Bool? = nil
+    var flippedVertically: Bool? = nil
     var stretchX: CGFloat { stretch?.width ?? 1 }
     var stretchY: CGFloat { stretch?.height ?? 1 }
 
@@ -58,7 +60,8 @@ nonisolated struct DiaryTransform: Codable, Equatable, Sendable {
     var matrix: CGAffineTransform {
         CGAffineTransform(translationX: position.x, y: position.y)
             .rotated(by: rotationDegrees * .pi / 180)
-            .scaledBy(x: scale * stretchX, y: scale * stretchY)
+            .scaledBy(x: scale * stretchX * (flippedHorizontally == true ? -1 : 1),
+                      y: scale * stretchY * (flippedVertically == true ? -1 : 1))
             .translatedBy(x: -pivot.x, y: -pivot.y)
     }
 }
@@ -101,6 +104,10 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
     var displayBounds: CGRect? = nil
     var text = ""
     var fontSize: CGFloat = 36
+    var textColor: DiaryColor? = nil
+    var textAlignment: DiaryTextAlignment? = nil
+    var textLineHeight: Double? = nil
+    var textLetterSpacing: Double? = nil
     var font: DiaryFontReference?
     /// 一键替换使用完整图片拉伸填满原框；nil 保持旧作品 cover 取景。
     var photoFill: Bool? = nil
@@ -109,6 +116,9 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
     var crop = DiaryCrop()
     var visible = true
     var locked = false
+    /// nil keeps older documents fully opaque.
+    var opacity: Double? = nil
+    var effectiveOpacity: Double { min(1, max(0, opacity ?? 1)) }
     var isLibraryBackground: Bool? = nil
     /// PSD 混合效果。旧作品缺少该字段时按 normal 绘制。
     var blendMode: DiaryBlendMode? = nil
@@ -226,4 +236,9 @@ extension DiaryDocument {
             layer.photoPlacement = placement ?? layer.photoPlacement
         }
     }
+}
+
+nonisolated enum DiaryTextAlignment: String, Codable, CaseIterable, Sendable {
+    case left, center, right
+    var title: String { switch self { case .left: "左对齐"; case .center: "居中"; case .right: "右对齐" } }
 }

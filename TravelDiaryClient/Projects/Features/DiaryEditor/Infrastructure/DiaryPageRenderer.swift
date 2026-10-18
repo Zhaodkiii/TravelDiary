@@ -18,8 +18,14 @@ enum DiaryPageRenderer {
     }
     static func textStyle(_ layer: DiaryLayer) -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center; paragraph.lineHeightMultiple = 1.2
-        return [.font: DiaryFontCatalog.shared.font(layer.font, size: layer.fontSize), .foregroundColor: UIColor.darkText, .paragraphStyle: paragraph]
+        switch layer.textAlignment ?? .center {
+        case .left: paragraph.alignment = .left
+        case .center: paragraph.alignment = .center
+        case .right: paragraph.alignment = .right
+        }
+        paragraph.lineHeightMultiple = layer.textLineHeight ?? 1.2
+        return [.font: DiaryFontCatalog.shared.font(layer.font, size: layer.fontSize), .foregroundColor: layer.textColor.map(color) ?? UIColor.darkText,
+                .kern: layer.textLetterSpacing ?? 0, .paragraphStyle: paragraph]
     }
 
     static func bounds(_ layer: DiaryLayer, document: DiaryDocument? = nil, siblings: [DiaryLayer] = []) -> CGRect {
@@ -92,6 +98,11 @@ enum DiaryPageRenderer {
             case .linearBurn: context.setBlendMode(.plusDarker)
             case .lighten: context.setBlendMode(.lighten)
             }
+            let translucent = layer.effectiveOpacity < 1
+            if translucent {
+                context.setAlpha(layer.effectiveOpacity)
+                context.beginTransparencyLayer(auxiliaryInfo: nil)
+            }
             if let rect = layer.displayBounds { context.clip(to: rect) }
             switch layer.kind {
             case .object:
@@ -146,6 +157,7 @@ enum DiaryPageRenderer {
                     }
                 }
             }
+            if translucent { context.endTransparencyLayer() }
             context.restoreGState()
         }
     }

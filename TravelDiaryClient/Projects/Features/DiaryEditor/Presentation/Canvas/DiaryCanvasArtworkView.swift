@@ -64,12 +64,18 @@ final class DiaryCanvasArtworkView: UIView {
             case .linearBurn: context.setBlendMode(.plusDarker)
             case .lighten: context.setBlendMode(.lighten)
             }
+            let translucent = entry.source.effectiveOpacity < 1
+            if translucent {
+                context.setAlpha(entry.source.effectiveOpacity)
+                context.beginTransparencyLayer(auxiliaryInfo: nil)
+            }
             if entry.source.displayBounds != nil, let child = entry.source.contentID,
                let background = cache.document.objects[child]?.background {
                 context.setFillColor(DiaryPageRenderer.color(background).cgColor)
                 context.fill(entry.rect)
             }
             entry.image?.draw(in: entry.rect)
+            if translucent { context.endTransparencyLayer() }
             context.restoreGState()
         }
         if showInk { cache.inkImage?.draw(in: cache.inkRect) }
