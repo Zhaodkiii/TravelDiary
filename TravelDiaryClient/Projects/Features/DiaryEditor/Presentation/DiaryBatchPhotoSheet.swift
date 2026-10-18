@@ -8,6 +8,7 @@ struct DiaryBatchPhotoSheet: View {
     var session: DiaryEditorSession? = nil
     var preset: DiaryPresetPackage? = nil
     var presetPageIDs: [String] = []
+    var hiddenPresetCategories: Set<DiaryLayerSemanticKind> = []
     var preparationDirectory: URL? = nil
     var finishesImport = false
     var embedded = false
@@ -40,7 +41,7 @@ struct DiaryBatchPhotoSheet: View {
     private var content: some View {
             List {
                 Section {
-                    Text(session == nil && preset == nil ? "当前手帐共 \(slots.count) 张可替换照片" : "当前页共 \(slots.count) 张可替换照片")
+                    Text(preset != nil ? "已选 \(presetPageIDs.count) 页，共 \(slots.count) 张可替换照片" : session == nil ? "当前手帐共 \(slots.count) 张可替换照片" : "当前页共 \(slots.count) 张可替换照片")
                     Text("按页序、组内图层从底到顶替换。隐藏及锁定图层跳过。完整图片拉伸到原框，比例不同时会变形。")
                         .font(.caption).foregroundStyle(.secondary)
                     if ready && !slots.isEmpty {
@@ -126,9 +127,13 @@ struct DiaryBatchPhotoSheet: View {
             }
             if let preset {
                 let assetIDs = Dictionary(uniqueKeysWithValues: preset.manifest.assetTable.keys.map { ($0, UUID()) })
-                let selected = try preset.pages.filter { presetPageIDs.contains($0.id) }
+                let selected = try presetPageIDs.map { id -> PresetPage in
+                    guard let reference = preset.manifest.pages.first(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument }
+                    return try preset.read(PresetPage.self, reference.path)
+                }
                 for (index, page) in selected.enumerated() {
                     let document = try preset.instantiate(page, bookID: UUID(), targetSize: page.size.cg, assetIDs: assetIDs)
+                        .excludingPresetCategories(hiddenPresetCategories)
                     var images: [UUID: UIImage] = [:]
                     let needed = Set(document.replaceablePhotos().compactMap(\.assetID))
                     for (key, asset) in preset.manifest.assetTable {

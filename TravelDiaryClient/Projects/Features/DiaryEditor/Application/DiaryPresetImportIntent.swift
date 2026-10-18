@@ -10,6 +10,7 @@ nonisolated struct DiaryPresetImportIntent: Codable, Identifiable, Sendable {
     let targetID: UUID?
     let afterPageID: UUID?
     let title: String
+    var hiddenCategories: Set<DiaryLayerSemanticKind>? = nil
     static func key(_ owner: String) -> String { "DiaryPresetIntent." + Data(owner.utf8).base64EncodedString() }
     static func read(owner: String) -> Self? {
         guard let data = UserDefaults.standard.data(forKey: key(owner)) else { return nil }

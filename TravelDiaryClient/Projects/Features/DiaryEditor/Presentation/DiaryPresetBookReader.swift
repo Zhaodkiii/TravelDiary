@@ -408,7 +408,7 @@ private struct PresetLargePreview: View {
 
 /// 当前跨页的临时预览缓存。磁盘读取和图片解码在后台，绘制复用正式页面绘制器。
 @MainActor
-private final class PresetCategoryRenderer: ObservableObject {
+final class PresetCategoryRenderer: ObservableObject {
     private struct Prepared: Sendable {
         let document: DiaryDocument
         let images: [UUID: UIImage]
@@ -418,8 +418,9 @@ private final class PresetCategoryRenderer: ObservableObject {
 
     func reset() { identity = ""; prepared = [:] }
 
-    func render(package: DiaryPresetPackage, pageIDs: [String], hidden: Set<DiaryLayerSemanticKind>) async throws -> [String: UIImage] {
-        let key = package.root.path + pageIDs.joined(separator: ",")
+    func render(package: DiaryPresetPackage, pageIDs: [String], hidden: Set<DiaryLayerSemanticKind>,
+                maximumDimension: Int = 1400) async throws -> [String: UIImage] {
+        let key = package.root.path + pageIDs.joined(separator: ",") + "-\(maximumDimension)"
         if identity != key { prepared = [:]; identity = key }
         var result: [String: UIImage] = [:]
         for id in pageIDs {
@@ -427,15 +428,15 @@ private final class PresetCategoryRenderer: ObservableObject {
             let page: Prepared
             if let cached = prepared[id] { page = cached }
             else {
-                let work = Task.detached(priority: .userInitiated) { try Self.prepare(package: package, pageID: id) }
+                let work = Task.detached(priority: .userInitiated) { try Self.prepare(package: package, pageID: id, maximumDimension: maximumDimension) }
                 page = try await withTaskCancellationHandler(operation: { try await work.value }, onCancel: { work.cancel() })
                 try Task.checkCancellation()
                 guard identity == key else { throw CancellationError() }
                 prepared[id] = page
             }
-            let document = page.document.hidingPresetCategories(hidden)
+            let document = page.document.excludingPresetCategories(hidden)
             let size = document.root.referenceSize
-            let scale = min(1, 1400 / max(size.width, size.height))
+            let scale = min(1, CGFloat(maximumDimension) / max(size.width, size.height))
             let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = false
             let output = CGSize(width: size.width * scale, height: size.height * scale)
             result[id] = UIGraphicsImageRenderer(size: output, format: format).image { renderer in
@@ -447,7 +448,7 @@ private final class PresetCategoryRenderer: ObservableObject {
         return result
     }
 
-    nonisolated private static func prepare(package: DiaryPresetPackage, pageID: String) throws -> Prepared {
+    nonisolated private static func prepare(package: DiaryPresetPackage, pageID: String, maximumDimension: Int) throws -> Prepared {
         guard let reference = package.manifest.pages.first(where: { $0.id == pageID }) else { throw DiaryEditorError.invalidDocument }
         let page = try package.read(PresetPage.self, reference.path)
         let ids = Dictionary(uniqueKeysWithValues: package.manifest.assetTable.keys.map { ($0, UUID()) })
@@ -460,7 +461,7 @@ private final class PresetCategoryRenderer: ObservableObject {
                   let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                     kCGImageSourceCreateThumbnailFromImageAlways: true,
                     kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: 1400
+                    kCGImageSourceThumbnailMaxPixelSize: maximumDimension
                   ] as CFDictionary) else { throw DiaryEditorError.missingResource }
             images[id] = UIImage(cgImage: cg)
         }

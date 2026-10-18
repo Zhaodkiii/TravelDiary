@@ -615,7 +615,7 @@ extension DiaryDocumentStore {
     /// 完整准备页面后一次发布目录。新本以目录移动发布，旧本以 book.json 原子写发布。
     /// operationID 由一次用户意图产生，错误重试沿用；已发布操作直接返回原结果。
     func importPreset(_ package: DiaryPresetPackage, pageIDs: [String], title: String,
-                      operationID: UUID, replacementPhotos: [URL] = [], afterPageID: UUID? = nil, expectedRevision: UUID? = nil,
+                      operationID: UUID, replacementPhotos: [URL] = [], hiddenCategories: Set<DiaryLayerSemanticKind> = [], afterPageID: UUID? = nil, expectedRevision: UUID? = nil,
                       progress: @escaping @Sendable (String) -> Void = { _ in },
                       cancellation: DiaryPresetCancellation? = nil) async throws -> DiaryBook {
         try await run {
@@ -676,6 +676,7 @@ extension DiaryDocumentStore {
                 try cancellation?.check()
                 progress("正在准备第 \(index + 1) / \(selected.count) 页…")
                 var document = try package.instantiate(page, bookID: destinationID, targetSize: book.defaultPageSize, assetIDs: assetIDs)
+                    .excludingPresetCategories(hiddenCategories)
                 for (key, source) in package.manifest.assetTable {
                     guard let id = assetIDs[key], document.assets[id] != nil, copied.insert(id).inserted else { continue }
                     let data = try Data(contentsOf: package.url(source.path))

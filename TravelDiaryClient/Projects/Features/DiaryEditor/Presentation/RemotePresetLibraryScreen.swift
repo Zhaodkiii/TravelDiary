@@ -76,7 +76,7 @@ struct RemotePresetReaderDestination: View {
             RemotePresetImportDestination(ownerID: ownerID, book: book, pageIDs: value.pageIDs,
                 wholeBook: value.wholeBook, targetBook: value.wholeBook ? nil : targetBook,
                 afterPageID: afterPageID, fixedTarget: fixedTarget,
-                previewPage: pages.first { $0.id == value.pageIDs.first },
+                previewPages: pages.filter { value.pageIDs.contains($0.id) },
                 previewSize: browse?.page_size.cg ?? CGSize(width: 1, height: 1.4)) { result in
                     selection = nil; onImported(result)
                 }
@@ -186,7 +186,7 @@ struct RemotePresetDetailScreen: View {
         RemotePresetImportDestination(ownerID: ownerID, book: book, pageIDs: value.pageIDs,
             wholeBook: value.wholeBook, targetBook: value.wholeBook ? nil : targetBook,
             afterPageID: afterPageID, fixedTarget: fixedTarget,
-            previewPage: pages.first(where: { $0.id == value.pageIDs.first }),
+            previewPages: pages.filter { value.pageIDs.contains($0.id) },
             previewSize: browse?.page_size.cg ?? CGSize(width: 1, height: 1.4)) { result in
                 selection = nil; onImported(result)
             }
@@ -242,7 +242,7 @@ private struct RemotePresetImportDestination: View {
     let targetBook: DiaryBook?
     let afterPageID: UUID?
     let fixedTarget: Bool
-    let previewPage: RemotePresetPage?
+    let previewPages: [RemotePresetPage]
     let previewSize: CGSize
     let onImported: (DiaryBook) -> Void
     @State private var preparation: PresetImportPreparation?
@@ -255,14 +255,14 @@ private struct RemotePresetImportDestination: View {
                 DiaryPresetImportSheet(ownerID: ownerID, package: preparation.package, pageIDs: pageIDs,
                     defaultTarget: targetBook, wholeBook: wholeBook, defaultAfterPageID: afterPageID,
                     remoteBook: preparation.downloadID == nil ? nil : book,
-                    initialDownloadID: preparation.downloadID, loadingPreview: previewPage,
+                    initialDownloadID: preparation.downloadID, loadingPages: previewPages,
                     loadingPreviewSize: previewSize, fixedTarget: fixedTarget, completed: onImported)
             } else {
                 NavigationStack {
                     ScrollView {
                         VStack(spacing: 16) {
-                            if let previewPage {
-                                RemotePresetLoadingPreview(page: previewPage, size: previewSize)
+                            if let page = previewPages.first {
+                                RemotePresetLoadingPreview(page: page, size: previewSize)
                             }
                             if let error {
                                 Text(error).foregroundStyle(.red)
@@ -271,7 +271,7 @@ private struct RemotePresetImportDestination: View {
                                 ProgressView("正在获取所选页面资源清单…")
                             }
                         }.padding()
-                    }.navigationTitle(wholeBook ? "添加预设" : "添加单页")
+                    }.navigationTitle(wholeBook ? "添加整本" : pageIDs.count == 1 ? "添加单页" : "添加双页")
                 }
             }
         }.task(id: retry) {

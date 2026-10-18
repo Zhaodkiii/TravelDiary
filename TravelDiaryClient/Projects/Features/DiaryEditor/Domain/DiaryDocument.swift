@@ -152,25 +152,75 @@ nonisolated enum DiaryLayerSemanticKind: String, Codable, CaseIterable, Sendable
 }
 
 extension DiaryDocument {
-    /// 只过滤预览副本的绘制层；组合中的独立子类保留自己的语义和可见性。
+    /// 预览与导入使用相同的语义继承规则，混合组合中的独立分类不随父分类被移除。
     nonisolated func hidingPresetCategories(_ hidden: Set<DiaryLayerSemanticKind>) -> DiaryDocument {
+        filteringPresetCategories(hidden, removing: false)
+    }
+
+    nonisolated func excludingPresetCategories(_ hidden: Set<DiaryLayerSemanticKind>) -> DiaryDocument {
+        filteringPresetCategories(hidden, removing: true)
+    }
+
+    private nonisolated func filteringPresetCategories(_ hidden: Set<DiaryLayerSemanticKind>, removing: Bool) -> DiaryDocument {
+        guard !hidden.isEmpty else { return self }
         var copy = self
         var visited = Set<UUID>()
-        func visit(_ id: UUID, inherited: DiaryLayerSemanticKind?) {
-            guard visited.insert(id).inserted, var content = copy.objects[id] else { return }
-            if hidden.contains(.background), inherited == .background { content.background = nil }
-            for index in content.layers.indices {
-                let layer = content.layers[index]
-                let category = layer.semanticKind ?? inherited
+        func category(_ layer: DiaryLayer, inherited: DiaryLayerSemanticKind?) -> DiaryLayerSemanticKind? {
+            if let explicit = layer.semanticKind { return explicit }
+            if layer.category == .textImage { return .text }
+            if layer.isLibraryBackground == true { return .background }
+            if let inherited { return inherited }
+            // 老包只按明确的绘制类型回退，不从名称猜测素材语义。
+            switch layer.kind {
+            case .photo, .frame: return .photo
+            case .text: return .text
+            case .sticker: return .illustration
+            case .object, .canvas: return nil
+            }
+        }
+        @discardableResult func visit(_ id: UUID, inherited: DiaryLayerSemanticKind?) -> Bool {
+            guard visited.insert(id).inserted, var content = copy.objects[id] else { return false }
+            if hidden.contains(inherited ?? .background) { content.background = nil }
+            if hidden.contains(inherited ?? .illustration) { content.drawing = Data() }
+            var layers: [DiaryLayer] = []
+            for var layer in content.layers {
+                let kind = category(layer, inherited: inherited)
                 if let child = layer.contentID {
-                    visit(child, inherited: category)
-                } else if let category, hidden.contains(category) {
-                    content.layers[index].visible = false
+                    let hasContent = visit(child, inherited: kind)
+                    if removing && !hasContent { continue }
+                } else if let kind, hidden.contains(kind) {
+                    if removing { continue }
+                    layer.visible = false
+                }
+                layers.append(layer)
+            }
+            if removing {
+                let photoIDs = Set(layers.filter { $0.kind == .photo }.map(\.id))
+                layers.removeAll { $0.kind == .frame && $0.frameTargetID.map { !photoIDs.contains($0) } != false }
+                if let primary = content.primaryLayerID, !layers.contains(where: { $0.id == primary }) {
+                    content.primaryLayerID = nil; content.role = .canvas
                 }
             }
+            content.layers = layers
             copy.objects[id] = content
+            return !layers.isEmpty || content.background != nil || !content.drawing.isEmpty
         }
         visit(rootContentID, inherited: nil)
+        if removing {
+            var reachable = Set<UUID>()
+            var assets = Set<UUID>()
+            func collect(_ id: UUID) {
+                guard reachable.insert(id).inserted, let content = copy.objects[id] else { return }
+                for layer in content.layers {
+                    if let asset = layer.assetID { assets.insert(asset) }
+                    if let original = layer.photoCrop?.originalAssetID { assets.insert(original) }
+                    if let child = layer.contentID { collect(child) }
+                }
+            }
+            collect(rootContentID)
+            copy.objects = copy.objects.filter { reachable.contains($0.key) }
+            copy.assets = copy.assets.filter { assets.contains($0.key) }
+        }
         return copy
     }
 }
