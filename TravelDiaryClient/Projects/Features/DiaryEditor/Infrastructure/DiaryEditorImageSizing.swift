@@ -22,7 +22,9 @@ nonisolated enum DiaryEditorImageSizing {
                 if let child = layer.contentID { visit(child, parent: matrix) }
                 guard let assetID = layer.assetID, let asset = document.assets[assetID] else { continue }
                 var size = layer.size
-                if layer.kind == .photo && layer.photoFill != true {
+                if layer.photoSlot != nil, layer.photoFill == true {
+                    size = layer.displayBounds?.size ?? layer.size
+                } else if layer.kind == .photo && layer.photoFill != true {
                     size = layer.crop.imageRect(source: asset.pixelSize, frame: layer.size).size
                 } else if let placement = layer.photoPlacement, layer.photoFill == true {
                     let frame = layer.displayBounds?.size ?? layer.size
@@ -30,6 +32,9 @@ nonisolated enum DiaryEditorImageSizing {
                 }
                 let pixels = max(size.width * hypot(matrix.a, matrix.b), size.height * hypot(matrix.c, matrix.d)) * viewportScale
                 requested[assetID] = max(requested[assetID] ?? 96, min(maximumDimension, pixels))
+                if let mask = layer.photoSlot?.maskAssetID {
+                    requested[mask] = max(requested[mask] ?? 96, min(maximumDimension, pixels))
+                }
             }
         }
         visit(contentID, parent: .identity)

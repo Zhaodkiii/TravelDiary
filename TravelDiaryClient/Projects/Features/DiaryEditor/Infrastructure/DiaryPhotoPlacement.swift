@@ -8,8 +8,7 @@ nonisolated struct DiaryPhotoPlacement: Codable, Equatable, Sendable {
     var radians: CGFloat
 }
 
-@MainActor
-enum DiaryPhotoPlacementDetector {
+nonisolated enum DiaryPhotoPlacementDetector {
     static func detect(_ image: UIImage) -> DiaryPhotoPlacement? {
         let scale = min(1, 512 / max(image.size.width, image.size.height))
         let w = max(1, Int(image.size.width * scale)), h = max(1, Int(image.size.height * scale))

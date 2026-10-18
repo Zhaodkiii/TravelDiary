@@ -144,7 +144,11 @@ enum DiaryPageRenderer {
                 if let id = layer.assetID, let image = images[id], let asset = document.assets[id] {
                     let frame = layer.photoFill == true ? (layer.displayBounds ?? CGRect(origin: .zero, size: layer.size)) : CGRect(origin: .zero, size: layer.size)
                     context.clip(to: frame)
-                    if layer.photoFill == true, let placement = layer.photoPlacement {
+                    if layer.photoFill == true, let slot = layer.photoSlot {
+                        if let mapped = DiaryPhotoSlotRenderer.image(image, mask: slot.maskAssetID.flatMap { images[$0] },
+                            slot: slot, size: frame.size, crop: layer.crop,
+                            pixelScale: max(hypot(context.ctm.a, context.ctm.b), hypot(context.ctm.c, context.ctm.d))) { mapped.draw(in: frame) }
+                    } else if layer.photoFill == true, let placement = layer.photoPlacement {
                         // 在完整素材坐标中恢复烘焙的倾斜，再由外层矩阵完成页面旋转与拉伸。
                         context.translateBy(x: frame.minX, y: frame.minY)
                         context.translateBy(x: placement.center.x * frame.width, y: placement.center.y * frame.height)

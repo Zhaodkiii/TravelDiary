@@ -34,7 +34,7 @@ struct DiaryAlphaHitTests {
 
     @Test func suppliedFramesHaveSelectablePixelsAndTransparentPixels() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let assets = root.appendingPathComponent("TravelDiaryClient/Projects/App/Resources/DiaryPresets.bundle/美食系列/上海手帐本/咖啡工坊的铜色空间.diarypreset/assets")
+        let assets = root.appendingPathComponent("TravelDiaryTests/Fixtures/DiaryPresets.bundle/美食系列/上海手帐本/咖啡工坊的铜色空间.diarypreset/assets")
         for name in ["20a2b42edeac0c5b97d41ea9c15693ecc4a65eef08042ccbfffe4d30e95774ec", "443396d073a9d52c804027fc9f176331b88aed6ea3bdc8a383ffc40d69edce88"] {
             let image = try #require(UIImage(contentsOfFile: assets.appendingPathComponent(name + ".png").path))
             let (document, layer, images) = fixture(image)

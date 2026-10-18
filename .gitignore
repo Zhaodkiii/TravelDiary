@@ -17,3 +17,6 @@ xcuserdata/
 
 # Bundled diary preset assets (kept locally; imported separately)
 /TravelDiaryClient/Projects/App/Resources/DiaryPresets.bundle/
+
+# Local regression fixtures relocated from the application bundle
+/TravelDiaryTests/Fixtures/DiaryPresets.bundle/

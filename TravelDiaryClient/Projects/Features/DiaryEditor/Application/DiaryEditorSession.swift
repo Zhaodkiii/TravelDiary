@@ -395,7 +395,12 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             edit {
                 document.assets[asset.id] = asset
                 document.update(layerID) {
-                    $0.assetID = asset.id; $0.photoCrop = state; $0.crop = DiaryCrop(); $0.photoFill = nil
+                    $0.assetID = asset.id; $0.photoCrop = state; $0.crop = DiaryCrop()
+                    if $0.photoSlot != nil {
+                        $0.photoFill = true
+                        return
+                    }
+                    $0.photoFill = nil
                     // 保持外部位置和宽度；高度跟随输出比例，锚点按比例映射。
                     let height = $0.size.width * asset.pixelSize.height / asset.pixelSize.width
                     $0.transform.pivot.y *= height / $0.size.height
@@ -493,10 +498,16 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                 guard let target = editableLayer(replacing), target.assetID != nil,
                       target.kind == .photo || target.kind == .sticker else { return false }
             }
+            let slot: DiaryPhotoSlot?
+            if let replacing, let layer = editableLayer(replacing), layer.kind == .photo {
+                slot = try await store.photoSlot(for: layer, document: document)
+            } else { slot = nil }
             images[asset.id] = image
             edit {
                 document.assets[asset.id] = asset
-                if let replacing {
+                if let replacing, slot != nil {
+                    document.replacePhoto(replacing, with: asset, slot: slot)
+                } else if let replacing {
                     document.update(replacing) { $0.assetID = asset.id; $0.crop = DiaryCrop(); $0.photoCrop = nil }
                 } else if asSticker {
                     // Use the active canvas coordinate space, including nested object editing.
@@ -522,14 +533,14 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     }
 
     /// 当前页批量替换是一个编辑命令；完成后一次撤销恢复全部旧照片。
-    func applyPhotoReplacements(_ replacements: [(UUID, DiaryAsset, UIImage, DiaryPhotoPlacement?)], expected: DiaryDocument) -> Bool {
+    func applyPhotoReplacements(_ replacements: [(UUID, DiaryAsset, UIImage, DiaryPhotoPlacement?)], expected: DiaryDocument, slots: [UUID: DiaryPhotoSlot] = [:]) -> Bool {
         guard !busy, document == expected else {
             errorMessage = "页面已变化，请重新打开一键替换。"; return false
         }
         edit {
             for (id, asset, image, placement) in replacements {
                 images[asset.id] = image
-                document.replacePhoto(id, with: asset, placement: placement)
+                document.replacePhoto(id, with: asset, placement: placement, slot: slots[id])
             }
         }
         return true

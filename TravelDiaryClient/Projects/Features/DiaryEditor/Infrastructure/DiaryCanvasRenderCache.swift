@@ -14,6 +14,7 @@ final class DiaryCanvasRenderCache {
         var local: DiaryLayer
         var contentVersion: UInt64?
         var resource: ObjectIdentifier?
+        var maskResource: ObjectIdentifier?
         var asset: DiaryAsset?
         var frameSize: CGSize?
     }
@@ -85,7 +86,7 @@ final class DiaryCanvasRenderCache {
             var assets: [UUID: DiaryAsset] = [:]
             for layer in object.layers {
                 if let child = layer.contentID { children[child] = visit(child) }
-                if let asset = layer.assetID {
+                for asset in layer.referencedAssetIDs {
                     resources[asset] = images[asset].map(ObjectIdentifier.init)
                     assets[asset] = document.assets[asset]
                 }
@@ -108,6 +109,7 @@ final class DiaryCanvasRenderCache {
             local.name = ""; local.locked = false; local.visible = true; local.blendMode = .normal; local.opacity = nil
             let stamp = LayerStamp(local: local, contentVersion: layer.contentID.flatMap { versions[$0] },
                 resource: layer.assetID.flatMap { images[$0] }.map(ObjectIdentifier.init),
+                maskResource: layer.photoSlot?.maskAssetID.flatMap { images[$0] }.map(ObjectIdentifier.init),
                 asset: layer.assetID.flatMap { document.assets[$0] },
                 frameSize: layer.frameTargetID.flatMap { siblings[$0]?.size })
             let entry: Entry

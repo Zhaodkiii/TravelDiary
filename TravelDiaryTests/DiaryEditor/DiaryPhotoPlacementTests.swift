@@ -27,7 +27,7 @@ struct DiaryPhotoPlacementTests {
 
     @Test func suppliedCafePhotoHasBakedRotation() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let path = root.appendingPathComponent("TravelDiaryClient/Projects/App/Resources/DiaryPresets.bundle/美食系列/上海手帐本/咖啡工坊的铜色空间.diarypreset/assets/443396d073a9d52c804027fc9f176331b88aed6ea3bdc8a383ffc40d69edce88.png")
+        let path = root.appendingPathComponent("TravelDiaryTests/Fixtures/DiaryPresets.bundle/美食系列/上海手帐本/咖啡工坊的铜色空间.diarypreset/assets/443396d073a9d52c804027fc9f176331b88aed6ea3bdc8a383ffc40d69edce88.png")
         let image = try #require(UIImage(contentsOfFile: path.path))
         let placement = try #require(DiaryPhotoPlacementDetector.detect(image))
         #expect(abs(placement.radians) > 0.02)

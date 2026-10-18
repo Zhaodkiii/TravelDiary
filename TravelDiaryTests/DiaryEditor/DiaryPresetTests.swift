@@ -33,7 +33,7 @@ struct DiaryPresetTests {
     }
 
     private func package() throws -> DiaryPresetPackage {
-        let catalog = try BundleDiaryPresetProvider().catalog()
+        let catalog = try BundleDiaryPresetProvider(root: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Fixtures/DiaryPresets.bundle")).catalog()
         #expect(catalog.issues.isEmpty)
         return try #require(catalog.books.first { $0.id == "hiking-yubeng" })
     }

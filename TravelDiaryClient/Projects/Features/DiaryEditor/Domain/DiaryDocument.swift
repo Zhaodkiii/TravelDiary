@@ -109,9 +109,10 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
     var textLineHeight: Double? = nil
     var textLetterSpacing: Double? = nil
     var font: DiaryFontReference?
-    /// 一键替换使用完整图片拉伸填满原框；nil 保持旧作品 cover 取景。
+    /// true 启用照片槽位映射；没有槽位数据的旧作品保持整图拉伸，nil 保持旧版 cover 取景。
     var photoFill: Bool? = nil
     var photoPlacement: DiaryPhotoPlacement? = nil
+    var photoSlot: DiaryPhotoSlot? = nil
     var photoCrop: DiaryPhotoCrop?
     var crop = DiaryCrop()
     var visible = true
@@ -255,7 +256,7 @@ nonisolated struct DiaryPhotoCrop: Codable, Equatable, Sendable {
 }
 
 extension DiaryLayer {
-    nonisolated var referencedAssetIDs: [UUID] { [assetID, photoCrop?.originalAssetID].compactMap { $0 } }
+    nonisolated var referencedAssetIDs: [UUID] { [assetID, photoCrop?.originalAssetID, photoSlot?.maskAssetID].compactMap { $0 } }
 }
 
 
@@ -277,13 +278,17 @@ extension DiaryDocument {
     }
 
     /// 保留原框、锚点、角度、拉伸和层级，仅换资源及其取景方式。
-    nonisolated mutating func replacePhoto(_ id: UUID, with asset: DiaryAsset, placement: DiaryPhotoPlacement? = nil) {
+    nonisolated mutating func replacePhoto(_ id: UUID, with asset: DiaryAsset, placement: DiaryPhotoPlacement? = nil, slot: DiaryPhotoSlot? = nil) {
         assets[asset.id] = asset
         update(id) { layer in
             layer.assetID = asset.id
             layer.crop = DiaryCrop(); layer.photoCrop = nil
             layer.photoFill = true
             layer.photoPlacement = placement ?? layer.photoPlacement
+            if let slot {
+                if layer.photoSlot == nil { layer.photoSlot = slot }
+                else { layer.photoSlot?.fill = slot.fill }
+            }
         }
     }
 }

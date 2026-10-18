@@ -98,6 +98,28 @@ nonisolated final class DiaryDocumentStore: Sendable {
         }
     }
 
+    /// 在替换资源前读取原素材；模板导入和已有作品都走同一个识别入口。
+    func photoSlot(for layer: DiaryLayer, document: DiaryDocument) async throws -> DiaryPhotoSlot {
+        try await run { try self.readPhotoSlot(for: layer, document: document) }
+    }
+
+    private func readPhotoSlot(for layer: DiaryLayer, document: DiaryDocument) throws -> DiaryPhotoSlot {
+        if let slot = layer.photoSlot { return slot }
+        if let placement = layer.photoPlacement {
+            return DiaryPhotoSlot.rectangle(placement, size: layer.size, maskAssetID: nil)
+        }
+        guard let id = layer.assetID, let asset = document.assets[id] else { throw DiaryEditorError.missingResource.logged() }
+        // 已替换的普通照片不再从用户新照片提取轮廓。
+        if layer.photoFill != true {
+            let image = try Self.decode(Data(contentsOf: resolve(asset.path, in: assetDirectory(document.id))), maximumDimension: 1800)
+            if let slot = DiaryPhotoSlotDetector.detect(image, maskAssetID: id) { return slot }
+            if let placement = DiaryPhotoPlacementDetector.detect(image) {
+                return DiaryPhotoSlot.rectangle(placement, size: layer.size, maskAssetID: id)
+            }
+        }
+        return DiaryPhotoSlot(corners: [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0), CGPoint(x: 1, y: 1), CGPoint(x: 0, y: 1)], maskAssetID: nil)
+    }
+
     func importImage(_ data: Data, documentID: UUID) async throws -> (DiaryAsset, UIImage) {
         try await run { try self.writeImportedImage(data, documentID: documentID) }
     }
@@ -389,6 +411,11 @@ nonisolated final class DiaryDocumentStore: Sendable {
                 guard [node.transform.stretchX, node.transform.stretchY].allSatisfy({ $0.isFinite && (0.05...20).contains($0) }) else {
                     throw DiaryEditorError.invalidDocument.logged()
                 }
+                if let slot = node.photoSlot {
+                    guard slot.isValid, slot.maskAssetID.map({ document.assets[$0] != nil }) ?? true else {
+                        throw DiaryEditorError.invalidDocument.logged()
+                    }
+                }
                 if let placement = node.photoPlacement {
                     guard [placement.center.x, placement.center.y, placement.size.width, placement.size.height,
                            placement.radians].allSatisfy(\.isFinite),
@@ -615,7 +642,7 @@ extension DiaryDocumentStore {
     /// 完整准备页面后一次发布目录。新本以目录移动发布，旧本以 book.json 原子写发布。
     /// operationID 由一次用户意图产生，错误重试沿用；已发布操作直接返回原结果。
     func importPreset(_ package: DiaryPresetPackage, pageIDs: [String], title: String,
-                      operationID: UUID, replacementPhotos: [URL] = [], hiddenCategories: Set<DiaryLayerSemanticKind> = [], afterPageID: UUID? = nil, expectedRevision: UUID? = nil,
+                      operationID: UUID, replacementPhotos: [URL] = [], replacementFill: DiaryPhotoSlot.Fill = .cover, hiddenCategories: Set<DiaryLayerSemanticKind> = [], afterPageID: UUID? = nil, expectedRevision: UUID? = nil,
                       progress: @escaping @Sendable (String) -> Void = { _ in },
                       cancellation: DiaryPresetCancellation? = nil) async throws -> DiaryBook {
         try await run {
@@ -692,8 +719,10 @@ extension DiaryDocumentStore {
                 }
                 for layer in document.replaceablePhotos() where photoIndex < replacementPhotos.count {
                     let data = try Data(contentsOf: replacementPhotos[photoIndex])
+                    var slot = try target.readPhotoSlot(for: layer, document: document)
+                    slot.fill = replacementFill
                     let (asset, _) = try target.writeImportedImage(data, documentID: document.id)
-                    document.replacePhoto(layer.id, with: asset)
+                    document.replacePhoto(layer.id, with: asset, slot: slot)
                     copied.insert(asset.id)
                     photoIndex += 1
                 }

@@ -146,7 +146,7 @@ struct DiaryLibraryTests {
     }
 
     @Test func remoteVersionDoesNotDisappearBehindBundledVersion() throws {
-        let packages = try BundleDiaryPresetProvider().catalog().books
+        let packages = try BundleDiaryPresetProvider(root: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Fixtures/DiaryPresets.bundle")).catalog().books
         let local = try #require(packages.first)
         let new = RemotePresetBook(id: local.id, title: "新版", series: local.manifest.seriesID,
                                    version: local.manifest.packageVersion + 1, page_count: 10, cover_url: "https://example.com/cover")

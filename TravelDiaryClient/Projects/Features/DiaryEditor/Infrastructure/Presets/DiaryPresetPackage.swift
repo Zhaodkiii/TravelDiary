@@ -44,6 +44,12 @@ nonisolated struct PresetNode: Decodable, Sendable {
     let frameWidth: Double?
     let crop: Crop?
     let blendMode: DiaryBlendMode?
+    let photoSlot: PhotoSlot?
+    nonisolated struct PhotoSlot: Decodable, Sendable {
+        let corners: [PresetPoint]
+        let maskAssetID: String?
+        let fill: DiaryPhotoSlot.Fill?
+    }
     nonisolated struct Crop: Decodable, Sendable { let zoom: Double; let offset: PresetPoint }
 
     var drawingKind: DiaryLayer.Kind {
@@ -254,6 +260,17 @@ nonisolated struct DiaryPresetPackage: Identifiable, Sendable {
                 layer.subcategory = node.subcategory
                 layer.font = node.font
                 layer.blendMode = node.blendMode
+                if let slot = node.photoSlot {
+                    let maskID: UUID?
+                    if let key = slot.maskAssetID {
+                        guard let mapped = assetIDs[key], let source = manifest.assetTable[key] else { throw DiaryEditorError.missingResource.logged() }
+                        maskID = mapped
+                        document.assets[mapped] = DiaryAsset(id: mapped, path: "assets/\(mapped.uuidString).image", pixelSize: source.pixelSize.cg)
+                    } else { maskID = nil }
+                    let value = DiaryPhotoSlot(corners: slot.corners.map(\.cg), maskAssetID: maskID, fill: slot.fill ?? .cover)
+                    guard value.isValid else { throw DiaryEditorError.invalidDocument.logged() }
+                    layer.photoSlot = value
+                }
                 if let assetID = node.assetID {
                     guard let uuid = assetIDs[assetID], let asset = manifest.assetTable[assetID] else { throw DiaryEditorError.missingResource.logged() }
                     layer.assetID = uuid
@@ -317,7 +334,7 @@ nonisolated struct DiaryPresetCatalog: Sendable {
     let issues: [String]
 }
 nonisolated struct BundleDiaryPresetProvider: DiaryPresetProviding {
-    var root: URL? = Bundle.main.url(forResource: "DiaryPresets", withExtension: "bundle")
+    var root: URL? = nil
     func catalog() throws -> DiaryPresetCatalog {
         guard let root else { throw DiaryEditorError.missingResource.logged() }
         SupportLogger.log(level: .info, module: .diaryEditor, message: "preset.catalog.begin root=\(root.path)")

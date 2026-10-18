@@ -272,7 +272,6 @@
 				85EA7EEE2FFB252D00137E68 /* Sources */,
 				85EA7EEF2FFB252D00137E68 /* Frameworks */,
 				85EA7EF02FFB252D00137E68 /* Resources */,
-				AABBCC002026101400000001 /* Validate Presets */,
 			);
 			buildRules = (
 			);
@@ -371,25 +370,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		AABBCC002026101400000001 /* Validate Presets */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/scripts/ValidateDiaryPresets.swift",
-				"$(SRCROOT)/TravelDiaryClient/Projects/App/Resources/DiaryPresets.bundle",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/DiaryPresets.bundle",
-			);
-			name = "Validate Presets";
-			outputPaths = (
-				"$(DERIVED_FILE_DIR)/PresetValidation",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "mkdir -p \"$DERIVED_FILE_DIR/PresetValidation\"\nPRESET_MACOS_SDK=$(/usr/bin/xcrun --sdk macosx --show-sdk-path)\nSDKROOT=\"$PRESET_MACOS_SDK\" /usr/bin/xcrun --sdk macosx swift -sdk \"$PRESET_MACOS_SDK\" -module-cache-path \"$DERIVED_FILE_DIR/PresetValidation\" \"$SRCROOT/scripts/ValidateDiaryPresets.swift\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/DiaryPresets.bundle\"\n";
-		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */

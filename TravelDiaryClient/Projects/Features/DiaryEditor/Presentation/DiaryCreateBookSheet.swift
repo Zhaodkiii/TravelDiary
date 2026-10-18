@@ -7,6 +7,8 @@ struct DiaryCreateBookSheet: View {
     let ownerID: String
     let completed: (DiaryBook) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var replacementFill: DiaryPhotoSlot.Fill = .cover
+    @State private var remoteBooks: [RemotePresetBook] = []
     @State private var packages: [DiaryPresetPackage] = []
     @State private var selectedID: String?
     @State private var title = ""
@@ -79,21 +81,21 @@ struct DiaryCreateBookSheet: View {
                 Text("选择一本喜欢的预设，完整保留所有页面和设计。")
                     .foregroundStyle(.secondary)
                 if !loaded { ProgressView("正在读取预设…") }
-                if loaded && packages.isEmpty {
+                if loaded && remoteBooks.isEmpty {
                     ContentUnavailableView("暂无可用预设", systemImage: "books.vertical")
                     Button("重新加载") { Task { await loadCatalog() } }
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 16) {
-                    ForEach(packages) { item in
+                    ForEach(remoteBooks) { item in
                         Button {
-                            selectedID = item.id; title = item.manifest.title
+                            selectedID = item.id; title = item.title
                             operationID = UUID(); error = nil
                         } label: {
                             VStack(alignment: .leading, spacing: 8) {
-                                DiaryPresetCover(package: item)
-                                Text(item.manifest.title).font(.headline)
+                                DiaryRemoteCover(url: URL(string: item.cover_url))
+                                Text(item.title).font(.headline)
                                 HStack {
-                                    Text("完整预设 · \(item.manifest.pages.count) 页").font(.caption)
+                                    Text("完整预设 · \(item.page_count) 页").font(.caption)
                                     Spacer()
                                     Image(systemName: selectedID == item.id ? "checkmark.circle.fill" : "circle")
                                 }
@@ -114,6 +116,10 @@ struct DiaryCreateBookSheet: View {
         VStack(spacing: 20) {
             Text(capacity == 0 ? "这本预设没有可替换照片，可直接创建。" : "这本手帐可一键替换 \(capacity) 张照片")
                 .foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal)
+            Picker("照片填充", selection: $replacementFill) {
+                Text("等比例填充").tag(DiaryPhotoSlot.Fill.cover)
+                Text("整图拉伸").tag(DiaryPhotoSlot.Fill.stretch)
+            }.pickerStyle(.segmented).padding(.horizontal)
             ScrollView {
                 if photos.isEmpty {
                     Button { openPicker() } label: {
@@ -183,24 +189,43 @@ struct DiaryCreateBookSheet: View {
             } else {
                 Button { Task { await prepare() } } label: { Text("下一步").frame(maxWidth: .infinity) }
                     .buttonStyle(.borderedProminent)
-                    .disabled(package == nil || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || title.count > 60)
+                    .disabled(selectedID == nil || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || title.count > 60)
             }
         }.controlSize(.large).disabled(busy || loadingPhotos)
     }
 
     private func loadCatalog() async {
         do {
-            let catalog = try await Task.detached { try BundleDiaryPresetProvider().catalog() }.value
-            packages = catalog.books; loaded = true
-            if !catalog.issues.isEmpty { error = "部分预设暂不可用，请选择其他预设。" }
+            let manager = PresetDownloadManager.shared
+            manager.activate(owner: ownerID)
+            await manager.waitUntilRestored()
+            let catalog = try await manager.catalog()
+            remoteBooks = catalog.books; loaded = true
+            packages = catalog.books.compactMap { manager.completeCachedPackage(for: $0) }
         } catch { loaded = true; self.error = error.localizedDescription }
     }
 
     private func prepare() async {
-        guard let package, !busy else { return }
+        guard let selectedID, !busy else { return }
         busy = true; error = nil; progress = "正在统计可替换照片…"
         defer { busy = false }
         do {
+            let manager = PresetDownloadManager.shared
+            if package == nil, let book = remoteBooks.first(where: { $0.id == selectedID }) {
+                progress = "正在下载完整模板…"
+                let id = try await manager.enqueue(book: book, pageIDs: nil, owner: ownerID, target: nil, after: nil, downloadOnly: true)
+                manager.resume(id)
+                while manager.preparedPackage(id) == nil {
+                    try Task.checkCancellation()
+                    guard let job = manager.jobs.first(where: { $0.id == id }),
+                          !["failed", "paused", "cancelled"].contains(job.status) else {
+                        throw DiaryEditorError.missingResource
+                    }
+                    try await Task.sleep(for: .milliseconds(250))
+                }
+                if let downloaded = manager.preparedPackage(id) { packages.append(downloaded) }
+            }
+            guard let package else { throw DiaryEditorError.missingResource }
             capacity = try await Task.detached {
                 try package.validate()
                 let ids = Dictionary(uniqueKeysWithValues: package.manifest.assetTable.keys.map { ($0, UUID()) })
@@ -244,7 +269,7 @@ struct DiaryCreateBookSheet: View {
         do {
             let book = try await DiaryDocumentStore(ownerID: ownerID).importPreset(package,
                 pageIDs: package.manifest.pages.map(\.id), title: title, operationID: operationID,
-                replacementPhotos: photos.map(\.url), progress: { value in Task { @MainActor in progress = value } })
+                replacementPhotos: photos.map(\.url), replacementFill: replacementFill, progress: { value in Task { @MainActor in progress = value } })
             try? FileManager.default.removeItem(at: temporaryDirectory)
             completed(book)
         } catch { self.error = "创建未完成，请重试。\(error.localizedDescription)" }

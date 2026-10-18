@@ -15,13 +15,10 @@ struct DiaryPresetLibraryScreen: View {
     @State private var pending: DiaryPresetImportIntent?
     @State private var resuming: DiaryPresetImportIntent?
     @State private var recovered: DiaryBook?
-    @State private var catalog: DiaryPresetCatalog?
     @State private var selectedSeries = ""
     @State private var search = ""
     @State private var reload = 0
-    @State private var error: String?
     @State private var remoteError: String?
-    @State private var localFinished = false
     @State private var remoteFinished = false
     @State private var onlyDownloaded = false
     @State private var styles: Set<String> = []
@@ -29,18 +26,18 @@ struct DiaryPresetLibraryScreen: View {
     @State private var draftStyles: Set<String> = []
     @State private var draftUsages: Set<String> = []
     @State private var showingFilters = false
-    private var items: [PresetLibraryItem] { PresetLibraryItem.merge(local: catalog?.books ?? [], remote: remote?.books ?? [], preferLocal: remoteError != nil) }
+    private var items: [PresetLibraryItem] { PresetLibraryItem.merge(local: [], remote: remote?.books ?? []) }
     private var results: [PresetLibraryItem] {
         items.filter { $0.matches(search: search, series: selectedSeries, styles: styles, usages: usages) && (!onlyDownloaded || isAvailable($0)) }
     }
     private var allStyles: [String] { Array(Set(items.flatMap(\.styles))).sorted() }
     private var allUsages: [String] { Array(Set(items.flatMap(\.usages))).sorted() }
     private var series: [DiaryPresetSeries] {
-        var result = catalog?.series ?? []
+        var result: [DiaryPresetSeries] = []
         for entry in remote?.series ?? [] where !result.contains(where: { $0.id == entry.slug }) {
             result.append(DiaryPresetSeries(id: entry.slug, title: entry.title, directory: entry.slug, sortOrder: result.count))
         }
-        return result.filter { entry in items.contains { $0.series == entry.id } }
+        return result
     }
     var body: some View {
         ScrollView {
@@ -67,10 +64,7 @@ struct DiaryPresetLibraryScreen: View {
                     DiaryLibraryNotice(message: "有未完成的模板导入", actionTitle: "继续导入") { resuming = pending }
                 }
                 if let remoteError { DiaryLibraryNotice(message: remoteError) { reload += 1 } }
-                if let error { DiaryLibraryNotice(message: error) { reload += 1 } }
-                if let issues = catalog?.issues, !issues.isEmpty {
-                    DiaryLibraryNotice(message: "部分内置模板暂不可用：\n" + issues.joined(separator: "\n")) { reload += 1 }
-                }
+
                 HStack {
                     Text("\(results.count) 本模板").font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
                     Spacer()
@@ -78,7 +72,7 @@ struct DiaryPresetLibraryScreen: View {
                         Button("清空条件") { search = ""; selectedSeries = ""; onlyDownloaded = false; styles = []; usages = [] }.frame(minHeight: 44)
                     }
                 }
-                if items.isEmpty && (!localFinished || !remoteFinished) {
+                if items.isEmpty && !remoteFinished {
                     ProgressView("正在寻找旅行灵感…").frame(maxWidth: .infinity).padding(48)
                 } else if results.isEmpty {
                     ContentUnavailableView("暂无匹配的模板", systemImage: "books.vertical", description: Text("试试其他分类，或清空筛选条件。"))
@@ -102,7 +96,7 @@ struct DiaryPresetLibraryScreen: View {
         .refreshable { await loadRemote() }
         .sheet(isPresented: $showingFilters) { filterSheet }
         .sheet(item: $resuming) { intent in
-            if let package = catalog?.books.first(where: { $0.id == intent.templateID && $0.manifest.packageVersion == intent.version }) ?? downloads.cachedPackage(bookID: intent.templateID, version: intent.version, pageIDs: intent.pageIDs) {
+            if let package = downloads.cachedPackage(bookID: intent.templateID, version: intent.version, pageIDs: intent.pageIDs) {
                 DiaryPresetImportSheet(ownerID: ownerID, package: package, pageIDs: intent.pageIDs, defaultTarget: nil,
                                        wholeBook: intent.wholeBook, resume: intent) { book in
                     resuming = nil; pending = nil; recovered = book
@@ -120,9 +114,6 @@ struct DiaryPresetLibraryScreen: View {
         .task(id: reload) {
             downloads.activate(owner: ownerID)
             pending = DiaryPresetImportIntent.read(owner: ownerID)
-            do { catalog = try await Task.detached { try BundleDiaryPresetProvider().catalog() }.value; error = nil }
-            catch { self.error = "内置模板暂时无法读取：" + error.localizedDescription }
-            localFinished = true
         }
         .task(id: reload) {
             if remote == nil { remote = await Task.detached { PresetLibraryCatalogCache.read(ownerID: ownerID) }.value }
@@ -212,7 +203,7 @@ struct DiaryPresetLibraryScreen: View {
             remote = value; remoteError = nil
             await Task.detached { PresetLibraryCatalogCache.save(value, ownerID: ownerID) }.value
         } catch is CancellationError { return }
-        catch { remoteError = "在线模板暂时无法更新，仍可使用本地模板。" }
+        catch { remoteError = "在线模板暂时无法更新，请重试；已下载的资源可在下载管理中使用。" }
         remoteFinished = true
     }
 }
@@ -347,8 +338,8 @@ private struct DiaryPresetReaderDestination: View {
     let targetAfterPageID: UUID?
     var fixedTarget = false
     let onImported: (DiaryBook) -> Void
-    @State private var pages: [PresetPage] = []
     @State private var error: String?
+    @State private var pages: [PresetPage] = []
     @State private var retry = 0
     @State private var selection: PresetSelection?
 
@@ -407,12 +398,12 @@ private struct DiaryPresetDetailScreen: View {
     let targetBook: DiaryBook?
     let targetAfterPageID: UUID?
     var fixedTarget = false
+    @State private var error: String?
     @State private var pages: [PresetPage] = []
     @State private var previewPage: String?
     @State private var showingPreview = false
     @State private var selection: PresetSelection?
     let onImported: (DiaryBook) -> Void
-    @State private var error: String?
     @State private var validated = false
     @State private var photoSlots = 0
     @State private var textSlots = 0
@@ -529,6 +520,7 @@ struct DiaryPresetImportSheet: View {
     @State private var path: [DiaryPresetImportRoute] = []
     @State private var initialized = false
     @State private var replacementPhotos: [URL] = []
+    @State private var replacementFill: DiaryPhotoSlot.Fill = .cover
     @State private var excludedPageIDs: Set<String> = []
     @State private var hiddenCategories: Set<DiaryLayerSemanticKind> = []
     @State private var preparationDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("preset-photos-" + UUID().uuidString)
@@ -538,8 +530,8 @@ struct DiaryPresetImportSheet: View {
     @State private var afterPageID: UUID?
     @State private var title = ""
     @State private var operationID = UUID()
-    @State private var busy = false
     @State private var error: String?
+    @State private var busy = false
     @State private var progress = ""
     @State private var cancellation = DiaryPresetCancellation()
 
@@ -684,9 +676,9 @@ struct DiaryPresetImportSheet: View {
             DiaryBatchPhotoSheet(store: DiaryDocumentStore(ownerID: ownerID), preset: availablePackage,
                 presetPageIDs: selectedPageIDs, hiddenPresetCategories: hiddenCategories,
                 preparationDirectory: preparationDirectory,
-                finishesImport: finishesAtPhotos, embedded: true, onPrepared: { files in
+                finishesImport: finishesAtPhotos, embedded: true, onPrepared: { files, fill in
                     for old in replacementPhotos { try? FileManager.default.removeItem(at: old) }
-                    replacementPhotos = files; operationID = UUID(); error = nil
+                    replacementPhotos = files; replacementFill = fill; operationID = UUID(); error = nil
                     if finishesAtPhotos { Task { await runImport() } }
                     else { path.append(.target) }
                 })
@@ -776,7 +768,7 @@ struct DiaryPresetImportSheet: View {
                   hiddenCategories: hiddenCategories)
             try intent.save(owner: ownerID)
             let result = try await DiaryDocumentStore(ownerID: ownerID, bookID: targetID).importPreset(readyPackage ?? package, pageIDs: selectedPageIDs, title: title,
-                    operationID: operationID, replacementPhotos: replacementPhotos, hiddenCategories: hiddenCategories, afterPageID: afterPageID, expectedRevision: target?.catalogRevision, progress: { value in
+                    operationID: operationID, replacementPhotos: replacementPhotos, replacementFill: replacementFill, hiddenCategories: hiddenCategories, afterPageID: afterPageID, expectedRevision: target?.catalogRevision, progress: { value in
                         Task { @MainActor in progress = value }
                     }, cancellation: cancellation)
             DiaryPresetImportIntent.clear(owner: ownerID)

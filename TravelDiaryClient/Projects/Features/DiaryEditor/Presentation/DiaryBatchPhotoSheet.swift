@@ -12,13 +12,14 @@ struct DiaryBatchPhotoSheet: View {
     var preparationDirectory: URL? = nil
     var finishesImport = false
     var embedded = false
-    var onPrepared: (([URL]) -> Void)? = nil
+    var onPrepared: (([URL], DiaryPhotoSlot.Fill) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var documents: [DiaryDocument] = []
     @State private var expectedBook: DiaryBook?
     @State private var slots: [Slot] = []
     @State private var selection: [PhotosPickerItem] = []
     @State private var thumbnails: [UIImage?] = []
+    @State private var fill: DiaryPhotoSlot.Fill = .cover
     @State private var busy = false
     @State private var ready = false
     @State private var message: String?
@@ -42,7 +43,13 @@ struct DiaryBatchPhotoSheet: View {
             List {
                 Section {
                     Text(preset != nil ? "已选 \(presetPageIDs.count) 页，共 \(slots.count) 张可替换照片" : session == nil ? "当前手帐共 \(slots.count) 张可替换照片" : "当前页共 \(slots.count) 张可替换照片")
-                    Text("按页序、组内图层从底到顶替换。隐藏及锁定图层跳过。完整图片拉伸到原框，比例不同时会变形。")
+                    Text("按页序、组内图层从底到顶替换。隐藏及锁定图层跳过。照片保留原框的角度与轮廓，比例不同时默认等比例填充。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Picker("照片填充", selection: $fill) {
+                        Text("等比例填充").tag(DiaryPhotoSlot.Fill.cover)
+                        Text("整图拉伸").tag(DiaryPhotoSlot.Fill.stretch)
+                    }
+                    Text("替换后可选中照片，使用“裁剪”调整取景。")
                         .font(.caption).foregroundStyle(.secondary)
                     if ready && !slots.isEmpty {
                         PhotosPicker(selection: $selection, maxSelectionCount: slots.count,
@@ -54,7 +61,7 @@ struct DiaryBatchPhotoSheet: View {
                 }
                 if onPrepared != nil {
                     Section {
-                        Button(finishesImport ? "保留原照片，完成添加" : "保留原照片，继续") { onPrepared?([]); if !embedded { dismiss() } }.disabled(!ready)
+                        Button(finishesImport ? "保留原照片，完成添加" : "保留原照片，继续") { onPrepared?([], fill); if !embedded { dismiss() } }.disabled(!ready)
                     }
                 }
                 Section("替换对应顺序") {
@@ -202,21 +209,27 @@ struct DiaryBatchPhotoSheet: View {
                     for file in files { try? FileManager.default.removeItem(at: file) }
                     throw error
                 }
-                onPrepared(files); if !embedded { dismiss() }; return
+                onPrepared(files, fill); if !embedded { dismiss() }; return
             }
             var updated = documents
             var replacements: [(UUID, DiaryAsset, UIImage, DiaryPhotoPlacement?)] = []
+            var photoSlots: [UUID: DiaryPhotoSlot] = [:]
             // 逐张读取，失败时不提交任何图层修改；已导入的文件暂不被作品引用。
             for (index, slot) in slots.enumerated() {
                 progress = "正在准备第 \(index + 1)/\(slots.count) 张照片…"
                 guard let data = try await selection[index].loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage }
-                let (asset, image) = try await store.importImage(data, documentID: documents[slot.documentIndex].id)
-                updated[slot.documentIndex].replacePhoto(slot.id, with: asset)
+                let document = documents[slot.documentIndex]
+                guard let layer = document.layer(slot.id) else { throw DiaryEditorError.invalidDocument }
+                var geometry = try await store.photoSlot(for: layer, document: document)
+                geometry.fill = fill
+                photoSlots[slot.id] = geometry
+                let (asset, image) = try await store.importImage(data, documentID: document.id)
+                updated[slot.documentIndex].replacePhoto(slot.id, with: asset, slot: geometry)
                 if session != nil { replacements.append((slot.id, asset, image, nil)) }
             }
             progress = "正在保存…"
             if let session {
-                guard session.applyPhotoReplacements(replacements, expected: documents[0]) else {
+                guard session.applyPhotoReplacements(replacements, expected: documents[0], slots: photoSlots) else {
                     message = session.errorMessage; return
                 }
                 // 编辑页采用既有自动保存与撤销机制，不强制关闭编辑会话。
