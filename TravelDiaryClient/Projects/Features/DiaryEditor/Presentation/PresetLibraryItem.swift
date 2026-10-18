@@ -49,6 +49,32 @@ nonisolated struct PresetLibraryItem: Identifiable, Sendable {
     }
 }
 
+/// 系列顺序来自目录；过滤后为空的系列不占位，系列内保留服务端模板顺序。
+nonisolated struct PresetLibrarySection: Identifiable, Sendable {
+    let id: String
+    let title: String
+    let items: [PresetLibraryItem]
+
+    static func scoped(_ items: [PresetLibraryItem], seriesID: String?) -> [PresetLibraryItem] {
+        guard let seriesID else { return items }
+        return items.filter { $0.series == seriesID }
+    }
+
+    static func group(_ items: [PresetLibraryItem], series: [RemotePresetCatalog.Series]) -> [Self] {
+        let grouped = Dictionary(grouping: items, by: \.series)
+        var seen = Set<String>(), result: [Self] = []
+        for entry in series where seen.insert(entry.slug).inserted {
+            if let books = grouped[entry.slug], !books.isEmpty {
+                result.append(Self(id: entry.slug, title: entry.title, items: books))
+            }
+        }
+        for item in items where seen.insert(item.series).inserted {
+            result.append(Self(id: item.series, title: "更多模板", items: grouped[item.series] ?? []))
+        }
+        return result
+    }
+}
+
 /// Resolve once per navigation presentation. Download/cache updates must not
 /// replace the reader that owns an active import sheet.
 @MainActor

@@ -1,21 +1,22 @@
 import SwiftUI
 import ImageIO
 
-/// 浏览只读取预览；使用动作继续复用原有下载与导入事务。
+/// 按系列浏览模板；详情继续复用原有下载与导入事务。
 struct DiaryPresetLibraryScreen: View {
     let ownerID: String
     var targetBook: DiaryBook? = nil
     var targetAfterPageID: UUID? = nil
     var singlePageOnly = false
     var onPageAdded: ((DiaryBook) -> Void)? = nil
+    var fixedSeriesID: String? = nil
+    var initialCatalog: RemotePresetCatalog? = nil
+    var catalogLoader: @MainActor () async throws -> RemotePresetCatalog = { try await PresetDownloadManager.shared.catalog() }
     private let downloads = PresetDownloadManager.shared
     @ObservedObject private var availability = PresetDownloadManager.shared.availability
-    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var remote: RemotePresetCatalog?
     @State private var pending: DiaryPresetImportIntent?
     @State private var resuming: DiaryPresetImportIntent?
     @State private var recovered: DiaryBook?
-    @State private var selectedSeries = ""
     @State private var search = ""
     @State private var reload = 0
     @State private var remoteError: String?
@@ -25,61 +26,62 @@ struct DiaryPresetLibraryScreen: View {
     @State private var usages: Set<String> = []
     @State private var draftStyles: Set<String> = []
     @State private var draftUsages: Set<String> = []
+    @State private var draftOnlyDownloaded = false
     @State private var showingFilters = false
     private var items: [PresetLibraryItem] { PresetLibraryItem.merge(local: [], remote: remote?.books ?? []) }
     private var results: [PresetLibraryItem] {
-        items.filter { $0.matches(search: search, series: selectedSeries, styles: styles, usages: usages) && (!onlyDownloaded || isAvailable($0)) }
+        filterItems.filter { $0.matches(search: search, series: "", styles: styles, usages: usages) && (!onlyDownloaded || isAvailable($0)) }
     }
-    private var allStyles: [String] { Array(Set(items.flatMap(\.styles))).sorted() }
-    private var allUsages: [String] { Array(Set(items.flatMap(\.usages))).sorted() }
-    private var series: [DiaryPresetSeries] {
-        var result: [DiaryPresetSeries] = []
-        for entry in remote?.series ?? [] where !result.contains(where: { $0.id == entry.slug }) {
-            result.append(DiaryPresetSeries(id: entry.slug, title: entry.title, directory: entry.slug, sortOrder: result.count))
-        }
-        return result
+    private var sections: [PresetLibrarySection] { PresetLibrarySection.group(results, series: remote?.series ?? []) }
+    private var filterItems: [PresetLibraryItem] { PresetLibrarySection.scoped(items, seriesID: fixedSeriesID) }
+    private var allStyles: [String] { Array(Set(filterItems.flatMap(\.styles))).sorted() }
+    private var allUsages: [String] { Array(Set(filterItems.flatMap(\.usages))).sorted() }
+    private var hasFilters: Bool { !search.isEmpty || onlyDownloaded || !styles.isEmpty || !usages.isEmpty }
+    private var screenTitle: String {
+        if let fixedSeriesID { return (remote ?? initialCatalog)?.series.first { $0.slug == fixedSeriesID }?.title ?? "更多模板" }
+        return singlePageOnly ? "选择模板" : "旅行模板"
     }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            LazyVStack(alignment: .leading, spacing: 24) {
                 if singlePageOnly {
-                    Text("为「\(targetBook?.title ?? "当前手帐")」挑选一页").font(.headline)
-                } else {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("下一段旅途，从这里开始").font(.title2.weight(.semibold))
-                        Text("翻一翻，找到适合你的那一本。").font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
-                    }
+                    Text("为「\(targetBook?.title ?? "当前手帐")」挑选一页").font(.subheadline)
                 }
-                DiaryLibrarySearch(text: $search, prompt: "搜索模板名称")
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        DiaryLibraryChip(title: "全部", selected: selectedSeries.isEmpty) { selectedSeries = "" }
-                        ForEach(series) { entry in
-                            DiaryLibraryChip(title: entry.title, selected: selectedSeries == entry.id) { selectedSeries = entry.id }
-                        }
-                    }
-                }
-                filterBar
+                DiaryLibrarySearch(text: $search, prompt: fixedSeriesID == nil ? "搜索模板名称" : "搜索这个系列")
                 if let pending, !singlePageOnly {
                     DiaryLibraryNotice(message: "有未完成的模板导入", actionTitle: "继续导入") { resuming = pending }
                 }
                 if let remoteError { DiaryLibraryNotice(message: remoteError) { reload += 1 } }
-
-                HStack {
-                    Text("\(results.count) 本模板").font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
-                    Spacer()
-                    if !search.isEmpty || !selectedSeries.isEmpty || onlyDownloaded || !styles.isEmpty || !usages.isEmpty {
-                        Button("清空条件") { search = ""; selectedSeries = ""; onlyDownloaded = false; styles = []; usages = [] }.frame(minHeight: 44)
+                if hasFilters {
+                    HStack {
+                        Text("\(results.count) 本模板").font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                        Spacer()
+                        Button("清空条件") { search = ""; onlyDownloaded = false; styles = []; usages = [] }
+                            .font(.caption).frame(minHeight: 44)
                     }
                 }
                 if items.isEmpty && !remoteFinished {
                     ProgressView("正在寻找旅行灵感…").frame(maxWidth: .infinity).padding(48)
                 } else if results.isEmpty {
-                    ContentUnavailableView("暂无匹配的模板", systemImage: "books.vertical", description: Text("试试其他分类，或清空筛选条件。"))
+                    ContentUnavailableView("暂无匹配的模板", systemImage: "books.vertical",
+                        description: Text(hasFilters ? "试试其他关键词，或清空筛选条件。" : "这个系列还没有可用模板。"))
+                } else if fixedSeriesID != nil {
+                    if !hasFilters {
+                        Text("\(results.count) 本模板")
+                            .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
+                    }
+                    ForEach(results) { item in
+                        templateLink(item, expanded: true).padding(.bottom, 8)
+                    }
                 } else {
-                    LazyVGrid(columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 280), spacing: 24)], alignment: .leading, spacing: 32) {
-                        ForEach(results) { item in
-                            NavigationLink { destination(item) } label: { magazineCard(item) }.buttonStyle(.plain)
+                    ForEach(sections) { section in
+                        VStack(alignment: .leading, spacing: 12) {
+                            sectionHeader(section)
+                            DiaryPresetTemplateCarousel(count: section.items.count) { index in
+                                templateLink(section.items[index])
+                            }
+                            .id(section.items.map(\.id))
                         }
                     }
                 }
@@ -87,10 +89,19 @@ struct DiaryPresetLibraryScreen: View {
         }
         .background(DiaryLibraryStyle.background).foregroundStyle(DiaryLibraryStyle.ink).tint(DiaryLibraryStyle.accent)
         .scrollDismissesKeyboard(.interactively)
-        .navigationTitle(singlePageOnly ? "选择模板" : "旅行模板")
+        .navigationTitle(screenTitle)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink { PresetDownloadCenter(ownerID: ownerID) } label: { Image(systemName: "arrow.down.circle").accessibilityLabel("下载管理") }
+                Button {
+                    draftStyles = styles; draftUsages = usages; draftOnlyDownloaded = onlyDownloaded; showingFilters = true
+                } label: {
+                    Image(systemName: hasFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
+                }.accessibilityLabel("筛选模板")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink { PresetDownloadCenter(ownerID: ownerID) } label: {
+                    Image(systemName: "arrow.down.circle").accessibilityLabel("下载管理")
+                }
             }
         }
         .refreshable { await loadRemote() }
@@ -116,33 +127,57 @@ struct DiaryPresetLibraryScreen: View {
             pending = DiaryPresetImportIntent.read(owner: ownerID)
         }
         .task(id: reload) {
-            if remote == nil { remote = await Task.detached { PresetLibraryCatalogCache.read(ownerID: ownerID) }.value }
+            if remote == nil {
+                if let initialCatalog { remote = initialCatalog }
+                else { remote = await Task.detached { PresetLibraryCatalogCache.read(ownerID: ownerID) }.value }
+            }
             await loadRemote()
         }
     }
-    private var filterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                DiaryLibraryChip(title: "可离线使用", selected: onlyDownloaded) { onlyDownloaded.toggle() }
-                if !allStyles.isEmpty || !allUsages.isEmpty {
-                    DiaryLibraryChip(title: "风格与用途\(styles.isEmpty && usages.isEmpty ? "" : " · \(styles.count + usages.count)")", selected: !styles.isEmpty || !usages.isEmpty) {
-                        draftStyles = styles; draftUsages = usages; showingFilters = true
-                    }
-                }
+
+    private func templateLink(_ item: PresetLibraryItem, expanded: Bool = false) -> some View {
+        NavigationLink { destination(item) } label: {
+            DiaryPresetTemplateCard(item: item, ownerID: ownerID,
+                downloadedCount: item.remote.map { availability.downloadedPageIDs(bookID: $0.id, version: $0.version).count } ?? 0,
+                expanded: expanded, seriesTitle: remote?.series.first { $0.slug == item.series }?.title)
+        }.buttonStyle(.plain)
+    }
+
+    @ViewBuilder private func sectionHeader(_ section: PresetLibrarySection) -> some View {
+        if fixedSeriesID == nil {
+            NavigationLink {
+                DiaryPresetLibraryScreen(ownerID: ownerID, targetBook: targetBook, targetAfterPageID: targetAfterPageID,
+                    singlePageOnly: singlePageOnly, onPageAdded: onPageAdded, fixedSeriesID: section.id,
+                    initialCatalog: remote, catalogLoader: catalogLoader)
+            } label: {
+                HStack(spacing: 7) {
+                    Text(section.title).font(.title3.weight(.semibold))
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(DiaryLibraryStyle.secondary)
+                    Spacer()
+                    Text("\(section.items.count) 本").font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                }.foregroundStyle(DiaryLibraryStyle.ink).frame(minHeight: 44).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel("查看\(section.title)全部模板")
+        } else {
+            HStack {
+                Text(section.title).font(.title3.weight(.semibold))
+                Spacer()
+                Text("\(section.items.count) 本模板").font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
             }
         }
     }
     private var filterSheet: some View {
         NavigationStack {
             List {
+                Toggle("仅看可离线使用的模板", isOn: $draftOnlyDownloaded)
                 if !allStyles.isEmpty { Section("风格") { ForEach(allStyles, id: \.self) { filterRow($0, selection: $draftStyles) } } }
                 if !allUsages.isEmpty { Section("用途") { ForEach(allUsages, id: \.self) { filterRow($0, selection: $draftUsages) } } }
-                Button("重置") { draftStyles = []; draftUsages = [] }
-            }.navigationTitle("挑选适合你的模板")
+                Button("重置") { draftStyles = []; draftUsages = []; draftOnlyDownloaded = false }
+            }.navigationTitle("筛选模板")
                 .toolbar { Button("取消") { showingFilters = false } }
                 .safeAreaInset(edge: .bottom) {
-                    Button("查看结果") { styles = draftStyles; usages = draftUsages; showingFilters = false }
-                        .buttonStyle(.borderedProminent).controlSize(.large).padding().frame(maxWidth: .infinity).background(.regularMaterial)
+                    Button("查看结果") {
+                        styles = draftStyles; usages = draftUsages; onlyDownloaded = draftOnlyDownloaded; showingFilters = false
+                    }.buttonStyle(.borderedProminent).controlSize(.large).padding().frame(maxWidth: .infinity).background(.regularMaterial)
                 }
         }.tint(DiaryLibraryStyle.accent)
     }
@@ -157,39 +192,13 @@ struct DiaryPresetLibraryScreen: View {
     private func isAvailable(_ item: PresetLibraryItem) -> Bool {
         if item.local != nil { return true }
         guard let remote = item.remote else { return false }
-        // Read the published index so completed downloads invalidate this filter.
         return remote.page_count > 0
             && availability.downloadedPageIDs(bookID: remote.id, version: remote.version).count >= remote.page_count
             && downloads.completeCachedPackage(for: remote) != nil
     }
-    private func magazineCard(_ item: PresetLibraryItem) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            DiaryPresetMagazinePreview(item: item, ownerID: ownerID)
-            Text(item.title).font(.title3.weight(.semibold)).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
-            ViewThatFits(in: .horizontal) {
-                HStack { metadata(item); Spacer(); availabilityLabel(item) }
-                VStack(alignment: .leading, spacing: 6) { metadata(item); availabilityLabel(item) }
-            }
-            if !item.tags.isEmpty {
-                Text(item.tags.joined(separator: " · ")).font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
-            }
-            HStack { Text("翻看这本模板"); Image(systemName: "arrow.right") }
-                .font(.subheadline.weight(.medium)).foregroundStyle(DiaryLibraryStyle.accent).frame(minHeight: 44)
-        }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-    }
-    private func metadata(_ item: PresetLibraryItem) -> some View {
-        Text("\(series.first { $0.id == item.series }?.title ?? "旅行模板") · \(item.pageLabel)")
-            .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
-    }
-    @ViewBuilder private func availabilityLabel(_ item: PresetLibraryItem) -> some View {
-        if item.local != nil { Label("内置可用", systemImage: "checkmark.circle").font(.caption).foregroundStyle(DiaryLibraryStyle.secondary) }
-        else if let remote = item.remote {
-            PresetBookAvailabilityBadge(downloadedCount: min(remote.page_count, availability.downloadedPageIDs(bookID: remote.id, version: remote.version).count), totalCount: remote.page_count)
-        }
-    }
     private func destination(_ item: PresetLibraryItem) -> some View {
         DiaryStablePresetDestination(item: item, ownerID: ownerID,
-            seriesTitle: series.first { $0.id == item.series }?.title ?? "旅行模板",
+            seriesTitle: remote?.series.first { $0.slug == item.series }?.title ?? "旅行模板",
             targetBook: targetBook, targetAfterPageID: targetAfterPageID,
             fixedTarget: singlePageOnly, onImported: imported)
     }
@@ -198,7 +207,7 @@ struct DiaryPresetLibraryScreen: View {
     }
     private func loadRemote() async {
         do {
-            let value = try await downloads.catalog()
+            let value = try await catalogLoader()
             try Task.checkCancellation()
             remote = value; remoteError = nil
             await Task.detached { PresetLibraryCatalogCache.save(value, ownerID: ownerID) }.value

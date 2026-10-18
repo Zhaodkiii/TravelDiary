@@ -144,7 +144,10 @@ struct SupportMainCoordinatorView: View {
                 .tag(SupportRootTab.settings)
             }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { if path.isEmpty { tabToolbar } }
+            // Keep the root toolbar installed while a destination is pushed. The
+            // navigation stack scopes each screen's toolbar; removing these items
+            // during a push can leave the root navigation bar empty after a pop.
+            .toolbar { tabToolbar }
             // 路由在 TabView 外注册，所有标签中的链接都能由根导航栈解析。
             .navigationDestination(for: DiaryBookRoute.self) { route in
                 DiaryBookDestination(ownerID: String(session.accountID), bookID: route.bookID, managePages: route.managePages)
@@ -188,11 +191,9 @@ struct SupportMainCoordinatorView: View {
             ToolbarItem(placement: .principal) {
                 tabTitle("我的手帐")
             }
-            if path.isEmpty {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showsCreateDiaryBookForm = true } label: { Image(systemName: "plus") }
-                        .accessibilityLabel("新建手帐本")
-                }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showsCreateDiaryBookForm = true } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("新建手帐本")
             }
         case .diaryPresets:
             ToolbarItem(placement: .principal) {
