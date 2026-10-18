@@ -1,63 +1,34 @@
 import SwiftUI
 
-/// Checkbox + links for Terms of Service and Privacy Policy on the login screen.
+/// 同意操作与协议链接各自独立；打开协议不改变同意状态。
 struct LoginLegalAgreementNote: View {
-    let hasAgreed: Bool
-    var shakeTrigger: Int
-    var showsValidationHighlight: Bool
-    let onOpenAgreementPrompt: () -> Void
-
+    @Binding var hasAgreed: Bool
+    let showsValidationHighlight: Bool
+    let onRequestAgreement: () -> Void
+    let onOpenTerms: () -> Void
+    let onOpenPrivacy: () -> Void
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 4) {
             Button {
-                onOpenAgreementPrompt()
+                if hasAgreed { hasAgreed = false } else { onRequestAgreement() }
             } label: {
                 Image(systemName: hasAgreed ? "checkmark.square.fill" : "square")
-                    .font(.body)
-                    .foregroundStyle(hasAgreed ? Color.accentColor : .secondary)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(L10n.text("auth.login.legal.toggle_accessibility"))
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(L10n.text("auth.login.legal.checkbox_lead"))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 2) {
-                    Text(L10n.text("auth.login.legal.terms"))
-                        .font(.caption2)
-                        .foregroundStyle(.blue)
-
-                    Text(L10n.text("auth.login.legal.conjunction"))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-
-                    Text(L10n.text("auth.login.legal.privacy"))
-                        .font(.caption2)
-                        .foregroundStyle(.blue)
+                    .font(.title3).frame(width: 44, height: 44)
+            }.accessibilityLabel(L10n.text("auth.login.legal.toggle_accessibility"))
+                .accessibilityValue(L10n.text(hasAgreed ? "auth.login.agreed" : "auth.login.not_agreed"))
+            VStack(alignment: .leading, spacing: 0) {
+                Text(L10n.text("auth.login.legal.checkbox_lead")).font(.footnote).foregroundStyle(DiaryLibraryStyle.secondary)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 4) { links }
+                    VStack(alignment: .leading, spacing: 0) { links }
                 }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onOpenAgreementPrompt()
-        }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(showsValidationHighlight ? Color.red.opacity(0.06) : Color.clear)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(
-                    showsValidationHighlight ? Color.red.opacity(0.45) : Color.clear,
-                    lineWidth: 1
-                )
-        )
-        .shakeOnTrigger(shakeTrigger)
-        .padding(.top, 4)
+            }.padding(.top, 10).frame(maxWidth: .infinity, alignment: .leading)
+        }.buttonStyle(.plain).font(.footnote)
+            .padding(8).background(showsValidationHighlight && !hasAgreed ? DiaryLibraryStyle.accent.opacity(0.07) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+    }
+    @ViewBuilder private var links: some View {
+        Button(L10n.text("auth.login.legal.terms"), action: onOpenTerms).frame(minHeight: 44)
+        Text(L10n.text("auth.login.legal.conjunction")).foregroundStyle(DiaryLibraryStyle.secondary)
+        Button(L10n.text("auth.login.legal.privacy"), action: onOpenPrivacy).frame(minHeight: 44)
     }
 }

@@ -16,6 +16,7 @@ protocol LoginAccountSwitchHandling: AnyObject {
 /// 登录场景状态管理：串联输入校验、用例调用与会话状态更新。
 final class LoginViewModel: ObservableObject {
     @Published var isLoading = false
+    @Published private(set) var inlineError: String?
 
     private let signInWithAppleUseCase: SignInWithAppleUseCase
     private let signInWithDeviceUseCase: SignInWithDeviceUseCase
@@ -77,12 +78,8 @@ final class LoginViewModel: ObservableObject {
                 L10n.text("auth.device.upgrade_success"),
                 source: notificationSource
             )
-        } else {
-            notificationClient.success(
-                L10n.text("auth.notification.sign_in_success"),
-                source: notificationSource
-            )
         }
+        // 首页准备动画负责衔接成功状态，避免成功通知遮挡加载页与书架。
     }
 
     func prepareAppleRequest(_ request: ASAuthorizationAppleIDRequest) {
@@ -102,6 +99,7 @@ final class LoginViewModel: ObservableObject {
 
     func signInWithDevice() async {
         guard isLoading == false else { return }
+        inlineError = nil
         isLoading = true
         defer { isLoading = false }
 
@@ -128,6 +126,7 @@ final class LoginViewModel: ObservableObject {
 
     func signInWithApple(result: Result<ASAuthorization, Error>) async {
         guard isLoading == false else { return }
+        inlineError = nil
         isLoading = true
         defer { isLoading = false }
 
@@ -169,6 +168,7 @@ final class LoginViewModel: ObservableObject {
     }
 
     func sendOTP(phoneNumber: String, isResend: Bool = false) async -> PhoneOTPRequestContext? {
+        inlineError = nil
         let scenario: AuthUserFacingErrorMapper.Scenario = isResend ? .phoneOTPResend : .phoneOTPRequest
 
         do {
@@ -188,6 +188,7 @@ final class LoginViewModel: ObservableObject {
 
     func phoneLogin(phoneNumber: String, verificationCode: String, otpId: String) async {
         guard isLoading == false else { return }
+        inlineError = nil
         isLoading = true
         defer { isLoading = false }
 
@@ -217,6 +218,7 @@ final class LoginViewModel: ObservableObject {
     }
 
     private func notifyFailure(message: String, error: Error) {
+        inlineError = message
         if AuthUserFacingErrorMapper.isNetworkUnavailable(error) {
             notificationClient.warning(message, source: notificationSource)
         } else {

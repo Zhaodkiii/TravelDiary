@@ -36,11 +36,11 @@ struct AppCoordinatorView: View {
         case .signedOut:
             SignedOutAuthCoordinatorView(dependencies: dependencies)
         case .signedIn(let session):
-            if lifecycle.preparedAccountID == session.accountID {
-                SupportMainCoordinatorView(session: session, dependencies: dependencies)
-            } else {
-                AppLaunchScreenView()
-            }
+            AppPreparationTransition(isReady: lifecycle.preparedAccountID == session.accountID,
+                failed: lifecycle.preparationFailed,
+                onRetry: { Task { await lifecycle.retrySignedInPreparation() } }) {
+                    SupportMainCoordinatorView(session: session, dependencies: dependencies)
+                }.id(session.accountID)
         }
     }
 }
@@ -59,18 +59,8 @@ private struct SignedOutAuthCoordinatorView: View {
             .task {
                 await dependencies.lifecycle.handleSignedOutTask()
                 guard !Task.isCancelled else { return }
-                await viewModel.signInWithDeviceAutomaticallyIfNeeded()
+                // 游客登录由欢迎页明确触发，避免绕过协议与登录选择。
             }
-    }
-}
-
-struct AppLaunchScreenView: View {
-    var body: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-            Text(L10n.tr("app.launching", fallback: "启动中…"))
-                .foregroundStyle(.secondary)
-        }
     }
 }
 
@@ -158,16 +148,7 @@ struct SupportMainCoordinatorView: View {
             }
         }
         .sheet(isPresented: $showsDeviceAccountUpgradeSheet) {
-            NavigationStack {
-                LoginView(viewModel: upgradeLoginViewModel, mode: .upgradeDeviceAccount)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button(L10n.text("common.close", fallback: "关闭")) {
-                                showsDeviceAccountUpgradeSheet = false
-                            }
-                        }
-                    }
-            }
+            LoginView(viewModel: upgradeLoginViewModel, mode: .upgradeDeviceAccount)
         }
         .onChange(of: session.isDeviceAccount) { isDeviceAccount in
             if isDeviceAccount == false {

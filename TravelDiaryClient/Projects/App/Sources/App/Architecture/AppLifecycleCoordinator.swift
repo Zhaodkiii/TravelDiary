@@ -5,6 +5,7 @@ import Foundation
 final class AppLifecycleCoordinator: ObservableObject {
     @Published private(set) var sessionState: AppSessionState = .loading
     @Published private(set) var preparedAccountID: Int64?
+    @Published private(set) var preparationFailed = false
 
     private let sessionStore: AppSessionStore
     private let appBootstrapper: AppBootstrapper
@@ -143,14 +144,22 @@ final class AppLifecycleCoordinator: ObservableObject {
         }
     }
 
+    func retrySignedInPreparation() async {
+        guard case .signedIn(let session) = sessionStore.state else { return }
+        await enqueueSignedInPreparation(session: session, reason: .signedInColdLaunch)
+    }
+
     private func enqueueSignedInPreparation(
         session: UserSession,
         reason: DeviceRegistrationReason
     ) async {
+        preparationFailed = false
         await signedInPreparationRegistry.runPreparationIfNeeded(accountID: session.accountID) {
             await self.runSignedInPreparation(session: session, reason: reason)
         }
+        guard case .signedIn(let current) = sessionStore.state, current.accountID == session.accountID else { return }
         preparedAccountID = signedInPreparationRegistry.preparedAccountID
+        preparationFailed = preparedAccountID != session.accountID && !isHandlingServerAuthInvalidation
     }
 
     private func runSignedInPreparation(

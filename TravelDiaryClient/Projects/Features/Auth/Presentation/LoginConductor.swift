@@ -21,13 +21,17 @@ struct PhoneLoginView: View {
     }
 
     var body: some View {
-        VStack(spacing: 20) {
-            headerHero
-            formPad
-            Spacer()
+        ScrollView {
+            VStack(spacing: 28) {
+                headerHero
+                formPad
+                if let error = viewModel.inlineError {
+                    Text(error).font(.footnote).foregroundStyle(DiaryLibraryStyle.accent).padding(.horizontal)
+                }
+            }.frame(maxWidth: 440).padding(.vertical, 24).frame(maxWidth: .infinity)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
-        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: otpId)
+        .scrollDismissesKeyboard(.interactively)
+        .background(DiaryLibraryStyle.background).tint(DiaryLibraryStyle.accent)
         .navigationDestination(isPresented: Binding(
             get: { otpId != nil },
             set: { isPresented in
@@ -43,36 +47,11 @@ struct PhoneLoginView: View {
     }
 
     private var headerHero: some View {
-        VStack(spacing: 16) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color(uiColor: .systemBlue), Color(uiColor: .systemTeal)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                Image(systemName: "phone")
-                    .symbolRenderingMode(.hierarchical)
-                    .font(.largeTitle.weight(.semibold))
-                    .foregroundStyle(.white)
-            }
-            .frame(width: 90, height: 90)
-            .shadow(color: .black.opacity(0.1), radius: 14, y: 8)
-
-            VStack(spacing: 6) {
-                Text(L10n.text("auth.phone.hero_title"))
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                Text(L10n.text("auth.phone.hero_subtitle"))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.top, 4)
-        }
-        .padding(.top, 32)
-        .padding(.horizontal)
+        VStack(alignment: .leading, spacing: 12) {
+            Image(systemName: "envelope.open").font(.largeTitle).foregroundStyle(DiaryLibraryStyle.accent).accessibilityHidden(true)
+            Text(L10n.text("auth.phone.hero_title")).font(.largeTitle.weight(.semibold))
+            Text(L10n.text("auth.phone.hero_subtitle")).foregroundStyle(DiaryLibraryStyle.secondary)
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal)
     }
 
     private var formPad: some View {
@@ -131,14 +110,14 @@ struct PhoneLoginView: View {
             Button(action: { requestOTP() }) {
                 HStack {
                     if isRequesting { ProgressView().tint(.white) }
-                    Text(L10n.text("auth.phone.send_otp"))
+                    Text(L10n.text(isRequesting ? "auth.phone.sending" : "auth.phone.send_otp"))
                         .font(.body)
                         .fontWeight(.semibold)
                 }
                 .frame(maxWidth: .infinity, minHeight: 48)
             }
             .buttonStyle(.borderedProminent)
-            .tint(Color(uiColor: .systemBlue))
+            .tint(DiaryLibraryStyle.accent)
             .disabled(!phoneIsLikelyValid || isRequesting)
             .padding(.horizontal)
         }
@@ -174,7 +153,7 @@ struct PhoneLoginView: View {
     }
 
     private func requestOTP() {
-        guard phoneIsLikelyValid else { return }
+        guard phoneIsLikelyValid, !isRequesting else { return }
         isPhoneFocused = false
         isRequesting = true
         Task { @MainActor in
@@ -192,112 +171,71 @@ struct OTPVerifyView: View {
     @ObservedObject var viewModel: LoginViewModel
     let region: PhoneRegion
     let phone: String
-
     @State var otpId: String
-    @State private var code: String = ""
-    @State private var isVerifying: Bool = false
-    @State private var countdown: Int = 60
+    @Environment(\.dismiss) private var dismiss
+    @State private var code = ""
+    @State private var isVerifying = false
+    @State private var isResending = false
+    @State private var resendAt = Date().addingTimeInterval(60)
 
     var body: some View {
-        VStack(spacing: 18) {
-            VStack(spacing: 6) {
-                Text(L10n.text("auth.otp.title"))
-                    .font(.title3)
-                    .fontWeight(.semibold)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Text(L10n.text("auth.otp.title")).font(.largeTitle.weight(.semibold))
                 Text("\(L10n.text("auth.otp.sent_to")) \(region.dial) \(maskedPhone())")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            .padding(.top, 6)
-
-            VerificationCodeField(code: $code, length: 6, onComplete: {
-                verify()
-            })
-                .padding(.top, 6)
-
-            if countdown > 0 {
-                Text("\(L10n.text("auth.otp.resend_countdown")) \(countdown)s")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            } else {
-                Button(L10n.text("auth.otp.resend")) { resendOTP() }
-                    .buttonStyle(.bordered)
-            }
-
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "shield")
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.secondary)
-                Text(L10n.text("auth.otp.safety_hint"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(10)
-            .background(Color(uiColor: .secondarySystemGroupedBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-            Spacer()
-        }
-        .padding()
-        .onAppear { startTimer() }
-        .overlay(alignment: .bottom) {
-            Button(action: { verify() }) {
-                HStack {
-                    if isVerifying { ProgressView().tint(.white) }
-                    Text(L10n.text("auth.otp.verify_and_login"))
-                        .font(.body)
-                        .fontWeight(.semibold)
+                    .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
+                Button(L10n.text("auth.otp.change_phone")) { dismiss() }.frame(minHeight: 44)
+                    .disabled(isVerifying || isResending)
+                VerificationCodeField(code: $code, length: 6, onComplete: verify)
+                    .disabled(isVerifying || isResending)
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let remaining = max(0, Int(ceil(resendAt.timeIntervalSince(context.date))))
+                    if remaining > 0 {
+                        Text("\(L10n.text("auth.otp.resend_countdown")) \(remaining)s")
+                            .font(.footnote).monospacedDigit().foregroundStyle(DiaryLibraryStyle.secondary)
+                    } else {
+                        Button(L10n.text(isResending ? "auth.phone.sending" : "auth.otp.resend"), action: resendOTP)
+                            .frame(minHeight: 44).disabled(isResending || isVerifying)
+                    }
                 }
-                .frame(maxWidth: .infinity, minHeight: 48)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Color(uiColor: .systemBlue))
-            .padding()
+                if let error = viewModel.inlineError { Text(error).font(.footnote).foregroundStyle(DiaryLibraryStyle.accent) }
+                Text(L10n.text("auth.otp.safety_hint")).font(.footnote).foregroundStyle(DiaryLibraryStyle.secondary)
+            }.frame(maxWidth: 400).padding(24).frame(maxWidth: .infinity)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
-        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: countdown)
-    }
-
-    private func startTimer() {
-        countdown = 60
-        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
-            if countdown > 0 {
-                countdown -= 1
-            } else {
-                timer.invalidate()
-            }
+        .background(DiaryLibraryStyle.background).tint(DiaryLibraryStyle.accent)
+        .safeAreaInset(edge: .bottom) {
+            Button(action: verify) {
+                HStack {
+                    if isVerifying { ProgressView() }
+                    Text(L10n.text(isVerifying ? "auth.otp.verifying" : "auth.otp.verify_and_login"))
+                }.frame(maxWidth: .infinity, minHeight: 52)
+            }.buttonStyle(.borderedProminent).disabled(code.count != 6 || isVerifying || isResending)
+                .frame(maxWidth: 400).padding(20).frame(maxWidth: .infinity).background(.regularMaterial)
         }
     }
-
     private func resendOTP() {
+        guard !isResending && !isVerifying && Date() >= resendAt else { return }
+        isResending = true
         Task { @MainActor in
+            defer { isResending = false }
             let full = PhoneNumberNormalizer.normalize(rawInput: phone, defaultDial: region.dial).e164
-            let response = await viewModel.sendOTP(phoneNumber: full, isResend: true)
-            if let response {
-                otpId = response.otpID
-                startTimer()
+            if let response = await viewModel.sendOTP(phoneNumber: full, isResend: true) {
+                otpId = response.otpID; code = ""; resendAt = Date().addingTimeInterval(60)
             }
         }
     }
-
     private func verify() {
-        guard code.count == 6 else { return }
-        guard isVerifying == false else { return }
+        guard code.count == 6, !isVerifying, !isResending else { return }
         isVerifying = true
         Task { @MainActor in
+            defer { isVerifying = false }
             let full = PhoneNumberNormalizer.normalize(rawInput: phone, defaultDial: region.dial).e164
             await viewModel.phoneLogin(phoneNumber: full, verificationCode: code, otpId: otpId)
-            isVerifying = false
         }
     }
-
     private func maskedPhone() -> String {
-        let trimmed = phone.replacingOccurrences(of: " ", with: "")
-        guard trimmed.count >= 7 else { return phone }
-        let start = trimmed.prefix(3)
-        let end = trimmed.suffix(2)
-        return "\(start)****\(end)"
+        let value = phone.filter(\.isNumber)
+        guard value.count >= 7 else { return String(repeating: "•", count: value.count) }
+        return "\(value.prefix(3))••••\(value.suffix(2))"
     }
 }

@@ -278,6 +278,15 @@ protocol DiaryIndexedPaper: AnyObject {
     var index: Int { get }
 }
 
+/// Lets the zoom viewport suspend navigation without changing UIKit gesture state.
+final class DiaryCurlPageViewController: UIPageViewController {
+    var onZoomSuspensionChange: ((Bool) -> Void)?
+
+    func setZoomSuspended(_ suspended: Bool) {
+        onZoomSuspensionChange?(suspended)
+    }
+}
+
 /// Shared native curl engine for saved diaries and read-only preset previews.
 struct DiaryPageCurlReader: UIViewControllerRepresentable {
     let spreadCount: Int
@@ -287,20 +296,18 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIViewController(context: Context) -> UIPageViewController {
-        let controller = UIPageViewController(
+        let controller = DiaryCurlPageViewController(
             transitionStyle: .pageCurl,
             navigationOrientation: .horizontal,
             options: [.spineLocation: UIPageViewController.SpineLocation.mid.rawValue]
         )
         controller.isDoubleSided = true
-        controller.dataSource = context.coordinator
         controller.delegate = context.coordinator
-        controller.view.backgroundColor = .clear
-        // 单指用于卷页，双指捏合留给外层缩放手势。
-        for case let pan as UIPanGestureRecognizer in controller.gestureRecognizers {
-            pan.maximumNumberOfTouches = 1
+        controller.onZoomSuspensionChange = { [weak coordinator = context.coordinator, weak controller] suspended in
+            guard let coordinator, let controller else { return }
+            coordinator.setZoomSuspended(suspended, in: controller)
         }
-        controller.gestureRecognizers.compactMap { $0 as? UITapGestureRecognizer }.forEach { $0.isEnabled = false }
+        controller.view.backgroundColor = .clear
         context.coordinator.installRings(in: controller)
         context.coordinator.show(spread, in: controller, animated: false)
         return controller
@@ -315,23 +322,30 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
         var parent: DiaryPageCurlReader
         private var transitioning = false
         private var displayed = -1
-        private var motionSuspendedGestures: [UIGestureRecognizer] = []
-        private var motionIsReduced = false
+        private var zoomSuspended = false
+        private var pageSource: DiaryPageCurlReader
+        private var papers: [Int: UIViewController] = [:]
 
         func updateMotionPolicy(in controller: UIPageViewController) {
-            // UIKit owns the enabled state of its curl recognizers (including boundary
-            // recognizers). Never force-enable them on every SwiftUI update.
-            guard motionIsReduced != parent.reduceMotion else { return }
-            motionIsReduced = parent.reduceMotion
-            if motionIsReduced {
-                motionSuspendedGestures = controller.gestureRecognizers.filter {
-                    $0.isEnabled && !($0 is UITapGestureRecognizer)
+            // UIKit owns curl gesture state, including disabled boundary recognizers.
+            // A nil data source disables native navigation without disabling page taps.
+            // Never change the data source during an interactive transition.
+            guard !transitioning else { return }
+            if parent.reduceMotion || zoomSuspended {
+                if controller.dataSource != nil { controller.dataSource = nil }
+            } else if controller.dataSource !== self {
+                controller.dataSource = self
+                // 单指卷页，双指捏合留给外层缩放手势。
+                for case let pan as UIPanGestureRecognizer in controller.gestureRecognizers {
+                    pan.maximumNumberOfTouches = 1
                 }
-                motionSuspendedGestures.forEach { $0.isEnabled = false }
-            } else {
-                motionSuspendedGestures.forEach { $0.isEnabled = true }
-                motionSuspendedGestures.removeAll()
+                controller.gestureRecognizers.compactMap { $0 as? UITapGestureRecognizer }.forEach { $0.isEnabled = false }
             }
+        }
+
+        func setZoomSuspended(_ suspended: Bool, in controller: UIPageViewController) {
+            zoomSuspended = suspended
+            updateMotionPolicy(in: controller)
         }
         private let rings = UIHostingController(rootView: DiaryBindingRings())
 
@@ -354,30 +368,57 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
                 self.rings.view.alpha = visible ? 1 : 0
             }
         }
-        init(_ parent: DiaryPageCurlReader) { self.parent = parent }
+        init(_ parent: DiaryPageCurlReader) {
+            self.parent = parent
+            self.pageSource = parent
+        }
 
         func page(_ index: Int) -> UIViewController? {
             // A mid-spine controller must always start with two leaves, even for an empty book.
-            guard (0..<(max(1, parent.spreadCount) * 2)).contains(index) else { return nil }
-            return parent.makePaper(index) { [weak self] in self?.transitioning == false }
+            guard (0..<(max(1, pageSource.spreadCount) * 2)).contains(index) else { return nil }
+            if let paper = papers[index] { return paper }
+            let paper = pageSource.makePaper(index) { [weak self] in self?.transitioning == false }
+            papers[index] = paper
+            return paper
         }
-        func show(_ target: Int, in controller: UIPageViewController, animated: Bool) {
-            guard !transitioning, target != displayed,
-                  let left = page(target * 2), let right = page(target * 2 + 1) else { return }
+        func show(_ requested: Int, in controller: UIPageViewController, animated: Bool) {
+            guard !transitioning else { return }
+            let countChanged = pageSource.spreadCount != parent.spreadCount
+            pageSource = parent
+            if countChanged { papers.removeAll() }
+            let target = min(max(requested, 0), max(1, pageSource.spreadCount) - 1)
+            guard target != displayed || countChanged else {
+                updateMotionPolicy(in: controller)
+                return
+            }
+            guard let left = page(target * 2), let right = page(target * 2 + 1) else { return }
             let direction: UIPageViewController.NavigationDirection = target >= displayed ? .forward : .reverse
             transitioning = true
+            // Prevent a pan from starting while a button-driven curl is running.
+            controller.dataSource = nil
             if animated { setRingsVisible(false, animated: false) }
-            controller.setViewControllers([left, right], direction: direction, animated: animated) { [weak self, weak controller] _ in
-                guard let self, let controller else { return }
-                self.displayed = target
-                self.transitioning = false
-                // 快速点击期间只保留最后目标，避免并发 setViewControllers 导致 UIKit 状态错乱。
-                self.show(self.parent.spread, in: controller, animated: !self.parent.reduceMotion)
-                if !self.transitioning {
-                    controller.view.bringSubviewToFront(self.rings.view)
-                    self.setRingsVisible(true, animated: !self.parent.reduceMotion)
+            controller.setViewControllers([left, right], direction: direction, animated: animated) { [weak self, weak controller] finished in
+                // UIKit is still unwinding its transition inside this callback.
+                // Keep the lock until the next main-queue turn before starting another curl.
+                DispatchQueue.main.async {
+                    guard let self, let controller else { return }
+                    if finished { self.displayed = target }
+                    self.transitioning = false
+                    self.show(self.parent.spread, in: controller, animated: !self.parent.reduceMotion)
+                    self.restoreAfterTransition(in: controller)
                 }
             }
+        }
+
+        private func restoreAfterTransition(in controller: UIPageViewController) {
+            guard !transitioning else { return }
+            if let indices = controller.viewControllers?.compactMap({ ($0 as? any DiaryIndexedPaper)?.index }),
+               let first = indices.min(), let last = indices.max() {
+                papers = papers.filter { (first - 2...last + 2).contains($0.key) }
+            }
+            updateMotionPolicy(in: controller)
+            controller.view.bringSubviewToFront(rings.view)
+            setRingsVisible(true, animated: !parent.reduceMotion)
         }
         func pageViewController(_ pageViewController: UIPageViewController, viewControllerBefore viewController: UIViewController) -> UIViewController? {
             guard let paper = viewController as? any DiaryIndexedPaper else { return nil }
@@ -392,21 +433,21 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
             setRingsVisible(false, animated: !parent.reduceMotion)
         }
         func pageViewController(_ pageViewController: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
-            transitioning = false
-            let requested = parent.spread
-            let old = displayed
-            if let first = pageViewController.viewControllers?.compactMap({ ($0 as? any DiaryIndexedPaper)?.index }).min() {
-                displayed = first / 2
-            }
-            if requested != old {
-                show(requested, in: pageViewController, animated: !parent.reduceMotion)
-            } else {
-                parent.spread = max(displayed, 0)
-            }
-            // 手势完成与取消回弹均会到达这里；排队的下一次翻页结束前保持隐藏。
-            if !transitioning {
-                pageViewController.view.bringSubviewToFront(rings.view)
-                setRingsVisible(true, animated: !parent.reduceMotion)
+            DispatchQueue.main.async { [weak self, weak pageViewController] in
+                guard let self, let pageViewController else { return }
+                let requested = self.parent.spread
+                let old = self.displayed
+                if let first = pageViewController.viewControllers?.compactMap({ ($0 as? any DiaryIndexedPaper)?.index }).min() {
+                    self.displayed = first / 2
+                }
+                self.transitioning = false
+                if requested != old {
+                    self.show(requested, in: pageViewController, animated: !self.parent.reduceMotion)
+                } else {
+                    self.parent.spread = max(self.displayed, 0)
+                    self.show(self.displayed, in: pageViewController, animated: false)
+                }
+                self.restoreAfterTransition(in: pageViewController)
             }
         }
         func pageViewController(_ pageViewController: UIPageViewController, spineLocationFor orientation: UIInterfaceOrientation) -> UIPageViewController.SpineLocation {

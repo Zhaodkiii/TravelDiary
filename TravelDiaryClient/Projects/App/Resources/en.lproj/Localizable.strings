@@ -45,36 +45,27 @@
 "ai.scenario.section" = "Scenarios";
 "ai.models.available" = "available models";
 "auth.login.title" = "Sign In";
-"auth.login.welcome" = "Welcome to Health Assistant";
-"auth.login.subtitle" = "Sign in for a more personalized experience";
-"auth.login.phone_button" = "Sign in with phone";
+"auth.login.welcome" = "Turn your travels into a book";
+"auth.login.subtitle" = "Keep every journey in photos and words";
+"auth.login.phone_button" = "Continue with phone";
 "auth.login.or" = "or";
-"auth.login.safety_title" = "Security Protection";
-"auth.login.safety_body" = "We use bank-level encryption to protect your personal data.";
 "auth.login.legal.checkbox_lead" = "I have read and agree to the";
 "auth.login.legal.conjunction" = "and";
 "auth.login.legal.terms" = "Terms of Service";
-"auth.login.legal.privacy" = "Privacy Notice";
-"auth.login.legal.toggle_accessibility" = "Agree to Terms of Service and Privacy Notice";
-"auth.login.legal.must_agree_hint" = "Please agree to the Terms of Service and Privacy Notice before signing in";
-"auth.login.initial_prompt.title" = "Notice";
-"auth.login.initial_prompt.intro" = "Welcome. Before using the app, please read and understand:";
+"auth.login.legal.privacy" = "Privacy Policy";
+"auth.login.legal.toggle_accessibility" = "Agree to the Terms of Service and Privacy Policy";
+"auth.login.legal.must_agree_hint" = "Please read and agree to the Terms of Service and Privacy Policy";
+"auth.login.initial_prompt.title" = "Before your story begins";
+"auth.login.initial_prompt.intro" = "Welcome to TravelDiary. Please read the Terms of Service and Privacy Policy to understand how account and personal information is handled.";
 "auth.login.initial_prompt.terms_link" = "Terms of Service";
 "auth.login.initial_prompt.privacy_link" = "Privacy Notice";
 "auth.login.initial_prompt.link_separator" = " and ";
-"auth.login.initial_prompt.medical_disclaimer" = "Information provided by this service is for reference only and does not replace professional advice.";
-"auth.login.initial_prompt.permission.device" = "Device information: used to check network conditions and protect account data security.";
-"auth.login.initial_prompt.permission.location" = "Location information: used to provide location-related pages and services.";
-"auth.login.initial_prompt.permission.photos" = "Camera / photo library information: used to upload, recognize, download, and share images.";
-"auth.login.initial_prompt.permission.microphone" = "Microphone information: used to provide voice input features.";
-"auth.login.initial_prompt.permission.logs" = "Log information: used for usage statistics, troubleshooting, and service security maintenance.";
-"auth.login.initial_prompt.permission_note" = "Agreeing to this notice does not automatically enable these permissions. We will request authorization separately when needed.";
-"auth.login.initial_prompt.security_commitment" = "We are committed to protecting your personal information and data.";
-"auth.login.initial_prompt.decline" = "Decline";
+"auth.login.initial_prompt.permission_note" = "Agreeing does not enable device permissions. We will request access separately when you use a feature that needs it.";
+"auth.login.initial_prompt.decline" = "Not now";
 "auth.login.initial_prompt.agree" = "Agree and Continue";
-"auth.login.guest_mode" = "Guest Mode";
-"auth.phone.hero_title" = "Secure and Fast Sign-In";
-"auth.phone.hero_subtitle" = "Bank-level security with multi-region support";
+"auth.login.guest_mode" = "Try it first";
+"auth.phone.hero_title" = "Continue with phone";
+"auth.phone.hero_subtitle" = "We will send a verification code to your phone";
 "auth.phone.field_title" = "Phone Number *";
 "auth.phone.placeholder" = "Enter your phone number";
 "auth.phone.send_otp" = "Get code";
@@ -82,7 +73,7 @@
 "auth.otp.sent_to" = "Code sent to";
 "auth.otp.resend_countdown" = "Resend in";
 "auth.otp.resend" = "Resend";
-"auth.otp.safety_hint" = "Security tip: the verification code is valid for 5 minutes. Do not share it with others.";
+"auth.otp.safety_hint" = "Do not share your verification code with others.";
 "auth.otp.verify_and_login" = "Verify and sign in";
 "auth.notification.sign_in_success" = "Signed in";
 "auth.notification.apple_sign_in_cancelled" = "Apple sign-in cancelled";
@@ -662,7 +653,7 @@
 "auth.error.apple_credential_invalid" = "Apple credential is invalid.";
 "auth.error.apple_identity_token_missing" = "Unable to read Apple identity token.";
 "auth.error.apple_user_identifier_missing" = "Apple user identifier is missing.";
-"auth.login.guest_mode.accessibility_hint" = "Quickly enter the full app using this device";
+"auth.login.guest_mode.accessibility_hint" = "Continue with a device guest account. You can link a sign-in method later.";
 "auth.notification.apple_sign_in_failed" = "Apple sign-in failed. Please try again later.";
 "auth.notification.network_unavailable" = "Network connection issue. Please try again later.";
 "auth.notification.otp_resend_failed" = "Failed to resend verification code. Please try again later.";
@@ -670,3 +661,35 @@
 "auth.notification.phone_login_failed" = "The verification code is incorrect or has expired. Please try again.";
 "settings.account.device_not_linked" = "Not Signed In";
 "settings.account.device_not_linked.accessibility_hint" = "Open sign-in to link Apple or phone";
+
+"auth.login.upgrade_title" = "Link a sign-in method to your journal";
+
+"auth.login.upgrade_subtitle" = "Link Apple or a phone number for future sign-ins";
+
+"auth.login.return" = "Go back for now";
+
+"auth.login.processing" = "Signing in…";
+
+"auth.login.apple_button" = "Sign in with Apple";
+
+"auth.login.guest_note" = "Uses a device guest account. You can link a sign-in method later.";
+
+"auth.login.agreed" = "Agreed";
+
+"auth.login.not_agreed" = "Not agreed";
+
+"auth.login.initial_prompt.permissions" = "When you take pictures, select photos, or record videos, we will request camera, photo library, or microphone access as needed.";
+
+"auth.phone.sending" = "Sending…";
+
+"auth.otp.change_phone" = "Change phone number";
+
+"auth.otp.verifying" = "Verifying…";
+
+"auth.otp.code_accessibility" = "SMS verification code";
+
+"app.preparing.diary" = "Opening your journal…";
+
+"app.preparing.failed" = "Your journal could not be prepared. Please try again.";
+
+"app.preparing.retry" = "Try again";

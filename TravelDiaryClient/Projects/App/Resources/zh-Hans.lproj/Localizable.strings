@@ -45,36 +45,27 @@
 "ai.scenario.section" = "场景";
 "ai.models.available" = "个可用模型";
 "auth.login.title" = "登录";
-"auth.login.welcome" = "欢迎使用健康助手";
-"auth.login.subtitle" = "登录后享受更多个性化服务";
-"auth.login.phone_button" = "手机号登录";
+"auth.login.welcome" = "把旅途，写成一本书";
+"auth.login.subtitle" = "用照片与文字，珍藏每一段旅程";
+"auth.login.phone_button" = "使用手机号登录";
 "auth.login.or" = "或";
-"auth.login.safety_title" = "数据安全保障";
-"auth.login.safety_body" = "我们采用银行级加密技术保护您的个人信息和医疗数据，不会出售您的个人信息，仅在隐私政策说明范围内进行必要处理。";
 "auth.login.legal.checkbox_lead" = "我已阅读并同意";
 "auth.login.legal.conjunction" = "和";
 "auth.login.legal.terms" = "《服务条款》";
-"auth.login.legal.privacy" = "《隐私协议》";
-"auth.login.legal.toggle_accessibility" = "同意服务条款与隐私协议";
-"auth.login.legal.must_agree_hint" = "请先勾选同意服务条款与隐私协议后再登录";
-"auth.login.initial_prompt.title" = "温馨提示";
-"auth.login.initial_prompt.intro" = "欢迎使用健康助手。在使用前，请认真阅读并理解以下协议：";
+"auth.login.legal.privacy" = "《隐私政策》";
+"auth.login.legal.toggle_accessibility" = "同意服务条款与隐私政策";
+"auth.login.legal.must_agree_hint" = "请先阅读并同意服务条款与隐私政策";
+"auth.login.initial_prompt.title" = "开始记录前，请先了解";
+"auth.login.initial_prompt.intro" = "欢迎使用 TravelDiary。请阅读服务条款与隐私政策，了解账号及个人信息的处理方式。";
 "auth.login.initial_prompt.terms_link" = "服务条款";
 "auth.login.initial_prompt.privacy_link" = "隐私协议";
 "auth.login.initial_prompt.link_separator" = "、";
-"auth.login.initial_prompt.medical_disclaimer" = "本服务提供的信息仅供健康管理和记录参考，不作为诊断、治疗或用药的直接处置依据。如有任何疑问，请及时咨询专业人士。";
-"auth.login.initial_prompt.permission.device" = "常用设备信息：用于检查网络环境、保障账号与数据安全。";
-"auth.login.initial_prompt.permission.location" = "位置信息：用于提供与位置相关的页面展示和服务。";
-"auth.login.initial_prompt.permission.photos" = "相机 / 相册信息：用于上传、识别、下载和分享图片等内容。";
-"auth.login.initial_prompt.permission.microphone" = "麦克风信息：用于提供语音输入等功能。";
-"auth.login.initial_prompt.permission.logs" = "日志信息：用于行为统计、问题排查和服务安全维护。";
-"auth.login.initial_prompt.permission_note" = "请知悉，同意本提示并不会默认开启上述设备权限。我们会在你使用到相应功能时，再另行征得你的授权。";
-"auth.login.initial_prompt.security_commitment" = "我们承诺采取必要的安全措施保护你的个人信息和数据。";
-"auth.login.initial_prompt.decline" = "不同意";
+"auth.login.initial_prompt.permission_note" = "同意协议不会自动开启设备权限。我们会在你使用相应功能时另行请求授权。";
+"auth.login.initial_prompt.decline" = "暂不同意";
 "auth.login.initial_prompt.agree" = "同意并继续";
-"auth.login.guest_mode" = "游客模式";
-"auth.phone.hero_title" = "安全快速登录";
-"auth.phone.hero_subtitle" = "银行级别安全保护，支持全球多地区";
+"auth.login.guest_mode" = "先体验一下";
+"auth.phone.hero_title" = "使用手机号登录";
+"auth.phone.hero_subtitle" = "我们将向你的手机号发送验证码";
 "auth.phone.field_title" = "手机号码 *";
 "auth.phone.placeholder" = "请输入手机号码";
 "auth.phone.send_otp" = "获取验证码";
@@ -82,7 +73,7 @@
 "auth.otp.sent_to" = "验证码已发送至";
 "auth.otp.resend_countdown" = "重新发送";
 "auth.otp.resend" = "重新发送";
-"auth.otp.safety_hint" = "安全提示：验证码5分钟内有效，请勿泄露给他人。如未收到验证码，请检查短信是否被拦截。";
+"auth.otp.safety_hint" = "请勿向他人透露验证码。";
 "auth.otp.verify_and_login" = "验证并登录";
 "auth.notification.sign_in_success" = "登录成功";
 "auth.notification.apple_sign_in_cancelled" = "已取消 Apple 登录";
@@ -662,7 +653,7 @@
 "auth.error.apple_credential_invalid" = "Apple 凭证无效。";
 "auth.error.apple_identity_token_missing" = "无法读取 Apple 身份令牌。";
 "auth.error.apple_user_identifier_missing" = "Apple 用户标识缺失。";
-"auth.login.guest_mode.accessibility_hint" = "使用此设备快速进入完整应用";
+"auth.login.guest_mode.accessibility_hint" = "使用设备游客账号进入，之后可绑定登录方式";
 "auth.notification.apple_sign_in_failed" = "Apple 登录失败，请稍后重试";
 "auth.notification.network_unavailable" = "网络连接异常，请稍后重试";
 "auth.notification.otp_resend_failed" = "验证码重发失败，请稍后重试";
@@ -670,3 +661,35 @@
 "auth.notification.phone_login_failed" = "验证码错误或已过期，请重新输入";
 "settings.account.device_not_linked" = "未登录";
 "settings.account.device_not_linked.accessibility_hint" = "打开登录页绑定 Apple 或手机号";
+
+"auth.login.upgrade_title" = "为你的手帐绑定登录方式";
+
+"auth.login.upgrade_subtitle" = "绑定 Apple 或手机号，方便之后登录";
+
+"auth.login.return" = "暂时返回";
+
+"auth.login.processing" = "正在登录…";
+
+"auth.login.apple_button" = "通过 Apple 登录";
+
+"auth.login.guest_note" = "将使用设备游客账号，之后可绑定登录方式";
+
+"auth.login.agreed" = "已同意";
+
+"auth.login.not_agreed" = "未同意";
+
+"auth.login.initial_prompt.permissions" = "在你拍摄、选择照片或录制视频时，我们会根据所用功能请求相机、照片或麦克风权限。";
+
+"auth.phone.sending" = "正在发送…";
+
+"auth.otp.change_phone" = "修改手机号";
+
+"auth.otp.verifying" = "正在验证…";
+
+"auth.otp.code_accessibility" = "短信验证码";
+
+"app.preparing.diary" = "正在打开你的手帐…";
+
+"app.preparing.failed" = "手帐暂时未能准备好，请重试。";
+
+"app.preparing.retry" = "重新打开";

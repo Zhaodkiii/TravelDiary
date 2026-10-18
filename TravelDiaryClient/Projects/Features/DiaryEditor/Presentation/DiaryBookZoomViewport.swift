@@ -22,7 +22,7 @@ final class DiaryBookZoomController<Content: View>: UIViewController, UIScrollVi
     private var size = CGSize.zero
     private var token: Int?
     private var needsCenter = true
-    private var suspended: [UIGestureRecognizer] = []
+    private var suspended: [DiaryCurlPageViewController] = []
 
     init(content: Content) {
         host = UIHostingController(rootView: content)
@@ -95,17 +95,15 @@ final class DiaryBookZoomController<Content: View>: UIViewController, UIScrollVi
 
     private func suspendPageGestures(_ suspend: Bool) {
         if !suspend {
-            suspended.forEach { $0.isEnabled = true }
+            suspended.forEach { $0.setZoomSuspended(false) }
             suspended.removeAll()
             return
         }
         guard suspended.isEmpty else { return }
         func visit(_ controller: UIViewController) {
-            if let pages = controller as? UIPageViewController {
-                for gesture in pages.gestureRecognizers where gesture.isEnabled {
-                    suspended.append(gesture)
-                    gesture.isEnabled = false
-                }
+            if let pages = controller as? DiaryCurlPageViewController {
+                suspended.append(pages)
+                pages.setZoomSuspended(true)
             }
             controller.children.forEach(visit)
         }

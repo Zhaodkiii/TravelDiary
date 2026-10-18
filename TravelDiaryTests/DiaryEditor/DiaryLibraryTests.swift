@@ -15,7 +15,7 @@ struct DiaryLibraryTests {
         #expect(coordinator.page(2) == nil)
     }
 
-    @Test func curlUpdatesPreserveUIKitDisabledGestures() {
+    @Test func curlMotionPolicyLetsUIKitManageNavigation() {
         let reader = DiaryPageCurlReader(spreadCount: 2, spread: .constant(0), reduceMotion: false) { _, _ in UIViewController() }
         let coordinator = reader.makeCoordinator()
         let controller = UIPageViewController(transitionStyle: .pageCurl, navigationOrientation: .horizontal,
@@ -30,9 +30,88 @@ struct DiaryLibraryTests {
         #expect(gestures.allSatisfy { !$0.isEnabled })
         coordinator.parent = DiaryPageCurlReader(spreadCount: 2, spread: .constant(0), reduceMotion: true) { _, _ in UIViewController() }
         coordinator.updateMotionPolicy(in: controller)
+        #expect(controller.dataSource == nil)
         coordinator.parent = reader
         coordinator.updateMotionPolicy(in: controller)
-        #expect(gestures.allSatisfy { !$0.isEnabled })
+        #expect(controller.dataSource === coordinator)
+        #expect(controller.gestureRecognizers.compactMap { $0 as? UITapGestureRecognizer }.allSatisfy { !$0.isEnabled })
+    }
+
+    private final class CurlTestPaper: UIViewController, DiaryIndexedPaper {
+        let index: Int
+        init(index: Int) {
+            self.index = index
+            super.init(nibName: nil, bundle: nil)
+        }
+        required init?(coder: NSCoder) { fatalError("Not supported") }
+    }
+
+    private func curlController(_ coordinator: DiaryPageCurlReader.Coordinator) -> UIPageViewController {
+        let controller = UIPageViewController(transitionStyle: .pageCurl, navigationOrientation: .horizontal,
+            options: [.spineLocation: UIPageViewController.SpineLocation.mid.rawValue])
+        controller.isDoubleSided = true
+        controller.delegate = coordinator
+        return controller
+    }
+
+    private func finishCurlCallbacks() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
+    @Test func curlClampsInvalidTargetsAndKeepsCompleteSpreads() async throws {
+        let reader = DiaryPageCurlReader(spreadCount: 2, spread: .constant(99), reduceMotion: false) { index, _ in CurlTestPaper(index: index) }
+        let coordinator = reader.makeCoordinator()
+        let controller = curlController(coordinator)
+        coordinator.show(99, in: controller, animated: false)
+        await finishCurlCallbacks()
+        #expect(controller.viewControllers?.compactMap { ($0 as? CurlTestPaper)?.index } == [2, 3])
+        #expect(coordinator.pageViewController(controller, viewControllerAfter: try #require(coordinator.page(3))) == nil)
+        #expect(coordinator.pageViewController(controller, viewControllerBefore: try #require(coordinator.page(0))) == nil)
+        #expect(coordinator.page(2) === coordinator.page(2))
+    }
+
+    @Test func curlFreezesPagesDuringTransitionThenAppliesLatestTarget() async {
+        var target = 0
+        let selection = Binding(get: { target }, set: { target = $0 })
+        let reader = DiaryPageCurlReader(spreadCount: 3, spread: selection, reduceMotion: false) { index, _ in CurlTestPaper(index: index) }
+        let coordinator = reader.makeCoordinator()
+        let controller = curlController(coordinator)
+        coordinator.show(0, in: controller, animated: false)
+        #expect(controller.dataSource == nil)
+        target = 1
+        coordinator.parent = DiaryPageCurlReader(spreadCount: 2, spread: selection, reduceMotion: true) { index, _ in CurlTestPaper(index: index) }
+        coordinator.show(1, in: controller, animated: false)
+        #expect(coordinator.page(5) != nil)
+        await finishCurlCallbacks()
+        await finishCurlCallbacks()
+        #expect(coordinator.page(5) == nil)
+        #expect(controller.viewControllers?.compactMap { ($0 as? CurlTestPaper)?.index } == [2, 3])
+        #expect(controller.dataSource == nil)
+        coordinator.parent = DiaryPageCurlReader(spreadCount: 2, spread: selection, reduceMotion: false) { index, _ in CurlTestPaper(index: index) }
+        coordinator.updateMotionPolicy(in: controller)
+        #expect(controller.dataSource === coordinator)
+        coordinator.setZoomSuspended(true, in: controller)
+        #expect(controller.dataSource == nil)
+        coordinator.setZoomSuspended(false, in: controller)
+        #expect(controller.dataSource === coordinator)
+    }
+
+    @Test func curlDefersNavigationPolicyUntilInteractiveTurnFinishes() async {
+        let reader = DiaryPageCurlReader(spreadCount: 2, spread: .constant(0), reduceMotion: false) { index, _ in CurlTestPaper(index: index) }
+        let coordinator = reader.makeCoordinator()
+        let controller = curlController(coordinator)
+        coordinator.show(0, in: controller, animated: false)
+        await finishCurlCallbacks()
+        coordinator.pageViewController(controller, willTransitionTo: [])
+        coordinator.setZoomSuspended(true, in: controller)
+        #expect(controller.dataSource === coordinator)
+        coordinator.pageViewController(controller, didFinishAnimating: true, previousViewControllers: [], transitionCompleted: false)
+        #expect(controller.dataSource === coordinator)
+        await finishCurlCallbacks()
+        #expect(controller.dataSource == nil)
+        #expect(controller.viewControllers?.compactMap { ($0 as? CurlTestPaper)?.index } == [0, 1])
     }
 
     @Test func libraryColorsResolveOffMainActorInBothAppearances() async {
