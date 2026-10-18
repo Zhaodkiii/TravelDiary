@@ -323,6 +323,7 @@ private struct DiaryPresetReaderDestination: View {
     @State private var reading = true
     var body: some View {
         VStack(spacing: 0) {
+            PresetMaterialLibraryLinks(templateID: package.id, templateVersion: package.manifest.packageVersion)
             Picker("展示方式", selection: $reading) {
                 Text("翻阅").tag(true)
                 Text("总览").tag(false)

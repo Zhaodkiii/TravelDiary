@@ -340,3 +340,30 @@ private struct MaterialThumbnail: View {
         }
     }
 }
+
+
+/// Local/cached and remote preset readers share the same material entry points.
+struct PresetMaterialLibraryLinks: View {
+    let templateID: String
+    let templateVersion: Int
+    private enum LibraryType: String, Identifiable {
+        case sticker, background
+        var id: String { rawValue }
+    }
+    @State private var selection: LibraryType?
+    var body: some View {
+        HStack {
+            Button("贴纸库") { selection = .sticker }
+            Button("背景库") { selection = .background }
+        }.padding(.top)
+        .sheet(item: $selection) { type in
+            if UUID(uuidString: templateID) != nil {
+                MaterialLibraryBrowser(templateID: templateID, templateVersion: templateVersion, type: type.rawValue)
+            } else {
+                ContentUnavailableView("暂无关联素材库", systemImage: "square.grid.2x2",
+                    description: Text("这本内置模板尚未关联云端素材库。"))
+                    .presentationDetents([.medium])
+            }
+        }
+    }
+}
