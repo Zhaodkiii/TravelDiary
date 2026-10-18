@@ -196,15 +196,11 @@ struct DiaryPresetLibraryScreen: View {
             PresetBookAvailabilityBadge(downloadedCount: min(remote.page_count, availability.downloadedPageIDs(bookID: remote.id, version: remote.version).count), totalCount: remote.page_count)
         }
     }
-    @ViewBuilder private func destination(_ item: PresetLibraryItem) -> some View {
-        let title = series.first { $0.id == item.series }?.title ?? "旅行模板"
-        if let local = item.local ?? item.remote.flatMap({ downloads.completeCachedPackage(for: $0) }) {
-            DiaryPresetReaderDestination(ownerID: ownerID, package: local, seriesTitle: title, targetBook: targetBook,
-                targetAfterPageID: targetAfterPageID, fixedTarget: singlePageOnly, onImported: imported)
-        } else if let remote = item.remote {
-            RemotePresetReaderDestination(ownerID: ownerID, book: remote, seriesTitle: title, targetBook: targetBook,
-                afterPageID: targetAfterPageID, fixedTarget: singlePageOnly, onImported: imported)
-        }
+    private func destination(_ item: PresetLibraryItem) -> some View {
+        DiaryStablePresetDestination(item: item, ownerID: ownerID,
+            seriesTitle: series.first { $0.id == item.series }?.title ?? "旅行模板",
+            targetBook: targetBook, targetAfterPageID: targetAfterPageID,
+            fixedTarget: singlePageOnly, onImported: imported)
     }
     private func imported(_ book: DiaryBook) {
         if let onPageAdded { onPageAdded(book) } else { recovered = book }
@@ -307,6 +303,42 @@ private struct DiaryPresetImage: View {
     }
 }
 private struct PresetSelection: Identifiable, Hashable { let id = UUID(); let pageIDs: [String]; var wholeBook = false }
+/// Keep both the reader type and its sheet state alive while availability changes.
+private struct DiaryStablePresetDestination: View {
+    @StateObject private var presentation: PresetReaderPresentation
+    let ownerID: String
+    let seriesTitle: String
+    let targetBook: DiaryBook?
+    let targetAfterPageID: UUID?
+    let fixedTarget: Bool
+    let onImported: (DiaryBook) -> Void
+
+    init(item: PresetLibraryItem, ownerID: String, seriesTitle: String,
+         targetBook: DiaryBook?, targetAfterPageID: UUID?, fixedTarget: Bool,
+         onImported: @escaping (DiaryBook) -> Void) {
+        _presentation = StateObject(wrappedValue: PresetReaderPresentation(item: item,
+            cachedPackage: item.remote.flatMap { PresetDownloadManager.shared.completeCachedPackage(for: $0) }))
+        self.ownerID = ownerID; self.seriesTitle = seriesTitle
+        self.targetBook = targetBook; self.targetAfterPageID = targetAfterPageID
+        self.fixedTarget = fixedTarget; self.onImported = onImported
+    }
+
+    var body: some View {
+        switch presentation.source {
+        case .local(let package):
+            DiaryPresetReaderDestination(ownerID: ownerID, package: package, seriesTitle: seriesTitle,
+                targetBook: targetBook, targetAfterPageID: targetAfterPageID,
+                fixedTarget: fixedTarget, onImported: onImported)
+        case .remote(let book):
+            RemotePresetReaderDestination(ownerID: ownerID, book: book, seriesTitle: seriesTitle,
+                targetBook: targetBook, afterPageID: targetAfterPageID,
+                fixedTarget: fixedTarget, onImported: onImported)
+        case nil:
+            ContentUnavailableView("模板暂不可用", systemImage: "book.closed")
+        }
+    }
+}
+
 private struct DiaryPresetReaderDestination: View {
     let ownerID: String
     let package: DiaryPresetPackage

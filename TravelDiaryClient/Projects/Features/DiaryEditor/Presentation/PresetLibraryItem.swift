@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// 每本一张卡片；打开详情后保持该版本，避免在线刷新改变导入对象。
 nonisolated struct PresetLibraryItem: Identifiable, Sendable {
@@ -45,6 +46,27 @@ nonisolated struct PresetLibraryItem: Identifiable, Sendable {
             && (series.isEmpty || self.series == series)
             && (styles.isEmpty || !styles.isDisjoint(with: self.styles))
             && (usages.isEmpty || !usages.isDisjoint(with: self.usages))
+    }
+}
+
+/// Resolve once per navigation presentation. Download/cache updates must not
+/// replace the reader that owns an active import sheet.
+@MainActor
+final class PresetReaderPresentation: ObservableObject {
+    enum Source {
+        case local(DiaryPresetPackage)
+        case remote(RemotePresetBook)
+    }
+    let source: Source?
+
+    init(item: PresetLibraryItem, cachedPackage: DiaryPresetPackage?) {
+        if let local = item.local ?? cachedPackage {
+            source = .local(local)
+        } else if let remote = item.remote {
+            source = .remote(remote)
+        } else {
+            source = nil
+        }
     }
 }
 

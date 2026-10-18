@@ -24,6 +24,40 @@ struct PresetDownloadPerformanceTests {
         return job
     }
 
+    @Test func downloadCompletionKeepsOpenReaderWhileNextOpeningUsesCache() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let book = RemotePresetBook(id: "test-book", title: "Test", series: "test", version: 1,
+                                    page_count: 1, cover_url: "https://example.test/thumb")
+        let item = PresetLibraryItem(id: book.id, local: nil, remote: book)
+        let opened = PresetReaderPresentation(item: item, cachedPackage: nil)
+        guard case .remote(let initial) = opened.source else {
+            Issue.record("An uncached preset must open the remote reader"); return
+        }
+        #expect(initial.id == book.id)
+
+        // Publishing a complete cache updates catalog availability while a reader is open.
+        _ = try fixture(root)
+        let manager = PresetDownloadManager(directory: root)
+        await manager.waitUntilRestored()
+        #expect(manager.availability.hasDownloadedPage(bookID: book.id, version: book.version, pageID: "p"))
+        let cached = try #require(manager.completeCachedPackage(for: book))
+        guard case .remote(let retained) = opened.source else {
+            Issue.record("Download completion must not replace the reader owning the import sheet"); return
+        }
+        #expect(retained.id == initial.id && retained.version == initial.version)
+
+        let reopened = PresetReaderPresentation(item: item, cachedPackage: cached)
+        guard case .local(let local) = reopened.source else {
+            Issue.record("A new presentation should use the available offline cache"); return
+        }
+        #expect(local.id == book.id && local.manifest.packageVersion == book.version)
+        let preparation = try await manager.prepareImport(book: book, pageIDs: ["p"], wholeBook: true, ownerID: "owner")
+        #expect(preparation.downloadID == nil)
+        #expect(manager.jobs.first?.status == "ready")
+        #expect(manager.jobs.first?.resultID == nil)
+    }
+
     @Test func restoreBuildsIndexAndQueriesDoNotRescanDisk() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
