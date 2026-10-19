@@ -106,6 +106,6 @@ private struct DiaryBookBackingHalf: View {
 }
 
 /// 每张纸在书脊侧留出 1.8% 宽度，左右合成一条可见的装订缝。
-enum DiaryBookSpine {
+nonisolated enum DiaryBookSpine {
     static let halfGapFraction: CGFloat = 0.018
 }

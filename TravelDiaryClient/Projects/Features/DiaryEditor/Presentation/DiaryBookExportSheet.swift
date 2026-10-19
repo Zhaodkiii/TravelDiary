@@ -4,14 +4,17 @@ struct DiaryBookExportSheet: View {
     let book: DiaryBook
     let store: DiaryDocumentStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     enum Route: Hashable {
-        case singlePages, spreads, result
+        case singlePages, spreads, result, video, videoResult
 
         var title: String {
             switch self {
             case .singlePages: "选择页面"
             case .spreads: "跨页拼图"
             case .result: "导出结果"
+            case .video: "翻页视频"
+            case .videoResult: "视频已生成"
             }
         }
     }
@@ -26,6 +29,10 @@ struct DiaryBookExportSheet: View {
     @State private var total = 1
     @State private var result: DiaryBookImageExporter.Result?
     @State private var saved = false
+    @State private var videoSaved = false
+    @State private var videoOptions = DiaryVideoOptions()
+    @State private var videoResult: DiaryBookVideoExport?
+    @State private var videoProgress: (String, Double)?
     @State private var pdf: DiaryBookPDFExport?
     @State private var pdfDirectory: URL?
     @State private var message: String?
@@ -37,7 +44,12 @@ struct DiaryBookExportSheet: View {
                 DiaryExportFormatPage(book: book,
                     onSelectSpreads: { path.append(.spreads) },
                     onSelectPages: { path.append(.singlePages) },
-                    onSelectPDF: startPDF)
+                    onSelectPDF: startPDF,
+                    onSelectVideo: {
+                        videoOptions.firstSpread = 0
+                        videoOptions.lastSpread = max(0, DiaryBookImageExporter.spreadPages(book).count - 1)
+                        path.append(.video)
+                    })
             }
             .navigationDestination(for: Route.self) { route in
                 page(title: route.title) {
@@ -46,6 +58,12 @@ struct DiaryBookExportSheet: View {
                         DiaryExportSinglePagePicker(book: book, store: store, selected: $selected)
                     case .spreads:
                         DiaryExportSpreadPage(book: book, store: store, spreadCount: $spreadCount)
+                    case .video:
+                        DiaryExportVideoPage(book: book, store: store, options: $videoOptions, previewEnabled: !busy)
+                    case .videoResult:
+                        if let videoResult {
+                            DiaryExportVideoResultPage(result: videoResult, saved: videoSaved, saving: saving, onSave: saveVideo)
+                        }
                     case .result:
                         if let result {
                             DiaryExportResultPage(result: result, saved: saved, saving: saving,
@@ -54,11 +72,13 @@ struct DiaryBookExportSheet: View {
                     }
                 }
                 .safeAreaInset(edge: .bottom) {
-                    if route != .result && !busy {
+                    if route != .result && route != .videoResult && !busy {
                         Button {
-                            startImageExport(route == .singlePages ? .pages(selected) : .spreads(spreadCount))
+                            if route == .video { startVideo() }
+                            else { startImageExport(route == .singlePages ? .pages(selected) : .spreads(spreadCount)) }
                         } label: {
-                            Text(route == .singlePages ? "导出 \(selected.count) 页并保存相册" : "生成拼图并保存相册")
+                            Text(route == .video ? "生成视频 · 约 \(Int(ceil(videoOptions.timeline.duration))) 秒" :
+                                (route == .singlePages ? "导出 \(selected.count) 页并保存相册" : "生成拼图并保存相册"))
                                 .font(.headline).frame(maxWidth: .infinity).padding(16)
                         }
                         .buttonStyle(.borderedProminent)
@@ -83,6 +103,13 @@ struct DiaryBookExportSheet: View {
             task?.cancel()
             if let result { try? FileManager.default.removeItem(at: result.directory) }
             if let pdfDirectory { try? FileManager.default.removeItem(at: pdfDirectory) }
+            if let videoResult { try? FileManager.default.removeItem(at: videoResult.directory) }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background && busy && !saving && videoProgress != nil {
+                task?.cancel()
+                message = "应用已进入后台，本次视频生成已取消，请返回后重试。"
+            }
         }
     }
 
@@ -107,12 +134,53 @@ struct DiaryBookExportSheet: View {
                 ZStack {
                     Color(uiColor: .systemGroupedBackground).opacity(0.96)
                     VStack(spacing: 20) {
-                        ProgressView(value: Double(progress), total: Double(max(1, total)))
-                        Text("正在整理旅途记忆 · \(progress)/\(total)")
+                        if let videoProgress {
+                            ProgressView(value: videoProgress.1)
+                            Text(videoProgress.0)
+                        } else {
+                            ProgressView(value: Double(progress), total: Double(max(1, total)))
+                            Text("正在整理旅途记忆 · \(progress)/\(total)")
+                        }
                         Button("取消导出") { task?.cancel() }
                     }.padding(32)
                 }
             }
+        }
+    }
+
+    private func startVideo() {
+        guard !busy else { return }
+        if let videoResult { try? FileManager.default.removeItem(at: videoResult.directory) }
+        videoResult = nil; videoSaved = false; busy = true
+        videoProgress = ("正在准备页面…", 0)
+        let options = videoOptions
+        task = Task { @MainActor in
+            let wasDisabled = UIApplication.shared.isIdleTimerDisabled
+            UIApplication.shared.isIdleTimerDisabled = true
+            defer {
+                UIApplication.shared.isIdleTimerDisabled = wasDisabled
+                busy = false; videoProgress = nil
+            }
+            do {
+                let output = try await DiaryBookVideoExporter.export(book: book, store: store, options: options) { stage, fraction in
+                    videoProgress = (stage, fraction)
+                }
+                // Keep a validated file even when the user declines Photos access.
+                videoResult = output
+                path.append(.videoResult)
+            } catch is CancellationError { }
+            catch { message = error.localizedDescription }
+        }
+    }
+
+    private func saveVideo() {
+        guard !busy, let videoResult else { return }
+        busy = true; saving = true
+        task = Task { @MainActor in
+            defer { busy = false; saving = false }
+            do { try await DiaryBookVideoExporter.saveToPhotos(videoResult.url); videoSaved = true }
+            catch is CancellationError { }
+            catch { message = error.localizedDescription }
         }
     }
 
