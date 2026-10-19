@@ -6,6 +6,7 @@ struct DiaryPresetImportPreview: View {
     let pageIDs: [String]
     @Binding var excludedPageIDs: Set<String>
     let hiddenCategories: Set<DiaryLayerSemanticKind>
+    @Binding var scrollPage: Int?
     var loadingPages: [RemotePresetPage] = []
     var loadingSize: CGSize = CGSize(width: 1, height: 1.4)
     private struct Page: Identifiable {
@@ -16,7 +17,6 @@ struct DiaryPresetImportPreview: View {
         let thumbnailURL: URL?
     }
     @State private var pages: [Page] = []
-    @State private var scrollPage: Int? = 0
     @State private var images: [String: UIImage] = [:]
     @State private var loadError: String?
     @State private var renderError: String?
@@ -61,16 +61,6 @@ struct DiaryPresetImportPreview: View {
                 DiaryPresetSpreadCarousel(count: pages.count, position: $scrollPage) { index in
                     pageCard(pages[index], active: index >= firstVisiblePage - 1 && index <= firstVisiblePage + 2)
                 }
-                HStack {
-                    Button { withAnimation(.snappy) { scrollPage = firstVisiblePage - 1 } } label: { Image(systemName: "chevron.left") }
-                        .disabled(firstVisiblePage == 0).accessibilityLabel("上一页")
-                    Spacer()
-                    Text(pages.count == 1 ? "第 1 页" : "第 \(firstVisiblePage + 1)–\(min(firstVisiblePage + 2, pages.count)) 页 / \(pages.count)")
-                        .font(.caption.monospacedDigit())
-                    Spacer()
-                    Button { withAnimation(.snappy) { scrollPage = firstVisiblePage + 1 } } label: { Image(systemName: "chevron.right") }
-                        .disabled(firstVisiblePage + 1 >= positionCount).accessibilityLabel("下一页")
-                }.frame(minHeight: 44)
                 if !hiddenCategories.isEmpty, let renderError { failure(renderError) }
             }
         }
@@ -161,5 +151,30 @@ struct DiaryPresetImportPreview: View {
             Text(message).font(.caption).foregroundStyle(.red)
             Button("重试预览") { retry += 1 }
         }
+    }
+}
+
+/// 页码栏与预览共用滚动位置，由导入页放在固定的底部区域。
+struct DiaryPresetImportPageControls: View {
+    let count: Int
+    @Binding var position: Int?
+    private var first: Int { min(max(0, position ?? 0), max(0, count - 2)) }
+
+    var body: some View {
+        HStack {
+            Button { withAnimation(.snappy) { position = first - 1 } } label: {
+                Image(systemName: "chevron.left").frame(minWidth: 44, minHeight: 44)
+            }
+            .disabled(first == 0).accessibilityLabel("上一页")
+            Spacer()
+            Text(count <= 1 ? "第 \(count) 页" : "第 \(first + 1)–\(min(first + 2, count)) 页 / \(count)")
+                .font(.caption.monospacedDigit())
+            Spacer()
+            Button { withAnimation(.snappy) { position = first + 1 } } label: {
+                Image(systemName: "chevron.right").frame(minWidth: 44, minHeight: 44)
+            }
+            .disabled(first >= max(0, count - 2)).accessibilityLabel("下一页")
+        }
+        .buttonStyle(.plain)
     }
 }

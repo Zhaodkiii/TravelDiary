@@ -33,6 +33,25 @@ struct DiaryPresetImportFlowTests {
         #expect(try await library.listBooks().count == 1)
     }
 
+    @Test func creatingWithPartialPhotosKeepsRemainingPresetPhotos() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let package = try fixture(in: base)
+        let replacement = try imageFile(in: base, name: "replacement", size: CGSize(width: 32, height: 48), color: .red)
+        let library = DiaryDocumentStore(ownerID: "partial-creation", baseDirectory: base)
+        let book = try await library.importPreset(package, pageIDs: ["page-1", "page-2", "page-3"],
+            title: "部分替换", operationID: UUID(), replacementPhotos: [replacement])
+        let store = DiaryDocumentStore(ownerID: "partial-creation", baseDirectory: base, bookID: book.id)
+        #expect(book.pages.count == 3)
+        for (index, page) in book.pages.enumerated() {
+            let loaded = try await store.load(page.id)
+            let photo = try #require(loaded.document.replaceablePhotos().first)
+            let asset = try #require(photo.assetID.flatMap { loaded.document.assets[$0] })
+            #expect(asset.pixelSize == (index == 0 ? CGSize(width: 32, height: 48) : CGSize(width: 20, height: 20)))
+            try DiaryDocumentStore.validate(loaded.document)
+        }
+    }
+
     @Test func disabledCategoriesAreExcludedFromSavedCopyAndSourceStaysIntact() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: base) }

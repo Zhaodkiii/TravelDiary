@@ -1,4 +1,5 @@
 /* Privacy permission usage descriptions */
+"NSSpeechRecognitionUsageDescription" = "Allow speech recognition to convert your speech into text when using voice input.";
 "NSCameraUsageDescription" = "Allow camera access to take photos and videos.";
 "NSMicrophoneUsageDescription" = "Allow microphone access to record videos with sound.";
 "NSPhotoLibraryUsageDescription" = "Allow photo library access to choose photos and videos for preview and editing.";

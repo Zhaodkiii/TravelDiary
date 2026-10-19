@@ -4,18 +4,22 @@ import PencilKit
 
 struct DiaryCanvasView: UIViewRepresentable {
     @ObservedObject var session: DiaryEditorSession
+    var compactViewport = false
     var onEdit: () -> Void = {}
     func makeUIView(context: Context) -> DiaryCanvasSurface {
-        let view = DiaryCanvasSurface(); view.session = session; view.onEdit = onEdit; return view
+        let view = DiaryCanvasSurface(); view.session = session; view.compactViewport = compactViewport; view.onEdit = onEdit; return view
     }
     func updateUIView(_ view: DiaryCanvasSurface, context: Context) {
-        view.session = session; view.onEdit = onEdit; view.refresh()
+        view.session = session; view.compactViewport = compactViewport; view.onEdit = onEdit; view.refresh()
     }
 }
 
 /// 每个对象使用独立设计坐标；视口可包含负坐标，装饰伸出照片时仍保留原位置。
 final class DiaryCanvasSurface: UIView {
     weak var session: DiaryEditorSession?
+    var compactViewport = false {
+        didSet { if compactViewport != oldValue { refresh(force: true) } }
+    }
     var onEdit: () -> Void = {}
     private enum Handle: CaseIterable {
         case delete, edit, duplicate, scale, top, bottom, left, right, rotate
@@ -54,7 +58,7 @@ final class DiaryCanvasSurface: UIView {
     private var parentAtStart = CGAffineTransform.identity
     static let controlMargin: CGFloat = 56
     static let toolControlMargin: CGFloat = 8
-    private var contentMargin: CGFloat { session?.layerMode == true ? Self.toolControlMargin : Self.controlMargin }
+    private var contentMargin: CGFloat { compactViewport || session?.layerMode == true ? Self.toolControlMargin : Self.controlMargin }
     private var fit: CGFloat { (bounds.width - contentMargin * 2) / (session?.canvasBounds.width ?? 1000) }
 
     override init(frame: CGRect) {
@@ -217,13 +221,19 @@ final class DiaryCanvasSurface: UIView {
         if !session.inkMode, let layer = displayedSelection, layer.visible,
            let entry = renderCache.entries[layer.id] {
             context.saveGState()
-            context.translateBy(x: contentMargin, y: contentMargin)
-            context.scaleBy(x: fit, y: fit)
-            context.translateBy(x: -session.canvasBounds.minX, y: -session.canvasBounds.minY)
-            context.concatenate(displayMatrix(layer))
-            context.setStrokeColor(UIColor.systemBlue.cgColor)
-            context.setLineWidth(2 / max(0.01, fit * viewportZoom * layer.transform.scale))
-            context.stroke(entry.rect.insetBy(dx: -3, dy: -3))
+            let bounds = entry.rect.insetBy(dx: -3, dy: -3)
+            let matrix = displayMatrix(layer)
+            let corners = [CGPoint(x: bounds.minX, y: bounds.minY),
+                           CGPoint(x: bounds.maxX, y: bounds.minY),
+                           CGPoint(x: bounds.maxX, y: bounds.maxY),
+                           CGPoint(x: bounds.minX, y: bounds.maxY)]
+                .map { screenPoint($0.applying(matrix)) }
+            context.addLines(between: corners)
+            context.closePath()
+            context.setStrokeColor(UIColor.white.cgColor)
+            context.setLineWidth(1.3 / viewportZoom)
+            context.setLineJoin(.round)
+            context.strokePath()
             context.restoreGState()
         }
         drawHandles(in: context)
@@ -261,7 +271,7 @@ final class DiaryCanvasSurface: UIView {
         case .began:
             startPosition = nil
             draggingID = nil
-            // 拖动不能顺便选中素材：必须先单击得到蓝色选框，再从该素材上开始拖动。
+            // 只拖动已选中的素材；选框内的透明区域同样可以起拖，操作手柄优先。
             // began 回调已越过手势识别阈值，用位移还原按下点，避免跨入另一素材后误命中。
             let location = gesture.location(in: self)
             let translation = gesture.translation(in: self)
@@ -269,9 +279,11 @@ final class DiaryCanvasSurface: UIView {
             guard let layer = session.selected, layer.visible, !layer.locked, layer.kind != .frame else { return }
             activeHandle = handleHit(touchOrigin)
             if let handle = activeHandle, [.delete, .edit, .duplicate].contains(handle) { return }
-            guard activeHandle != nil || hit(touchOrigin) == layer.id else { return }
+            let selectionBounds = renderCache.entries[layer.id]?.rect ?? CGRect(origin: .zero, size: layer.size)
+            let localOrigin = designPoint(touchOrigin).applying(displayMatrix(layer).inverted())
+            guard activeHandle != nil || selectionBounds.insetBy(dx: -3, dy: -3).contains(localOrigin) else { return }
             initialLayer = layer
-            initialBounds = renderCache.entries[layer.id]?.rect ?? CGRect(origin: .zero, size: layer.size)
+            initialBounds = selectionBounds
             initialTouch = designPoint(touchOrigin)
             let center = CGPoint(x: initialBounds.midX, y: initialBounds.midY).applying(layer.transform.matrix)
             rotationLast = atan2(initialTouch.y - center.y, initialTouch.x - center.x)
@@ -327,7 +339,9 @@ final class DiaryCanvasSurface: UIView {
     }
     private func handles() -> [(Handle, CGPoint)] {
         guard let session, !session.inkMode, let layer = displayedSelection, layer.visible, !layer.locked else { return [] }
-        guard let b = renderCache.entries[layer.id]?.rect else { return [] }
+        guard let rect = renderCache.entries[layer.id]?.rect else { return [] }
+        // 与选框共用外扩边界，角点和边中点始终落在白线上。
+        let b = rect.insetBy(dx: -3, dy: -3)
         let m = displayMatrix(layer)
         var points: [(Handle, CGPoint)] = [(.delete, CGPoint(x:b.minX,y:b.minY)), (.edit, CGPoint(x:b.maxX,y:b.minY)),
             (.duplicate, CGPoint(x:b.minX,y:b.maxY)), (.scale, CGPoint(x:b.maxX,y:b.maxY))]
@@ -336,7 +350,7 @@ final class DiaryCanvasSurface: UIView {
         } else {
             points += [(.top, CGPoint(x:b.midX,y:b.minY)), (.bottom, CGPoint(x:b.midX,y:b.maxY)),
                        (.left, CGPoint(x:b.minX,y:b.midY)), (.right, CGPoint(x:b.maxX,y:b.midY)),
-                       (.rotate, CGPoint(x:b.maxX + 44 / max(0.01, fit * viewportZoom * layer.transform.scale * layer.transform.stretchX),y:b.midY))]
+                       (.rotate, CGPoint(x:b.maxX + 28 / max(0.01, fit * viewportZoom * layer.transform.scale * layer.transform.stretchX),y:b.midY))]
         }
         if session.layerMode { points.removeAll { $0.0 != .scale && $0.0 != .rotate } }
         if layer.id == session.content.primaryLayerID { points.removeAll { $0.0 == .delete } }
@@ -349,28 +363,49 @@ final class DiaryCanvasSurface: UIView {
     }
     private static let symbols: [String: UIImage] = Dictionary(uniqueKeysWithValues:
         Set(Handle.allCases.map(\.symbol)).compactMap { symbol in
-            UIImage(systemName: symbol).map { (symbol, $0.withTintColor(.systemBlue, renderingMode: .alwaysOriginal)) }
+            UIImage(systemName: symbol).map { (symbol, $0.withTintColor(controlIconColor, renderingMode: .alwaysOriginal)) }
         })
+    private static let controlIconColor = UIColor(white: 0.5, alpha: 1)
+
     private func drawHandles(in context: CGContext) {
-        let radius: CGFloat = 12 / viewportZoom
+        let zoom = viewportZoom
+        let radius: CGFloat = 10 / zoom
+        let matrix = displayedSelection.map { displayMatrix($0) } ?? .identity
         for (handle, point) in handles() {
-            let rect = CGRect(x:point.x-radius,y:point.y-radius,width:radius*2,height:radius*2)
-            context.setFillColor(UIColor.white.cgColor); context.fillEllipse(in:rect)
-            context.setStrokeColor(UIColor.systemBlue.cgColor); context.setLineWidth(1 / viewportZoom); context.strokeEllipse(in:rect)
             context.saveGState()
-            if handle == .left || handle == .right {
-                context.translateBy(x: point.x, y: point.y)
-                context.rotate(by: .pi / 2)
-                context.translateBy(x: -point.x, y: -point.y)
+            context.translateBy(x: point.x, y: point.y)
+            context.setShadow(offset: CGSize(width: 0, height: 1 / zoom),
+                              blur: 3 / zoom, color: UIColor.black.withAlphaComponent(0.18).cgColor)
+            context.setFillColor(UIColor.white.cgColor)
+            switch handle {
+            case .top, .bottom, .left, .right:
+                // 使用变换后的边方向，旋转、翻转、拉伸后短条仍与边框平行。
+                let horizontal = handle == .top || handle == .bottom
+                let angle = horizontal ? atan2(matrix.b, matrix.a) : atan2(matrix.d, matrix.c)
+                context.rotate(by: angle)
+                let rect = CGRect(x: -9 / zoom, y: -3.5 / zoom, width: 18 / zoom, height: 7 / zoom)
+                context.addPath(UIBezierPath(roundedRect: rect, cornerRadius: 3.5 / zoom).cgPath)
+                context.fillPath()
+            default:
+                let rect = CGRect(x: -radius, y: -radius, width: radius * 2, height: radius * 2)
+                context.fillEllipse(in: rect)
+                context.setShadow(offset: .zero, blur: 0, color: nil)
+                let image = Self.symbols[handle.symbol]
+                let availableSize: CGFloat = 11 / zoom
+                if let image {
+                    let scale = availableSize / max(image.size.width, image.size.height)
+                    let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+                    image.draw(in: CGRect(x: -size.width / 2, y: -size.height / 2,
+                                          width: size.width, height: size.height))
+                }
             }
-            Self.symbols[handle.symbol]?.draw(in:rect.insetBy(dx:5 / viewportZoom,dy:5 / viewportZoom))
             context.restoreGState()
         }
         if activeHandle == .rotate, let layer = displayedSelection {
             let point = handles().first { $0.0 == .rotate }?.1 ?? .zero
             (String(format:"%.0f°", layer.transform.rotationDegrees) as NSString).draw(
-                at:CGPoint(x:point.x+18 / viewportZoom,y:point.y),
-                withAttributes:[.font:UIFont.systemFont(ofSize:14 / viewportZoom),.foregroundColor:UIColor.systemBlue])
+                at:CGPoint(x:point.x+18 / zoom,y:point.y),
+                withAttributes:[.font:UIFont.systemFont(ofSize:14 / zoom),.foregroundColor:Self.controlIconColor])
         }
     }
     private func updateHandle(_ handle: Handle, point: CGPoint) {

@@ -520,6 +520,8 @@ struct DiaryPresetImportSheet: View {
     var loadingPages: [RemotePresetPage] = []
     var loadingPreviewSize: CGSize = CGSize(width: 1, height: 1.4)
     var fixedTarget = false
+    var creationFlow = false
+    var externalPath: Binding<NavigationPath>? = nil
     let completed: (DiaryBook) -> Void
     private let downloads = PresetDownloadManager.shared
     @StateObject private var downloadObservation = PresetDownloadObservation()
@@ -531,8 +533,10 @@ struct DiaryPresetImportSheet: View {
     @State private var replacementPhotos: [URL] = []
     @State private var replacementFill: DiaryPhotoSlot.Fill = .cover
     @State private var excludedPageIDs: Set<String> = []
+    @State private var previewPage: Int? = 0
     @State private var hiddenCategories: Set<DiaryLayerSemanticKind> = []
-    @State private var preparationDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("preset-photos-" + UUID().uuidString)
+    @State private var temporaryFiles = DiaryPresetPhotoTemporaryFiles()
+    private var preparationDirectory: URL { temporaryFiles.directory }
     @Environment(\.dismiss) private var dismiss
     @State private var books: [DiaryBook] = []
     @State private var targetID: UUID?
@@ -558,18 +562,12 @@ struct DiaryPresetImportSheet: View {
     private var importTitle: String { wholeBook ? "添加整本" : pageIDs.count == 1 ? "添加单页" : "添加双页" }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            previewStep
-                .navigationDestination(for: DiaryPresetImportRoute.self) { route in
-                    switch route {
-                    case .photos: photoStep
-                    case .target: targetStep
-                    }
-                }
+        Group {
+            if externalPath != nil { navigationContent }
+            else { NavigationStack(path: $path) { navigationContent } }
         }
         .tint(DiaryLibraryStyle.accent)
         .interactiveDismissDisabled(busy)
-        .onDisappear { cleanupPhotos() }
         .onChange(of: downloadObservation.job?.status) { _, _ in
             if let downloadID { readyPackage = downloads.preparedPackage(downloadID) }
         }
@@ -579,23 +577,33 @@ struct DiaryPresetImportSheet: View {
         .task { await initialize() }
     }
 
+    private var navigationContent: some View {
+        previewStep
+            .navigationDestination(for: DiaryPresetImportRoute.self) { route in
+                switch route {
+                case .photos: photoStep
+                case .target: targetStep
+                }
+            }
+    }
+
+    private func advance(to route: DiaryPresetImportRoute) {
+        withAnimation {
+            if let externalPath { externalPath.wrappedValue.append(route) }
+            else { path.append(route) }
+        }
+    }
+
     private var previewStep: some View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("第 1 步 / \(finishesAtPhotos ? 2 : 3) · 预览并选择页面")
+                    Text("第 \(creationFlow ? 2 : 1) 步 / \(creationFlow ? 3 : finishesAtPhotos ? 2 : 3) · 预览并选择页面")
                         .font(.subheadline).foregroundStyle(.secondary)
                     DiaryPresetImportPreview(package: availablePackage, pageIDs: pageIDs,
                         excludedPageIDs: $excludedPageIDs, hiddenCategories: hiddenCategories,
-                        loadingPages: loadingPages, loadingSize: loadingPreviewSize)
-                        .frame(height: max(280, min(560, geometry.size.height - (wholeBook ? 150 : 70))))
-                    if wholeBook {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("手帐名称").font(.subheadline.weight(.medium))
-                            TextField("手帐名称", text: $title).textFieldStyle(.roundedBorder)
-                            Text("将所选页面创建为新的手帐本").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
+                        scrollPage: $previewPage, loadingPages: loadingPages, loadingSize: loadingPreviewSize)
+                        .frame(height: max(280, min(560, geometry.size.height - 70)))
                     if selectedPageIDs.isEmpty {
                         Text("请至少选择一页后继续。").font(.caption).foregroundStyle(.secondary)
                     }
@@ -604,24 +612,40 @@ struct DiaryPresetImportSheet: View {
             }
             .background(DiaryLibraryStyle.background)
         }
-        .safeAreaInset(edge: .bottom) {
-            Group {
-                if availablePackage != nil {
-                    DiaryPreviewContentPanel(hiddenCategories: $hiddenCategories, affectsImport: true)
-                } else {
-                    downloadFeedback
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 12) {
+                    DiaryPresetImportPageControls(count: pageIDs.count, position: $previewPage)
+                    if wholeBook {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("手帐名称").font(.subheadline.weight(.medium))
+                            TextField("手帐名称", text: $title).textFieldStyle(.roundedBorder)
+                            Text("将所选页面创建为新的手帐本").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Group {
+                        if availablePackage != nil {
+                            DiaryPreviewContentPanel(hiddenCategories: $hiddenCategories, affectsImport: true)
+                        } else { downloadFeedback }
+                    }
+                }
+                .padding(.horizontal, 16).padding(.top, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                DiaryImportFloatingActions {
+                    Button { error = nil; advance(to: .photos) } label: {
+                        Text("下一步").frame(maxWidth: .infinity)
+                    }
+                    .disabled(!initialized || availablePackage == nil || selectedPageIDs.isEmpty || (wholeBook && !validName))
                 }
             }
-            .padding(.horizontal, 16).padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
             .background(.regularMaterial)
         }
-        .navigationTitle(importTitle)
+        .navigationTitle(creationFlow ? "预览手帐" : importTitle)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("下一步") { error = nil; path.append(.photos) }
-                    .disabled(!initialized || availablePackage == nil || selectedPageIDs.isEmpty || (wholeBook && !validName))
+            if !creationFlow {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
             }
         }
     }
@@ -668,14 +692,19 @@ struct DiaryPresetImportSheet: View {
         }
         .disabled(busy)
         .navigationTitle("选择帐本")
+        .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(busy)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button(busy ? "取消导入" : "取消") { if busy { cancellation.cancel() } else { dismiss() } }
             }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("添加") { Task { await runImport() } }
-                    .disabled(busy || selectedPageIDs.isEmpty || (targetID == nil && !validName))
+        }
+        .safeAreaInset(edge: .bottom) {
+            DiaryImportFloatingActions {
+                Button { Task { await runImport() } } label: {
+                    Text("添加").frame(maxWidth: .infinity)
+                }
+                .disabled(busy || selectedPageIDs.isEmpty || (targetID == nil && !validName))
             }
         }
     }
@@ -685,11 +714,11 @@ struct DiaryPresetImportSheet: View {
             DiaryBatchPhotoSheet(store: DiaryDocumentStore(ownerID: ownerID), preset: availablePackage,
                 presetPageIDs: selectedPageIDs, hiddenPresetCategories: hiddenCategories,
                 preparationDirectory: preparationDirectory,
-                finishesImport: finishesAtPhotos, embedded: true, onPrepared: { files, fill in
+                finishesImport: finishesAtPhotos, embedded: true, creationFlow: creationFlow, onPrepared: { files, fill in
                     for old in replacementPhotos { try? FileManager.default.removeItem(at: old) }
                     replacementPhotos = files; replacementFill = fill; operationID = UUID(); error = nil
                     if finishesAtPhotos { Task { await runImport() } }
-                    else { path.append(.target) }
+                    else { advance(to: .target) }
                 })
                 .id(selectionIdentity)
                 .disabled(busy)
@@ -807,5 +836,32 @@ struct DiaryPresetPagePicker: View {
                 })
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
         }
+    }
+}
+
+private final class DiaryPresetPhotoTemporaryFiles {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("preset-photos-" + UUID().uuidString)
+    deinit { try? FileManager.default.removeItem(at: directory) }
+}
+
+/// 首页创建和模板导入共用的底部悬浮操作区；由调用页通过 safeAreaInset 预留空间。
+struct DiaryImportFloatingActions<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(spacing: 10, content: content)
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .controlSize(.large)
+            .tint(DiaryLibraryStyle.accent)
+            .padding(12)
+            .frame(maxWidth: .infinity)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 28))
+            .overlay {
+                RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(0.35), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
     }
 }

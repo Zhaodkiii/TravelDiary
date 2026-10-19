@@ -43,16 +43,19 @@ struct DiaryLibrarySearch: View {
 struct DiaryLibraryChip: View {
     let title: String
     let selected: Bool
+    var compact = false
     let action: () -> Void
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                if selected { Image(systemName: "checkmark").font(.caption.weight(.semibold)) }
-                Text(title).font(.subheadline.weight(selected ? .semibold : .regular))
+                if selected { Image(systemName: "checkmark").font((compact ? Font.caption2 : .caption).weight(.semibold)) }
+                Text(title).font((compact ? Font.caption : .subheadline).weight(selected ? .semibold : .regular))
             }
-            .padding(.horizontal, 14).frame(minHeight: 44)
+            .padding(.horizontal, compact ? 10 : 14).frame(minHeight: compact ? 30 : 44)
             .foregroundStyle(selected ? DiaryLibraryStyle.accent : DiaryLibraryStyle.secondary)
             .background(selected ? DiaryLibraryStyle.accent.opacity(0.12) : DiaryLibraryStyle.surface, in: Capsule())
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 }

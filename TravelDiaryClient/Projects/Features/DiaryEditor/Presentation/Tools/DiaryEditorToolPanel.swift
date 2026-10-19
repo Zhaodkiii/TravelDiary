@@ -21,25 +21,38 @@ struct DiaryEditorToolPanel<Content: View>: View {
             }
             .accessibilityLabel(expanded ? "收起操作面板" : "展开操作面板")
             if expanded { content().padding(.bottom, 8) }
-            HStack {
-                footerButton("返回", symbol: "chevron.left", action: onBack)
-                Spacer()
-                Text(title).font(.headline)
-                Spacer()
-                footerButton("完成", symbol: "checkmark", action: onDone)
-            }
-            .padding(.horizontal, 20).padding(.bottom, 8)
+            DiaryEditorToolFooter(title: title, onBack: onBack, onDone: onDone)
         }
-        .foregroundStyle(.primary)
-        .background(.regularMaterial)
-        .tint(.purple)
+        .foregroundStyle(DiaryLibraryStyle.ink)
+        .background(DiaryLibraryStyle.background)
+        .tint(DiaryLibraryStyle.accent)
+    }
+}
+
+/// Shared by inline layer tools and native material sheets.
+struct DiaryEditorToolFooter: View {
+    let title: String
+    let onBack: () -> Void
+    let onDone: () -> Void
+
+    var body: some View {
+        HStack {
+            footerButton("返回", symbol: "chevron.left", action: onBack)
+            Spacer()
+            Text(title).font(.headline)
+            Spacer()
+            footerButton("完成", symbol: "checkmark", action: onDone)
+        }
+        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
+        .foregroundStyle(DiaryLibraryStyle.ink)
+        .background(DiaryLibraryStyle.background)
     }
 
     private func footerButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol).font(.title2)
                 .frame(width: 48, height: 48)
-                .background(Color(uiColor: .systemBackground), in: Circle())
+                .background(DiaryLibraryStyle.surface, in: Circle())
         }.accessibilityLabel(title)
     }
 }

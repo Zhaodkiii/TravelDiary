@@ -272,6 +272,7 @@ private struct RemotePresetImportDestination: View {
                             }
                         }.padding()
                     }.navigationTitle(wholeBook ? "添加整本" : pageIDs.count == 1 ? "添加单页" : "添加双页")
+        .navigationBarTitleDisplayMode(.inline)
                 }
             }
         }.task(id: retry) {

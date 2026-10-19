@@ -5,8 +5,10 @@ import PhotosUI
 struct DiaryContextToolbar: View {
     @ObservedObject var session: DiaryEditorSession
     let onPhotos: () -> Void
+    let onCamera: () -> Void
     let onDrawing: () -> Void
     let onLayers: () -> Void
+    let onStickers: () -> Void
     let onOpenObject: () -> Void
     @State private var panel: Panel?
     @State private var target: DiaryLayer?
@@ -17,7 +19,7 @@ struct DiaryContextToolbar: View {
     @State private var importing = false
 
     private enum Panel: String, Identifiable {
-        case background, stickers, replacement, backgroundReplacement, photos
+        case background, replacement, backgroundReplacement, photos
         case opacity, arrange, placement, frame, editText, font, fontSize, textColor, typography
         var id: Self { self }
     }
@@ -37,8 +39,10 @@ struct DiaryContextToolbar: View {
             HStack(spacing: 0) {
                 Menu {
                     Button(action: onPhotos) { Label("照片（可多选）", systemImage: "photo.on.rectangle") }
+                    Button(action: onCamera) { Label("相机", systemImage: "camera") }
+                        .accessibilityIdentifier("diary.add.camera")
                     Button { target = nil; panel = .editText } label: { Label("文字", systemImage: "textformat") }
-                    Button { panel = .stickers } label: { Label("贴纸", systemImage: "face.smiling") }
+                    Button(action: onStickers) { Label("贴纸", systemImage: "face.smiling") }
                     Button { panel = .background } label: { Label("背景", systemImage: "photo.fill") }
                     Button(action: onDrawing) { Label("画笔", systemImage: "pencil.tip") }
                 } label: {
@@ -63,7 +67,7 @@ struct DiaryContextToolbar: View {
                 }
             }
         }
-        .padding(.vertical, 8).foregroundStyle(.primary).background(.regularMaterial)
+        .padding(.vertical, 8).foregroundStyle(DiaryLibraryStyle.ink).background(DiaryLibraryStyle.background)
         .disabled(session.busy || importing)
         .sheet(item: $panel) { panel in panelContent(panel) }
         .fullScreenCover(item: $cropTarget) { layer in DiaryCropSheet(session: session, layer: layer) }
@@ -124,7 +128,6 @@ struct DiaryContextToolbar: View {
         switch panel {
         case .background:
             DiaryBackgroundPanel(session: session)
-        case .stickers: MaterialLibraryBrowser(session: session)
         case .replacement: MaterialLibraryBrowser(session: session, replacingID: target?.id)
         case .backgroundReplacement: MaterialLibraryBrowser(session: session, replacingID: target?.id, type: "background")
         case .photos:

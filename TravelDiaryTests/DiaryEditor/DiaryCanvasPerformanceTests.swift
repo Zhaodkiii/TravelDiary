@@ -57,7 +57,7 @@ struct DiaryCanvasPerformanceTests {
         let session = session(document, images)
         func toolbarHeight() -> CGFloat {
             let host = UIHostingController(rootView: DiaryContextToolbar(session: session,
-                onPhotos: {}, onDrawing: {}, onLayers: {}, onOpenObject: {}))
+                onPhotos: {}, onCamera: {}, onDrawing: {}, onLayers: {}, onStickers: {}, onOpenObject: {}))
             return host.sizeThatFits(in: CGSize(width: 390, height: 1000)).height
         }
         let height = toolbarHeight()

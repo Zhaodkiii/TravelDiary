@@ -6,6 +6,29 @@ import SafariServices
 
 @MainActor
 struct LoginPresentationTests {
+    @Test func automaticGuestEntryIsConsumedAcrossRelaunchesAndLogout() throws {
+        let suite = "InitialGuestEntryTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = InitialGuestEntryPolicy(defaults: defaults)
+        #expect(first.canAttemptAutomaticEntry)
+        #expect(first.consumeAutomaticEntryIfNeeded())
+        #expect(!first.canAttemptAutomaticEntry)
+        // 新策略实例模拟登录页重建或重启；即使首次请求失败也不重试。
+        #expect(!InitialGuestEntryPolicy(defaults: defaults).consumeAutomaticEntryIfNeeded())
+        first.markExistingSession()
+        #expect(!InitialGuestEntryPolicy(defaults: defaults).consumeAutomaticEntryIfNeeded())
+    }
+
+    @Test func restoredSessionDisablesFirstGuestEntry() throws {
+        let suite = "RestoredGuestEntryTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let policy = InitialGuestEntryPolicy(defaults: defaults)
+        policy.markExistingSession()
+        #expect(!InitialGuestEntryPolicy(defaults: defaults).consumeAutomaticEntryIfNeeded())
+    }
+
     @Test func legalDocumentIdentityIsStableAndSafariCloseFinishesPresentation() throws {
         let url = try #require(URL(string: "https://example.com/terms"))
         #expect(IdentifiableURL(url: url).id == IdentifiableURL(url: url).id)

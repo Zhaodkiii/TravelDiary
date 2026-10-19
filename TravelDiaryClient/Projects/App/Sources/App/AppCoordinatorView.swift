@@ -20,6 +20,12 @@ struct AppCoordinatorView: View {
         .task {
             networkMonitor.start()
         }
+        .onChange(of: lifecycle.sessionState, initial: true) { _, state in
+            if case .signedIn = state {
+                // 恢复已有账号也算已进入过应用，退出登录后不再自动创建游客会话。
+                InitialGuestEntryPolicy().markExistingSession()
+            }
+        }
     }
 
     @ViewBuilder
@@ -48,19 +54,31 @@ struct AppCoordinatorView: View {
 private struct SignedOutAuthCoordinatorView: View {
     let dependencies: AppCoordinatorDependencies
     @StateObject private var viewModel: LoginViewModel
+    @State private var showsLogin: Bool
 
     init(dependencies: AppCoordinatorDependencies) {
         self.dependencies = dependencies
         _viewModel = StateObject(wrappedValue: dependencies.makeLoginViewModel())
+        // 在构造登录页之前确定入口；后续退出登录直接展示登录页。
+        _showsLogin = State(initialValue: !InitialGuestEntryPolicy().canAttemptAutomaticEntry)
     }
 
     var body: some View {
-        LoginView(viewModel: viewModel, presentsInitialLegalPromptOnAppear: false)
-            .task {
-                await dependencies.lifecycle.handleSignedOutTask()
-                guard !Task.isCancelled else { return }
-                // 游客登录由欢迎页明确触发，避免绕过协议与登录选择。
+        Group {
+            if showsLogin {
+                LoginView(viewModel: viewModel, presentsInitialLegalPromptOnAppear: false)
+            } else {
+                AppLaunchScreenView()
             }
+        }
+        .task {
+            await dependencies.lifecycle.handleSignedOutTask()
+            guard !Task.isCancelled else { return }
+            let authenticated = await viewModel.signInWithDeviceAutomaticallyIfNeeded()
+            guard !Task.isCancelled else { return }
+            // 成功后继续显示启动画面，直到根路由切到账号准备/书架；失败才创建登录页。
+            if !authenticated { showsLogin = true }
+        }
     }
 }
 

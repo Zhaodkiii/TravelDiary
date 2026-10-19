@@ -38,7 +38,7 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
     func updateUIView(_ scroll: UIScrollView, context: Context) {
         let coordinator = context.coordinator
         // 内部画布自行观察 Session；只有结构、尺寸或会话改变才替换宿主树。
-        if refreshContent || coordinator.sessionID != sessionID || coordinator.inkMode != inkMode || coordinator.size != contentSize {
+        if refreshContent || coordinator.sessionID != sessionID || coordinator.inkMode != inkMode || coordinator.size != contentSize || coordinator.toolViewport != toolViewport {
             coordinator.host.rootView = content()
             coordinator.sessionID = sessionID; coordinator.inkMode = inkMode
         }

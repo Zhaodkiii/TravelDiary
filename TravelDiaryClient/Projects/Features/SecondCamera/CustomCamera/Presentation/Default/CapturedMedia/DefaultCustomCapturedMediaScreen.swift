@@ -50,7 +50,7 @@ struct DefaultCustomCapturedMediaScreen: CustomCapturedMediaScreen {
         .overlay(alignment: .topLeading) {
             createRetakeButton()
                 .padding(.horizontal, 12)
-                .padding(.bottom, 8)
+                .padding(.top, 8)
         }
         .overlay(alignment: .bottom) {
             VStack(spacing: 0) {
@@ -66,9 +66,12 @@ struct DefaultCustomCapturedMediaScreen: CustomCapturedMediaScreen {
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
         }
+        // 仅背景铺满屏幕；关闭按钮和底部工具栏沿用容器的系统安全区。
         .background(Color(.mijickBackgroundPrimary).ignoresSafeArea())
-        .safeAreaInset(edge: .bottom) {
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             createButtons()
+                .padding(.top, 8)
+                .padding(.bottom, 12)
         }
         .animation(.mSpring, value: isInitialized)
         .onAppear {

@@ -80,17 +80,17 @@ struct MaterialLibraryBrowser: View {
     var templateVersion: Int? = nil
     var type = "sticker"
     @Environment(\.dismiss) private var dismiss
-    @State private var libraries: [CloudMaterialLibrary] = []
-    @State private var selected: String = ""
-    @State private var scope = "all"
-    @State private var sourceTemplates: Set<String> = []
+    /// The editor keeps its native sheet open for consecutive additions.
+    var keepsOpenAfterAdding = false
+    static let compactHeight: CGFloat = 260
+    static let compactDetent: PresentationDetent = .height(compactHeight)
+    @State private var sheetDetent: PresentationDetent = compactDetent
     @State private var localFavorites: [String] = []
     @State private var localRecent: [String] = []
     @State private var progress: Double = 0
     @State private var addition: Task<Void, Never>?
     @State private var generation = UUID()
     @State private var query = ""
-    @State private var onlyFavorites = false
     @State private var kind = ""
     @State private var subcategory = ""
     @State private var taxonomy: [MaterialCategory] = []
@@ -102,159 +102,192 @@ struct MaterialLibraryBrowser: View {
     @State private var adding = false
     @State private var preview: CloudMaterial?
     @State private var requestID = UUID()
-    private var current: CloudMaterialLibrary? { libraries.first { $0.id == selected } }
-    private var displayedLibraries: [CloudMaterialLibrary] { libraries.filter { (scope != "favorites" || $0.is_favorited) && (scope != "current" || sourceTemplates.contains($0.template_id)) } }
-    private var categories: [(String, String)] { [("", "全部")] + taxonomy.filter { ($0.kind == "background") == (type == "background") }.map { ($0.kind, $0.title) } }
+    private var isLocal: Bool { kind == "builtin" }
+    private var title: String { type == "background" ? "背景" : "贴纸" }
+    private var categories: [(String, String)] {
+        var result = [("", "全部")] + taxonomy
+            .filter { ($0.kind == "background") == (type == "background") }
+            .map { ($0.kind, $0.title) }
+        if type == "sticker", session != nil { result.append(("builtin", "内置")) }
+        return result
+    }
+    private var filterKey: String { query + "|" + kind + "|" + subcategory }
 
-    private var filterKey: String { selected + "|" + query + "|" + kind + "|" + scope + "|" + String(onlyFavorites) + "|" + subcategory }
     var body: some View {
-        VStack(spacing: 12) {
-            HStack { Text(type == "background" ? "背景库" : "贴纸库").font(.headline); Spacer(); Button("关闭") { dismiss() } }.padding(.horizontal)
-            Picker("来源", selection: $scope) { Text("发现").tag("all"); Text("我的库").tag("favorites"); if session != nil { Text("当前手帐").tag("current") }; if type == "sticker" && session != nil { Text("内置").tag("local") } }.pickerStyle(.segmented).padding(.horizontal)
-            ScrollView(.horizontal) {
-                HStack { if scope != "local" { Button("全部库") { selected = "" } }; ForEach(displayedLibraries) { lib in Button { selected = lib.id } label: {
-                    VStack { Text(lib.title); Text("\(lib.favorite_count) 人收藏 · \(lib.count) 项").font(.caption) }
-                        .padding(8).background(selected == lib.id ? Color.accentColor.opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-                } } }.padding(.horizontal)
-            }
-            if scope != "local" {
-            if let lib = current {
-                Button(lib.is_favorited ? "已收藏此库" : "收藏此库") { Task { await favoriteLibrary(lib) } }
-
-            }
-                if scope != "local" {
-                    ScrollView(.horizontal) { HStack { ForEach(categories, id: \.0) { entry in
-                        Button(entry.1) { kind = entry.0; subcategory = "" }.buttonStyle(.bordered).tint(kind == entry.0 ? .accentColor : .gray)
-                    } }.padding(.horizontal) }
-                }
-            }
-            Toggle("只看收藏单张", isOn: $onlyFavorites).padding(.horizontal)
-            if let category = taxonomy.first(where: { $0.kind == (type == "background" ? "background" : kind) }), scope != "local" {
-                ScrollView(.horizontal) { HStack {
-                    Button("全部子类") { subcategory = "" }
-                    ForEach(category.subcategories) { sub in Button(sub.title) { subcategory = sub.id }.buttonStyle(.bordered).tint(subcategory == sub.id ? .accentColor : .gray) }
-                }.padding(.horizontal) }
-            }
-            TextField("搜索名称、别名、关键词", text: $query).textFieldStyle(.roundedBorder).padding(.horizontal)
-            if let error { Text(error).foregroundStyle(.red); Button("重试") { Task { await loadLibraries() } } }
-            ScrollView {
-                if scope == "local" {
-                    Picker("内置范围", selection: $kind) { Text("全部").tag(""); Text("收藏").tag("favorite"); Text("最近").tag("recent") }.pickerStyle(.segmented).padding(.horizontal)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 90))]) {
-                        ForEach(DiaryStickerCatalog.items.filter { item in
-                            (query.isEmpty || (item.title + item.category).localizedCaseInsensitiveContains(query)) &&
-                            (kind != "favorite" || localFavorites.contains(item.id)) && (kind != "recent" || localRecent.contains(item.id))
-                        }) { item in
-                            Button { addition = Task { await addLocal(item) } } label: {
-                                VStack { if let image = item.image() { Image(uiImage: image).resizable().scaledToFit().frame(height: 80) }; Text(item.title).font(.caption) }
-                            }.contextMenu { Button(localFavorites.contains(item.id) ? "取消收藏" : "收藏") {
-                                if localFavorites.contains(item.id) { localFavorites.removeAll { $0 == item.id } } else { localFavorites.append(item.id) }
-                                saveLocalPreferences()
-                            } }
-                        }
-                    }.padding(.horizontal)
-                } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 90))]) {
-                    ForEach(items) { item in
-                        VStack(spacing: 6) {
-                        Button { if session == nil { preview = item } else { addition = Task { await add(item) } } } label: {
-                            VStack {
-                                MaterialThumbnail(item: item)
-                                    .frame(height: 90)
-                                    .overlay {
-                                        if adding && pausedItem?.id == item.id {
-                                            VStack(spacing: 4) {
-                                                ProgressView(value: progress)
-                                                Text(progress >= 1 ? "正在添加…" : "下载中 \(Int(progress * 100))%")
-                                                    .font(.caption2)
-                                            }.padding(8).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-                                        }
-                                    }
-                                Text(item.name).font(.caption).lineLimit(2)
-                                if item.is_favorited { Image(systemName: "heart.fill").foregroundStyle(.pink) }
-                            }.frame(maxWidth: .infinity).padding(6)
-                        }.buttonStyle(.plain).disabled(adding).contextMenu {
-                            Button(item.is_favorited ? "取消收藏" : "收藏贴纸") { Task { await favoriteItem(item) } }
-                            Button("查看详情") { preview = item }
-                        }
-                        if pausedItem?.id == item.id {
-                            if adding {
-                                HStack {
-                                    Button("暂停") { generation = UUID(); addition?.cancel(); adding = false }
-                                    Button("取消") { generation = UUID(); addition?.cancel(); adding = false; pausedItem = nil }
-                                }.font(.caption)
-                            } else {
-                                Button("继续添加") { addition = Task { await add(item) } }.font(.caption)
-                            }
-                        }
+        VStack(spacing: 6) {
+            DiaryLibrarySearch(text: $query, prompt: "搜索\(title)")
+                .padding(.horizontal, 16).padding(.top, 8)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(categories, id: \.0) { entry in
+                        DiaryLibraryChip(title: entry.1, selected: kind == entry.0, compact: true) {
+                            kind = entry.0; subcategory = ""
                         }
                     }
-                }.padding(.horizontal)
-                if cursor != nil { Button("加载更多") { Task { await loadItems(more: true) } }.disabled(loading) }
-                if loading { ProgressView() }
-                if !loading && items.isEmpty { ContentUnavailableView("暂无素材", systemImage: "square.grid.2x2", description: Text("选择素材库或调整搜索条件")) }
+                }.padding(.horizontal, 16)
+            }.frame(height: 44)
+            if let category = taxonomy.first(where: { $0.kind == kind }), !category.subcategories.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        DiaryLibraryChip(title: "全部", selected: subcategory.isEmpty, compact: true) { subcategory = "" }
+                        ForEach(category.subcategories) { sub in
+                            DiaryLibraryChip(title: sub.title, selected: subcategory == sub.id, compact: true) { subcategory = sub.id }
+                        }
+                    }.padding(.horizontal, 16)
+                }.frame(height: 44)
             }
+            if let error {
+                DiaryLibraryNotice(message: error) {
+                    Task { await loadCategories(); await loadItems(more: false) }
+                }.padding(.horizontal, 16)
             }
-        }.padding(.vertical)
-        .presentationDetents([.medium, .large])
+            ScrollView {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), spacing: 12) {
+                    if isLocal {
+                        ForEach(DiaryStickerCatalog.items.filter {
+                            query.isEmpty || ($0.title + $0.category).localizedCaseInsensitiveContains(query)
+                        }) { item in
+                            Button { addition = Task { await addLocal(item) } } label: {
+                                VStack(spacing: 6) {
+                                    if let image = item.image() {
+                                        Image(uiImage: image).resizable().scaledToFit()
+                                            .frame(height: 84).frame(maxWidth: .infinity)
+                                            .padding(6)
+                                            .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+                                    }
+                                    Text(item.title).font(.caption2).lineLimit(1)
+                                }
+                            }.buttonStyle(.plain).disabled(adding)
+                            .contextMenu {
+                                Button(localFavorites.contains(item.id) ? "取消收藏" : "收藏") {
+                                    if localFavorites.contains(item.id) { localFavorites.removeAll { $0 == item.id } }
+                                    else { localFavorites.append(item.id) }
+                                    saveLocalPreferences()
+                                }
+                            }
+                        }
+                    } else {
+                        ForEach(items) { item in
+                            materialCell(item)
+                        }
+                    }
+                }.padding(.horizontal, 16)
+                if !isLocal {
+                    if cursor != nil {
+                        Button("加载更多") { Task { await loadItems(more: true) } }
+                            .disabled(loading).padding(.vertical, 12)
+                    }
+                    if loading { ProgressView().padding() }
+                    if !loading && items.isEmpty {
+                        ContentUnavailableView("暂无素材", systemImage: "square.grid.2x2",
+                            description: Text("试试其他分类或搜索词"))
+                    }
+                }
+            }
+            .scrollDismissesKeyboard(.interactively)
+            DiaryEditorToolFooter(title: title, onBack: { dismiss() }, onDone: { dismiss() })
+        }
+        .interactiveDismissDisabled(true) // 重点：禁止下拉关闭
+        .foregroundStyle(DiaryLibraryStyle.ink)
+        .tint(DiaryLibraryStyle.accent)
+        .background(DiaryLibraryStyle.background)
+        // The shared footer supplies the clearance above the home indicator.
+        // Extend the layout as well as its background to avoid a second bottom inset.
+        .ignoresSafeArea(.container, edges: .bottom)
+        .presentationBackground(DiaryLibraryStyle.background)
+        .presentationDetents([Self.compactDetent, .fraction(0.66)], selection: $sheetDetent)
+        .presentationDragIndicator(.visible)
+        .presentationBackgroundInteraction(keepsOpenAfterAdding ? .enabled(upThrough: Self.compactDetent) : .disabled)
         .task {
             if let session {
                 localFavorites = UserDefaults.standard.stringArray(forKey: session.store.stickerPreferenceKey + ".favorites") ?? []
                 localRecent = UserDefaults.standard.stringArray(forKey: session.store.stickerPreferenceKey + ".recent") ?? []
-                if let book = try? await session.store.loadBook() { sourceTemplates = Set(book.pages.compactMap { $0.presetSource?.bookID }) }
             }
-            await loadLibraries()
+            await loadCategories()
         }
         .onDisappear { generation = UUID(); addition?.cancel() }
         .task(id: filterKey) {
             do { try await Task.sleep(for: .milliseconds(300)); await loadItems(more: false) } catch { }
         }
-        .onChange(of: scope) { _, _ in kind = ""; selected = displayedLibraries.first?.id ?? "" }
-        .sheet(item: $preview) { item in VStack {
-            MaterialThumbnail(item: item)
-            Text(item.name); Text("\(item.favorite_count) 人收藏"); Text(item.keywords.joined(separator: " · ")).font(.caption)
-            Button(item.is_favorited ? "取消收藏" : "收藏") { Task { await favoriteItem(item); preview = nil } }
-        }.padding().presentationDetents([.medium]) }
+        .sheet(item: $preview) { item in
+            VStack(spacing: 12) {
+                MaterialThumbnail(item: item)
+                Text(item.name)
+                Text("\(item.favorite_count) 人收藏")
+                Text(item.keywords.joined(separator: " · ")).font(.caption)
+                Button(item.is_favorited ? "取消收藏" : "收藏") {
+                    Task { await favoriteItem(item); preview = nil }
+                }
+            }.padding().presentationDetents([.medium])
+        }
     }
-    private func loadLibraries() async {
+
+    private func materialCell(_ item: CloudMaterial) -> some View {
+        VStack(spacing: 6) {
+            Button {
+                if session == nil { preview = item }
+                else { addition = Task { await add(item) } }
+            } label: {
+                VStack(spacing: 6) {
+                    MaterialThumbnail(item: item)
+                        .frame(height: 84).frame(maxWidth: .infinity).padding(6)
+                        .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(alignment: .topTrailing) {
+                            if item.is_favorited {
+                                Image(systemName: "heart.fill").font(.caption2)
+                                    .foregroundStyle(DiaryLibraryStyle.accent).padding(5)
+                            }
+                        }
+                        .overlay {
+                            if adding && pausedItem?.id == item.id {
+                                VStack(spacing: 4) {
+                                    ProgressView(value: progress)
+                                    Text(progress >= 1 ? "正在添加…" : "\(Int(progress * 100))%")
+                                        .font(.caption2)
+                                }.padding(8).background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+                    Text(item.name).font(.caption2).lineLimit(1)
+                }
+            }.buttonStyle(.plain).disabled(adding)
+            .contextMenu {
+                Button(item.is_favorited ? "取消收藏" : "收藏贴纸") { Task { await favoriteItem(item) } }
+                Button("查看详情") { preview = item }
+            }
+            if pausedItem?.id == item.id {
+                if adding {
+                    HStack {
+                        Button("暂停") { generation = UUID(); addition?.cancel(); adding = false }
+                        Button("取消") { generation = UUID(); addition?.cancel(); adding = false; pausedItem = nil }
+                    }.font(.caption2)
+                } else {
+                    Button("继续添加") { addition = Task { await add(item) } }.font(.caption2)
+                }
+            }
+        }
+    }
+
+    private func loadCategories() async {
         do {
-            let suffix = (templateID.map { "&template=\($0)" } ?? "") + (templateVersion.map { "&template_version=\($0)" } ?? "")
             taxonomy = try await MaterialCatalogRepository.shared.request("categories/")
-            libraries = try await MaterialCatalogRepository.shared.request("libraries/?type=\(type)" + suffix)
-            if !libraries.contains(where: { $0.id == selected }) { selected = libraries.first?.id ?? "" }
-            error = nil
         } catch { self.error = error.localizedDescription }
     }
     private func loadItems(more: Bool) async {
-        guard scope != "local" else { items = []; cursor = nil; return }
-        let lib = current
+        guard !isLocal else { items = []; cursor = nil; loading = false; return }
         let token = UUID(); requestID = token; loading = true
         if !more { items = []; cursor = nil }
         defer { if requestID == token { loading = false } }
         do {
-            var components = URLComponents(); components.queryItems = [URLQueryItem(name:"version",value:String(lib?.version ?? 0)),URLQueryItem(name:"q",value:query),URLQueryItem(name:"kind",value:kind),URLQueryItem(name:"subcategory",value:subcategory),URLQueryItem(name:"after",value:String(more ? cursor ?? 0 : 0))]
-            if onlyFavorites { components.queryItems?.append(URLQueryItem(name: "favorites", value: "1")) }
+            var components = URLComponents(); components.queryItems = [URLQueryItem(name:"version",value:"0"),URLQueryItem(name:"q",value:query),URLQueryItem(name:"kind",value:kind),URLQueryItem(name:"subcategory",value:subcategory),URLQueryItem(name:"after",value:String(more ? cursor ?? 0 : 0))]
             components.queryItems?.append(URLQueryItem(name: "type", value: type))
-            if scope == "favorites" { components.queryItems?.append(URLQueryItem(name: "scope", value: "libraries")) }
             if let templateID { components.queryItems?.append(URLQueryItem(name: "template", value: templateID)) }
-            if scope == "current", lib == nil {
-                let ids = sourceTemplates.filter { UUID(uuidString: $0) != nil }
-                if ids.isEmpty { items = []; cursor = nil; return }
-                components.queryItems?.append(URLQueryItem(name: "template_ids", value: ids.sorted().joined(separator: ",")))
-            }
-            let path = lib.map { "libraries/\($0.id)/items/?" } ?? "items/?"
+            if let templateVersion { components.queryItems?.append(URLQueryItem(name: "template_version", value: String(templateVersion))) }
+            let path = "items/?"
             let page: MaterialPage = try await MaterialCatalogRepository.shared.request(path + (components.percentEncodedQuery ?? ""))
             try Task.checkCancellation()
             guard token == requestID else { return }
             items = more ? items + page.items : page.items; cursor = page.next; error = nil
         } catch { if token == requestID && !Task.isCancelled { self.error = error.localizedDescription } }
-    }
-    private func favoriteLibrary(_ lib: CloudMaterialLibrary) async {
-        do {
-            let r: MaterialFavoriteResult = try await MaterialCatalogRepository.shared.request("libraries/\(lib.id)/favorite/",body:["favorite":!lib.is_favorited])
-            if let i = libraries.firstIndex(where: {$0.id == lib.id}) { libraries[i].is_favorited = r.is_favorited; libraries[i].favorite_count = r.favorite_count }
-            if scope == "favorites" && !r.is_favorited { selected = "" }
-        } catch { self.error = error.localizedDescription }
     }
     private func favoriteItem(_ item: CloudMaterial) async {
         do {
@@ -267,12 +300,17 @@ struct MaterialLibraryBrowser: View {
         UserDefaults.standard.set(localFavorites, forKey: session.store.stickerPreferenceKey + ".favorites")
         UserDefaults.standard.set(localRecent, forKey: session.store.stickerPreferenceKey + ".recent")
     }
+    private func finishAdding() {
+        if keepsOpenAfterAdding {
+            withAnimation { sheetDetent = Self.compactDetent }
+        } else { dismiss() }
+    }
     private func addLocal(_ item: DiaryStickerItem) async {
         guard !adding, let session, let data = item.image()?.pngData() else { return }
         adding = true; defer { adding = false }
         if await session.importPhoto(data, replacing: replacingID, asSticker: true, stickerName: item.title) {
             localRecent.removeAll { $0 == item.id }; localRecent.insert(item.id, at: 0); localRecent = Array(localRecent.prefix(30))
-            saveLocalPreferences(); dismiss()
+            saveLocalPreferences(); finishAdding()
         } else { error = session.errorMessage }
     }
     private func add(_ item: CloudMaterial) async {
@@ -293,7 +331,7 @@ struct MaterialLibraryBrowser: View {
             } else {
                 imported = await session.importPhoto(data, asSticker: true, stickerName: item.name, semanticKind: DiaryLayerSemanticKind(rawValue: item.kind))
             }
-            if imported { pausedItem = nil; dismiss() }
+            if imported { pausedItem = nil; finishAdding() }
             else { error = session.errorMessage }
         } catch { if generation == intent && !Task.isCancelled { self.error = error.localizedDescription } }
     }

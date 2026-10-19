@@ -50,75 +50,77 @@ struct DiaryPresetBookReader<Detail: View>: View {
 
     var body: some View {
         GeometryReader { available in
-            ScrollView(.vertical) {
-                VStack(spacing: 12) {
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(seriesTitle).font(.subheadline.weight(.medium)).lineLimit(2)
-                            Text("共 \(content.count) 页").font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 8)
-                        if allowsWholeBook {
-                            Button("整本添加") { onAdd(pages.map(\.id), true) }
-                                .font(.subheadline).buttonStyle(.bordered)
-                                .buttonBorderShape(.capsule).fixedSize()
-                                .frame(minHeight: 44)
-                        }
-                    }.padding(.horizontal, 24)
-                    GeometryReader { geometry in
-                        DiaryBookZoomViewport(contentSize: geometry.size, resetToken: opened ? spread + 1 : 0) {
-                            if let shell, !opened {
-                                PresetLargePreview(url: shell.url, thumbnailURL: shell.thumbnailURL, previews: previews).frame(width: geometry.size.width * 0.8, height: geometry.size.height * 0.88)
-                                    .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
-                                    .onTapGesture { opened = true }
-                            } else {
-                                GeometryReader { viewport in
-                                    let heightPerWidth = (0.955 * (1 - DiaryBookSpine.halfGapFraction) / ratio + 0.09) / 2
-                                    let width = min(max(1, viewport.size.width - 24), max(1, viewport.size.height - 24) / heightPerWidth)
-                                    let rim = width * 0.0225
-                                    ZStack {
-                                        Image("DiaryBookLeather").resizable()
-                                        DiaryPageCurlReader(spreadCount: spreadCount, spread: $spread, reduceMotion: reduceMotion) { index, _ in
-                                            DiaryPresetPaperController(index: index,
-                                                url: content.indices.contains(index - 1) ? content[index - 1].url : nil,
-                                                thumbnailURL: content.indices.contains(index - 1) ? content[index - 1].thumbnailURL : nil,
-                                                previews: previews)
-                                        }.id(content.map(\.url)).padding(rim)
-                                    }
-                                    .frame(width: width, height: width * heightPerWidth)
-                                    .position(x: viewport.size.width / 2, y: viewport.size.height / 2)
+//            ScrollView(.vertical) {
+//            }.scrollIndicators(.hidden)
+
+            VStack(spacing: 12) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(seriesTitle).font(.subheadline.weight(.medium)).lineLimit(2)
+                        Text("共 \(content.count) 页").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    if allowsWholeBook {
+                        Button("整本添加") { onAdd(pages.map(\.id), true) }
+                            .font(.subheadline).buttonStyle(.bordered)
+                            .buttonBorderShape(.capsule).fixedSize()
+                            .frame(minHeight: 44)
+                    }
+                }.padding(.horizontal, 24)
+                GeometryReader { geometry in
+                    DiaryBookZoomViewport(contentSize: geometry.size, resetToken: opened ? spread + 1 : 0) {
+                        if let shell, !opened {
+                            PresetLargePreview(url: shell.url, thumbnailURL: shell.thumbnailURL, previews: previews).frame(width: geometry.size.width * 0.8, height: geometry.size.height * 0.88)
+                                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                                .onTapGesture { opened = true }
+                        } else {
+                            GeometryReader { viewport in
+                                let heightPerWidth = (0.955 * (1 - DiaryBookSpine.halfGapFraction) / ratio + 0.09) / 2
+                                let width = min(max(1, viewport.size.width - 24), max(1, viewport.size.height - 24) / heightPerWidth)
+                                let rim = width * 0.0225
+                                ZStack {
+                                    Image("DiaryBookLeather").resizable()
+                                    DiaryPageCurlReader(spreadCount: spreadCount, spread: $spread, reduceMotion: reduceMotion) { index, _ in
+                                        DiaryPresetPaperController(index: index,
+                                            url: content.indices.contains(index - 1) ? content[index - 1].url : nil,
+                                            thumbnailURL: content.indices.contains(index - 1) ? content[index - 1].thumbnailURL : nil,
+                                            previews: previews)
+                                    }.id(content.map(\.url)).padding(rim)
                                 }
+                                .frame(width: width, height: width * heightPerWidth)
+                                .position(x: viewport.size.width / 2, y: viewport.size.height / 2)
                             }
                         }
                     }
-                    .frame(height: max(200, min(available.size.width * 0.78, available.size.height - 380)))
-                    .clipped()
-                    addCurrentPageMenu
-                        .frame(minHeight: 44)
-                    if supportsCategoryControls && opened { categoryControls }
-                    HStack {
-                        Button {
-                            if spread > 0 { spread -= 1 } else { opened = false }
-                        } label: { Image(systemName: "chevron.left") }
-                            .disabled(!opened || (spread == 0 && shell == nil))
-                        Spacer()
-                        Text(!opened && shell != nil ? "外壳" : spread == 0 ? "第 1 页 / \(content.count)" : "第 \(spread * 2)–\(min(spread * 2 + 1, content.count)) 页 / \(content.count)")
-                            .font(.subheadline.monospacedDigit())
-                        Spacer()
-                        Button {
-                            if !opened { opened = true } else { spread += 1 }
-                        } label: { Image(systemName: "chevron.right") }
-                            .disabled(content.isEmpty || (opened && spread >= spreadCount - 1))
-                    }.frame(minHeight: 44).padding(.horizontal, 28)
-                    DiaryBookThumbnailRail(hasCover: shell != nil, spreadCount: spreadCount,
-                        spread: spread, opened: opened, title: spreadTitle,
-                        onClose: { spread = 0; opened = false },
-                        onSelect: { spread = $0; opened = true }) {
-                            if let shell { preview(shell) }
-                        } leaf: { index in leaf(index) }
+                }
+                .frame(height: max(200, min(available.size.width * 0.78, available.size.height - 380)))
+                .clipped()
+                addCurrentPageMenu
+                    .frame(minHeight: 44)
+                if supportsCategoryControls && opened { categoryControls }
+                HStack {
+                    Button {
+                        if spread > 0 { spread -= 1 } else { opened = false }
+                    } label: { Image(systemName: "chevron.left") }
+                        .disabled(!opened || (spread == 0 && shell == nil))
+                    Spacer()
+                    Text(!opened && shell != nil ? "外壳" : spread == 0 ? "第 1 页 / \(content.count)" : "第 \(spread * 2)–\(min(spread * 2 + 1, content.count)) 页 / \(content.count)")
+                        .font(.subheadline.monospacedDigit())
+                    Spacer()
+                    Button {
+                        if !opened { opened = true } else { spread += 1 }
+                    } label: { Image(systemName: "chevron.right") }
+                        .disabled(content.isEmpty || (opened && spread >= spreadCount - 1))
+                }.frame(minHeight: 44).padding(.horizontal, 28)
+                DiaryBookThumbnailRail(hasCover: shell != nil, spreadCount: spreadCount,
+                    spread: spread, opened: opened, title: spreadTitle,
+                    onClose: { spread = 0; opened = false },
+                    onSelect: { spread = $0; opened = true }) {
+                        if let shell { preview(shell) }
+                    } leaf: { index in leaf(index) }
 
-                }.padding(.top, 12).padding(.bottom, 8)
-            }.scrollIndicators(.hidden)
+            }.padding(.top, 12).padding(.bottom, 8)
+
         }
         .tint(DiaryLibraryStyle.accent)
         .background(DiaryLibraryStyle.background)

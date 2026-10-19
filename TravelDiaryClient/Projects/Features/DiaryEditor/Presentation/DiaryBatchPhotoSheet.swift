@@ -12,6 +12,7 @@ struct DiaryBatchPhotoSheet: View {
     var preparationDirectory: URL? = nil
     var finishesImport = false
     var embedded = false
+    var creationFlow = false
     var onPrepared: (([URL], DiaryPhotoSlot.Fill) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var documents: [DiaryDocument] = []
@@ -36,9 +37,88 @@ struct DiaryBatchPhotoSheet: View {
 
     var body: some View {
         Group {
-            if embedded { content } else { NavigationStack { content } }
+            if creationFlow { creationContent }
+            else if embedded { content } else { NavigationStack { content } }
         }
     }
+    private var creationContent: some View {
+        VStack(spacing: 20) {
+            Text("这本手帐可一键替换 \(slots.count) 张照片")
+                .foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Picker("照片填充", selection: $fill) {
+                Text("等比例填充").tag(DiaryPhotoSlot.Fill.cover)
+                Text("整图拉伸").tag(DiaryPhotoSlot.Fill.stretch)
+            }.pickerStyle(.segmented)
+            ScrollView {
+                if selection.isEmpty {
+                    photoPicker {
+                        VStack(spacing: 20) {
+                            Image(systemName: "plus").font(.system(size: 40, weight: .light))
+                            Text(slots.isEmpty ? "保留预设照片，直接创建" : "还是空的，点这里加照片吧")
+                        }
+                        .foregroundStyle(DiaryLibraryStyle.accent.opacity(0.55))
+                        .frame(maxWidth: .infinity).frame(minHeight: 230)
+                        .background(RoundedRectangle(cornerRadius: 20)
+                            .strokeBorder(DiaryLibraryStyle.line, style: StrokeStyle(lineWidth: 2, dash: [7])))
+                    }
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 85), spacing: 12)], spacing: 12) {
+                        photoPicker {
+                            Image(systemName: "plus").font(.largeTitle)
+                                .frame(maxWidth: .infinity).frame(height: 100)
+                                .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 14))
+                        }
+                        ForEach(selection.indices, id: \.self) { index in
+                            Color.clear.aspectRatio(1, contentMode: .fit)
+                                .overlay {
+                                    if thumbnails.indices.contains(index), let image = thumbnails[index] {
+                                        Image(uiImage: image).resizable().scaledToFill()
+                                    } else { ProgressView() }
+                                }
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                                .overlay(alignment: .topTrailing) {
+                                    Button { selection.remove(at: index) } label: {
+                                        Image(systemName: "xmark.circle.fill").font(.title2)
+                                            .symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.6))
+                                    }.padding(4).accessibilityLabel("删除第 \(index + 1) 张照片")
+                                }
+                        }
+                    }
+                }
+            }
+            if let message {
+                Text(message).font(.caption).foregroundStyle(.red)
+                if !ready { Button("重试") { Task { await prepare() } } }
+            }
+            Text("已选 \(selection.count) / \(slots.count)").foregroundStyle(.secondary)
+            Text("按选择顺序替换，未选择的位置保留预设照片。创建后仍可编辑。")
+                .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        }
+        .padding()
+        .background(DiaryLibraryStyle.background)
+        .navigationTitle("第 3 步 · 添加照片")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(busy)
+        .safeAreaInset(edge: .bottom) {
+            DiaryImportFloatingActions {
+                Button { Task { await replace() } } label: {
+                    Text(selection.isEmpty ? "跳过并创建" : "创建").frame(maxWidth: .infinity)
+                }.disabled(!ready)
+            }
+        }
+        .disabled(busy)
+        .overlay { if busy { ProgressView(progress).padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+        .interactiveDismissDisabled(busy)
+        .task { await prepare() }
+        .task(id: selection) { await loadThumbnails() }
+    }
+
+    private func photoPicker<Label: View>(@ViewBuilder label: () -> Label) -> some View {
+        PhotosPicker(selection: $selection, maxSelectionCount: max(1, slots.count),
+                     selectionBehavior: .ordered, matching: .images, label: label)
+            .disabled(!ready || slots.isEmpty)
+    }
+
     private var content: some View {
             List {
                 Section {
@@ -58,11 +138,6 @@ struct DiaryBatchPhotoSheet: View {
                         }
                     }
                     if ready && slots.isEmpty { Text("没有可替换照片。背景、贴纸及相框不会计入。") }
-                }
-                if onPrepared != nil {
-                    Section {
-                        Button(finishesImport ? "保留原照片，完成添加" : "保留原照片，继续") { onPrepared?([], fill); if !embedded { dismiss() } }.disabled(!ready)
-                    }
                 }
                 Section("替换对应顺序") {
                     ForEach(Array(slots.enumerated()), id: \.element.id) { index, slot in
@@ -89,11 +164,28 @@ struct DiaryBatchPhotoSheet: View {
                 if let message { Text(message).foregroundStyle(.red) }
             }
             .navigationTitle(onPrepared == nil ? "一键替换照片" : "第 2 步 · 选择照片")
+        .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button(embedded ? "上一步" : "取消") { dismiss() }.disabled(busy) }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(onPrepared == nil ? "替换全部" : finishesImport ? "完成添加" : "下一步") { Task { await replace() } }
-                        .disabled(!ready || busy || slots.isEmpty || selection.count != slots.count)
+                if !embedded {
+                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(busy) }
+                }
+            }
+            .navigationBarBackButtonHidden(busy)
+            .safeAreaInset(edge: .bottom) {
+                DiaryImportFloatingActions {
+                    if onPrepared != nil {
+                        Button(finishesImport ? "保留原照片，完成添加" : "保留原照片，继续") {
+                            onPrepared?([], fill)
+                            if !embedded { dismiss() }
+                        }
+                        .buttonStyle(.plain)
+                        .frame(minHeight: 44)
+                        .disabled(!ready || busy)
+                    }
+                    Button { Task { await replace() } } label: {
+                        Text(onPrepared == nil ? "替换全部" : finishesImport ? "完成添加" : "下一步")
+                            .frame(maxWidth: .infinity)
+                    }.disabled(!ready || busy || slots.isEmpty || selection.count != slots.count)
                 }
             }
             .disabled(busy)
@@ -190,7 +282,12 @@ struct DiaryBatchPhotoSheet: View {
     }
 
     @MainActor private func replace() async {
-        guard !busy, ready, selection.count == slots.count, !slots.isEmpty else { return }
+        guard !busy, ready else { return }
+        if creationFlow {
+            guard onPrepared != nil, preparationDirectory != nil, selection.count <= slots.count else { return }
+        } else {
+            guard selection.count == slots.count, !slots.isEmpty else { return }
+        }
         busy = true; message = nil
         defer { busy = false }
         do {

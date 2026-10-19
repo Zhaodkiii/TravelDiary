@@ -18,17 +18,17 @@ struct DiaryPreviewContentPanel: View {
                     }
                 }
             }
-            HStack(spacing: 8) {
-                Text(affectsImport ? "仅添加已开启的图层分类" : "仅影响预览，添加时保留完整内容")
-                    .font(.caption2).foregroundStyle(DiaryLibraryStyle.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-                Button("恢复") { hiddenCategories.removeAll() }
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(DiaryLibraryStyle.accent)
-                    .frame(minWidth: 44, minHeight: 44)
-                    .disabled(hiddenCategories.isEmpty)
-            }
+//            HStack(spacing: 8) {
+//                Text(affectsImport ? "仅添加已开启的图层分类" : "仅影响预览，添加时保留完整内容")
+//                    .font(.caption2).foregroundStyle(DiaryLibraryStyle.secondary)
+//                    .fixedSize(horizontal: false, vertical: true)
+//                Spacer(minLength: 0)
+//                Button("恢复") { hiddenCategories.removeAll() }
+//                    .font(.caption.weight(.medium))
+//                    .foregroundStyle(DiaryLibraryStyle.accent)
+//                    .frame(minWidth: 44, minHeight: 44)
+//                    .disabled(hiddenCategories.isEmpty)
+//            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("预览内容")

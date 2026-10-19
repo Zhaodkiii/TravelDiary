@@ -107,6 +107,23 @@ internal struct CustomCameraView: View {
             .onChange(of: scenePhase, perform: onScenePhaseChange)
     }}
 }
+
+/// 配置方法在视图挂载前写入 manager；挂载后由 StateObject 持有同一会话。
+/// 授权弹窗、父页面保存等引起重绘时，不能用新 manager 替换仍在取景的会话。
+internal struct CustomCameraSessionHost: View {
+    @StateObject private var manager: CustomCameraManager
+    private let config: CustomCameraView.Config
+
+    init(camera: CustomCameraView) {
+        _manager = StateObject(wrappedValue: camera.manager)
+        config = camera.config
+    }
+
+    var body: some View {
+        CustomCameraView(manager: manager, config: config)
+    }
+}
+
 private extension CustomCameraView {
     @ViewBuilder func createContent() -> some View {
         if let error = manager.attributes.error { createErrorScreen(error) }

@@ -77,7 +77,6 @@ struct SecondCameraHomeView: View {
                     isPresentingCamera = false
                 }
             )
-            .ignoresSafeArea()
         }
     }
 

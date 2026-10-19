@@ -403,5 +403,8 @@ internal extension CustomCameraView {
 
      - important: This method must be called to start the camera.
      */
-    func startSession() -> some View { config.isCameraConfigured = true; return self }
+    func startSession() -> some View {
+        config.isCameraConfigured = true
+        return CustomCameraSessionHost(camera: self)
+    }
 }

@@ -138,7 +138,7 @@ struct DiaryContextToolbarTests {
         for session in [photo, text, textImage, background] { session.select(session.scopeLayers[0].id) }
         let host = UIHostingController(rootView: VStack(spacing: 20) {
             ForEach(Array([photo, text, textImage, background].enumerated()), id: \.offset) { _, session in
-                DiaryContextToolbar(session: session, onPhotos: {}, onDrawing: {}, onLayers: {}, onOpenObject: {})
+                DiaryContextToolbar(session: session, onPhotos: {}, onCamera: {}, onDrawing: {}, onLayers: {}, onStickers: {}, onOpenObject: {})
             }
         }.frame(width: 390).padding(.vertical).background(Color(uiColor: .systemGroupedBackground)))
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 600))

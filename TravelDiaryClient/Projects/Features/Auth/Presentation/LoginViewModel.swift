@@ -89,12 +89,16 @@ final class LoginViewModel: ObservableObject {
         request.nonce = Self.sha256(nonce)
     }
 
-    /// 每个未登录页实例仅自动尝试一次，失败后允许用户手动重试。
-    func signInWithDeviceAutomaticallyIfNeeded() async {
-        guard didAttemptAutomaticDeviceSignIn == false, isLoading == false else { return }
-        guard case .signedOut = sessionStore.state else { return }
+    /// 仅首次进入应用自动尝试；资格持久化，退出登录和重启后不再自动进入。
+    func signInWithDeviceAutomaticallyIfNeeded() async -> Bool {
+        guard didAttemptAutomaticDeviceSignIn == false, isLoading == false else { return false }
+        guard case .signedOut = sessionStore.state else { return false }
+        guard !Task.isCancelled, InitialGuestEntryPolicy().consumeAutomaticEntryIfNeeded() else { return false }
         didAttemptAutomaticDeviceSignIn = true
         await signInWithDevice()
+        // 直接读取已提交的会话，避免等待根视图的异步订阅时闪现登录页。
+        if case .signedIn = sessionStore.state { return true }
+        return false
     }
 
     func signInWithDevice() async {
