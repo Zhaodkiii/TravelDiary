@@ -6,138 +6,271 @@ struct PrintCheckoutScreen: View {
     let store: DiaryDocumentStore
     var revisionOrder: PrintOrder? = nil
     @Environment(\.dismiss) private var dismiss
+    private enum Route: Hashable { case preview, checkout, submission(UUID) }
+    @State private var path: [Route] = []
     @State private var revisions: [PrintOrder] = []
     @State private var reviseSelection: PrintOrder?
     @State private var products: [PrintProduct] = []
     @State private var productID = ""
-    @State private var front: UUID?
-    @State private var back: UUID?
     @State private var prepared: PrintPrepared?
     @State private var address = PrintAddress()
     @State private var quantity = 1
     @State private var quote: PrintQuote?
     @State private var confirmed = false
-    @State private var sawCover = false
-    @State private var sawInterior = false
+    @State private var progressivePreview: PrintProgressivePreviewItem?
     @State private var preview: PrintPreviewItem?
     @State private var busy = false
     @State private var error: String?
-    @State private var progressText = ""
+    @State private var previewPages: [UUID: URL] = [:]
+    @State private var preparationDirectory: URL?
+    @State private var preparationDone = 0
+    @State private var preparationTotal = 0
     @State private var jobID: UUID?
     @State private var submissionKey = UUID()
     private let service = PrintOrderService.shared
+    private let ink = Color(red: 0.23, green: 0.36, blue: 0.31)
     private var product: PrintProduct? { products.first { $0.id == productID } }
+    private var quoteKey: String { "\(productID)|\(quantity)|\(address.region)|\(prepared?.directory.lastPathComponent ?? "")" }
+    private var mappingError: String? {
+        guard let product else { return nil }
+        do { _ = try DiaryBookPrintExporter.mapping(book: book, product: product); return nil }
+        catch { return error.localizedDescription }
+    }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Text(book.title).font(.title2.bold())
-                    Text("把亲手制作的回忆，印成可以珍藏的一本。").foregroundStyle(.secondary)
-                    NavigationLink("我的印制订单") { PrintOrdersScreen(owner: store.ownerID) }
+        NavigationStack(path: $path) {
+            specification
+                .navigationTitle(revisionOrder == nil ? "装订成册" : "修改重提")
+                .safeAreaInset(edge: .bottom) {
+                    action("下一步 · 预览成品", disabled: product == nil || mappingError != nil) {
+                        error = nil; path.append(.preview)
+                    }
                 }
-                if revisionOrder == nil && !revisions.isEmpty {
-                    Section("有订单需要修改重提") {
-                        ForEach(revisions) { item in
-                            Button { reviseSelection = item } label: {
-                                VStack(alignment: .leading) { Text(item.title + " · " + item.spec.title); Text(item.exception_reason).font(.footnote).foregroundStyle(.secondary) }
+                .navigationDestination(for: Route.self) { route in
+                    switch route {
+                    case .preview:
+                        previewPage.navigationTitle("预览成品")
+                            .navigationBarBackButtonHidden(busy)
+                            .safeAreaInset(edge: .bottom) {
+                                previewFooter
                             }
-                        }
-                        Text("选择原订单可替换生产稿，无需重复下单或付款。").font(.footnote).foregroundStyle(.secondary)
-                    }
-                }
-                if let revisionOrder {
-                    Section("修改原订单") {
-                        Text(revisionOrder.number).font(.caption).textSelection(.enabled)
-                        Text(revisionOrder.exception_reason).foregroundStyle(.orange)
-                        Text("请先在编辑器完成修改，再生成并确认新稿。须保持原规格、份数及 \(revisionOrder.page_count) 面内页；新稿直接替换当前生产稿。").font(.footnote)
-                    }
-                }
-                if products.isEmpty && !busy {
-                    Section { ContentUnavailableView("印制服务准备中", systemImage: "book.closed", description: Text("目前没有已开放的规格，请稍后再来。")) }
-                }
-                if !products.isEmpty {
-                    Section("选择实物规格") {
-                        Picker("印制规格", selection: $productID) { ForEach(products) { Text($0.title).tag($0.id) } }.disabled(revisionOrder != nil)
-                        if let product {
-                            Text("\(product.width_mm) × \(product.height_mm) mm · \(product.paper) · \(product.binding)").font(.subheadline)
-                            if !product.description.isEmpty { Text(product.description).font(.footnote).foregroundStyle(.secondary) }
-                            Text("内页\(product.duplex ? "双面" : "单面")印刷 · \(product.min_pages)–\(product.max_pages) 面").font(.footnote)
-                            if !product.lead_time.isEmpty { Text(product.lead_time).font(.footnote) }
-                            Stepper("印制 \(quantity) 份", value: $quantity, in: 1...max(product.max_quantity,1)).disabled(revisionOrder != nil)
-                        }
-                    }
-                    Section {
-                        Picker("正封面", selection: $front) {
-                            Text("请选择").tag(Optional<UUID>.none)
-                            ForEach(Array(book.contentPages.enumerated()), id: \.element.id) { i, page in Text(pageTitle(page, i)).tag(Optional(page.id)) }
-                        }
-                        Picker("封底", selection: $back) {
-                            Text("请选择").tag(Optional<UUID>.none)
-                            ForEach(Array(book.contentPages.enumerated()), id: \.element.id) { i, page in Text(pageTitle(page, i)).tag(Optional(page.id)) }
-                        }
-                        Text("其余页面按原顺序作为内页。阅读器外壳不会印入成品；双面印刷需要时会在末尾补一面空白。").font(.footnote).foregroundStyle(.secondary)
-                        Button(prepared == nil ? "生成并检查生产稿" : "重新生成生产稿") { Task { await prepare() } }
-                            .disabled(front == nil || back == nil || front == back || busy)
-                    } header: { Text("封面与内页") }
-                    if let prepared {
-                        Section("确认最终生产稿") {
-                            Button("预览封面与封底 · 2 面") { sawCover = true; preview = PrintPreviewItem(url: prepared.directory.appendingPathComponent("cover.pdf"), title: "封面与封底") }
-                            Button("预览内页 · \(prepared.pageCount) 面") { sawInterior = true; preview = PrintPreviewItem(url: prepared.directory.appendingPathComponent("interior.pdf"), title: "内页 · \(prepared.pageCount) 面") }
-                            ForEach(Array(prepared.warnings.enumerated()), id: \.offset) { _, warning in Text(warning).font(.footnote).foregroundStyle(.orange) }
-                            Text("请放大检查照片、文字、页序和边缘。当前规格按页面原尺寸印制，无额外出血扩展；重要内容请避开裁切和装订位置。").font(.footnote).foregroundStyle(.secondary)
-                            Toggle("我已检查内容、页序和裁切范围，按此版本印制", isOn: $confirmed).disabled(!sawCover || !sawInterior)
-                        }
-                        Section("收货地址") {
-                            TextField("收件人", text: $address.name).textContentType(.name)
-                            TextField("手机号", text: $address.phone).keyboardType(.phonePad).textContentType(.telephoneNumber)
-                            Picker("配送地区", selection: $address.region) {
-                                Text("请选择").tag("")
-                                ForEach(product?.regions ?? [], id: \.self) { Text($0).tag($0) }
+                            .task { if prepared == nil { await prepare() } }
+                    case .checkout:
+                        checkout.navigationTitle("确认订单")
+                            .navigationBarBackButtonHidden(busy)
+                            .safeAreaInset(edge: .bottom) {
+                                action(submitTitle, disabled: !confirmed || !address.complete || quote == nil || busy || jobID != nil) {
+                                    if let prepared { submit(prepared) }
+                                }
                             }
-                            TextField("街道、门牌号等详细地址", text: $address.detail, axis: .vertical).textContentType(.fullStreetAddress)
-                        }
-                        .disabled(revisionOrder != nil)
-                        Section("费用与提交") {
-                            if let product { Text(product.terms).font(.footnote).foregroundStyle(.secondary) }
-                            Button(revisionOrder == nil ? "计算价格" : "核对原订单费用") { Task { await calculate() } }.disabled(!address.complete || busy)
-                            if let quote {
-                                LabeledContent("印制费", value: PrintText.money(quote.production_fen))
-                                LabeledContent("运费", value: PrintText.money(quote.shipping_fen))
-                                LabeledContent("合计", value: quote.total_fen == 0 ? "免费" : PrintText.money(quote.total_fen)).font(.headline)
-                                Text("\(quote.page_count) 面内页 · 每份 \(quote.sheets) 张内页纸；封面另计。").font(.footnote).foregroundStyle(.secondary)
-                                Button(revisionOrder == nil ? "确认订单并上传" : "替换生产稿并重新提交") { submit(prepared) }
-                                    .disabled(!confirmed || !address.complete || busy || jobID != nil)
-                                Text(revisionOrder != nil ? "保留原订单及付款信息，新稿上传后重新审核，无需再次支付。" : quote.total_fen == 0 ? "本次订单免费，上传完成后直接提交人工审核，无需支付。" : "生产文件上传后，可在订单中使用微信支付。").font(.footnote).foregroundStyle(.secondary)
-                            }
-                        }
+                            .task(id: quoteKey) { await calculate() }
+                    case .submission(let id):
+                        PrintUploadScreen(id: id, owner: store.ownerID, onClose: { dismiss() })
+                            .navigationBarBackButtonHidden(true)
                     }
                 }
-                if busy { Section { ProgressView(progressText.isEmpty ? "正在加载…" : progressText) } }
-                if let error { Section { Text(error).foregroundStyle(.red); Button("重新加载规格") { Task { await load() } } } }
-            }
-            .disabled(busy)
-            .navigationTitle(revisionOrder == nil ? "装订成册" : "修改重提")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() }.disabled(busy) } }
-            .navigationDestination(isPresented: Binding(get: { jobID != nil }, set: { if !$0 { jobID = nil; submissionKey = UUID(); prepared = nil } })) {
-                if let jobID { PrintUploadScreen(id: jobID, owner: store.ownerID) }
-            }
-            .sheet(item: $preview) { item in PrintPDFPreview(item: item) }
-            .sheet(item: $reviseSelection) { item in PrintCheckoutScreen(book: book, store: store, revisionOrder: item) }
-            .task { await load() }
-            .onChange(of: productID) { _, _ in if revisionOrder == nil { invalidate(); quantity = 1; address.region = "" } }
-            .onChange(of: front) { _, _ in invalidate() }
-            .onChange(of: back) { _, _ in invalidate() }
-            .onChange(of: quantity) { _, _ in quote = nil }
-            .onChange(of: address.region) { _, _ in quote = nil }
-            .onDisappear { if jobID == nil { invalidate() } }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(jobID == nil ? "关闭" : "完成") { dismiss() }.disabled(busy) } }
         }
+        .tint(ink)
         .interactiveDismissDisabled(busy)
+        .sheet(item: $preview) { PrintPDFPreview(item: $0) }
+        .sheet(item: $progressivePreview) { PrintProgressivePreview(item: $0) }
+        .sheet(item: $reviseSelection) { PrintCheckoutScreen(book: book, store: store, revisionOrder: $0) }
+        .task { await load() }
+        .onChange(of: productID) { _, _ in
+            invalidate()
+            if revisionOrder == nil { quantity = 1; if !(product?.regions.contains(address.region) ?? false) { address.region = "" } }
+        }
+        .onChange(of: path) { _, _ in error = nil }
+        .onChange(of: quantity) { _, _ in quote = nil; confirmed = false }
+        .onChange(of: address.region) { _, _ in quote = nil; confirmed = false }
+        .onDisappear { if jobID == nil { invalidate() } }
     }
-    private func pageTitle(_ page: DiaryPageEntry, _ i: Int) -> String { "第 \(i+1) 页" + (page.title.isEmpty ? "" : " · \(page.title)") }
+
+    private var specification: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                steps(1)
+                Text(book.title).font(.title2.bold())
+                Text("把亲手制作的回忆，印成可以珍藏的一本。").foregroundStyle(.secondary)
+                if let revisionOrder {
+                    GroupBox("修改原订单 · \(revisionOrder.number)") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(revisionOrder.exception_reason).foregroundStyle(.orange)
+                            Text("保留原规格、份数、地址及 \(revisionOrder.page_count) 面内页，无需重复付款。请先在作品中完成修改。").font(.footnote)
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                ForEach(products) { item in
+                    Button {
+                        guard revisionOrder == nil else { return }; productID = item.id
+                    } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: productID == item.id ? "largecircle.fill.circle" : "circle").foregroundStyle(ink)
+                            VStack(alignment: .leading, spacing: 7) {
+                                HStack { Text(item.title).font(.headline); Spacer(); Text(item.free_printing == true ? "印制免费" : "按页计费").font(.caption).foregroundStyle(ink) }
+                                Text("\(item.width_mm) × \(item.height_mm) mm · \(item.paper) · \(item.binding)").font(.subheadline)
+                                Text("内页\(item.duplex ? "双面" : "单面")印刷 · \(item.min_pages)–\(item.max_pages) 面").font(.footnote).foregroundStyle(.secondary)
+                                Text(item.shipping_fen == 0 ? "免运费" : "每单运费 \(PrintText.money(item.shipping_fen))").font(.footnote)
+                                if !item.description.isEmpty { Text(item.description).font(.footnote).foregroundStyle(.secondary) }
+                                if !item.lead_time.isEmpty { Text(item.lead_time).font(.footnote).foregroundStyle(.secondary) }
+                            }
+                        }
+                        .padding(16).background(.background, in: RoundedRectangle(cornerRadius: 18))
+                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(productID == item.id ? ink : Color.secondary.opacity(0.2), lineWidth: productID == item.id ? 2 : 1))
+                    }.buttonStyle(.plain)
+                }
+                if let product {
+                    Stepper("印制 \(quantity) 份", value: $quantity, in: 1...max(product.max_quantity, 1)).disabled(revisionOrder != nil)
+                    if let map = try? DiaryBookPrintExporter.mapping(book: book, product: product) {
+                        Text("\(map.cover.isEmpty ? "无外壳" : "外壳 1 面") · 内页 \(map.count) 面 · 每份 \(product.duplex ? map.count / 2 : map.count) 张内页纸").font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                Text("全部内容页按作品排序连续印制。有外壳时，外壳放在最前面；皮革边框与装订环仅用于预览。").font(.footnote).foregroundStyle(.secondary)
+                if let mappingError { Text(mappingError).font(.subheadline).foregroundStyle(.red) }
+                if products.isEmpty && !busy && error == nil { ContentUnavailableView("印制服务准备中", systemImage: "book.closed", description: Text("目前没有已开放的规格，请稍后再来。")) }
+                if busy { ProgressView("正在加载规格…") }
+                errorMessage
+                if error != nil { Button("重新加载") { Task { await load() } } }
+                if revisionOrder == nil && !revisions.isEmpty {
+                    GroupBox("有订单需要修改重提") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(revisions) { item in Button { reviseSelection = item } label: { Text("\(item.title) · \(item.spec.title)\n\(item.exception_reason)").multilineTextAlignment(.leading) } }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                NavigationLink("我的印制订单") { PrintOrdersScreen(owner: store.ownerID) }
+            }.padding(20)
+        }.background(Color(uiColor: .systemGroupedBackground))
+    }
+
+    private var previewPage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                steps(2)
+                Text("按作品顺序，装订成一本").font(.title2.bold())
+                Text("有外壳时先显示外壳，其余页面按作品顺序展示。已生成的跨页可随时点击放大检查。").font(.subheadline).foregroundStyle(.secondary)
+                if !previewPages.isEmpty {
+                    PrintProductionPreview(book: book, pageSize: CGSize(width: product?.width_mm ?? 148, height: product?.height_mm ?? 210), thumbnails: previewPages) { role, title, left, right in
+                        guard let directory = prepared?.directory ?? preparationDirectory else { return }
+                        let pages = book.contentPages
+                        func pageURL(_ index: Int?) -> URL? {
+                            guard let index, pages.indices.contains(index) else { return nil }
+                            return directory.appendingPathComponent("page-\(pages[index].id).pdf")
+                        }
+                        let shellURL = book.shell.map { directory.appendingPathComponent("page-\($0.id).pdf") }
+                        progressivePreview = PrintProgressivePreviewItem(title: title,
+                            left: role == "cover" ? shellURL : pageURL(left), right: role == "cover" ? nil : pageURL(right),
+                            isSpread: role != "cover", lining: left == nil,
+                            pageSize: CGSize(width: product?.width_mm ?? 148, height: product?.height_mm ?? 210))
+                    }
+                }
+                if let prepared {
+                    Button("查看完整印制内页 · \(prepared.pageCount) 面") {
+                        preview = PrintPreviewItem(url: prepared.directory.appendingPathComponent("interior.pdf"), title: "全部印制内页")
+                    }.font(.subheadline)
+                    ForEach(Array(prepared.warnings.enumerated()), id: \.offset) { _, warning in Label(warning, systemImage: "exclamationmark.circle").font(.footnote).foregroundStyle(.orange) }
+                    Text("请检查文字、照片、页序及装订边。皮革外沿与装订环仅展示装订效果；无额外出血，重要内容请避开裁切和装订位置。").font(.footnote).foregroundStyle(.secondary)
+                }
+                errorMessage
+                if error != nil && !busy { Button("重新生成预览") { Task { await prepare() } } }
+            }.padding(20)
+        }.background(Color(uiColor: .systemGroupedBackground))
+    }
+
+    private var previewFooter: some View {
+        Button {
+            guard prepared != nil, !busy else { return }
+            error = nil; path.append(.checkout)
+        } label: {
+            HStack(spacing: 10) {
+                if busy { ProgressView().tint(.white).controlSize(.small) }
+                Text(busy ? (preparationDone == preparationTotal && preparationTotal > 0 ? "正在完成文件检查…" : "正在准备成品 \(preparationDone)/\(preparationTotal)") : "确认成品 · 下一步")
+                    .font(.headline)
+            }
+            .frame(maxWidth: .infinity).padding(16)
+            .foregroundStyle(.white)
+            .background {
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        ink.opacity(busy ? 0.45 : 1)
+                        if busy {
+                            ink.frame(width: geometry.size.width * CGFloat(preparationDone) / CGFloat(max(preparationTotal, 1)))
+                        }
+                    }
+                }
+            }
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(prepared == nil || busy)
+        .accessibilityLabel(busy ? "成品准备进度，\(preparationDone)，共 \(preparationTotal) 页" : "确认成品，下一步")
+        .padding().background(.regularMaterial)
+    }
+
+    private var checkout: some View {
+        Form {
+            Section { steps(3) }
+            Section("收货地址") {
+                TextField("收件人", text: $address.name).textContentType(.name).onChange(of: address.name) { _, _ in confirmed = false }
+                TextField("手机号", text: $address.phone).keyboardType(.phonePad).textContentType(.telephoneNumber).onChange(of: address.phone) { _, _ in confirmed = false }
+                Picker("配送地区", selection: $address.region) {
+                    Text("请选择").tag("")
+                    ForEach(product?.regions ?? [], id: \.self) { Text($0).tag($0) }
+                }
+                TextField("街道、门牌号等详细地址", text: $address.detail, axis: .vertical).textContentType(.fullStreetAddress).onChange(of: address.detail) { _, _ in confirmed = false }
+            }.disabled(revisionOrder != nil)
+            if let product, let prepared {
+                Section("印制内容") {
+                    LabeledContent("作品", value: book.title)
+                    LabeledContent("规格", value: "\(product.title) · \(product.width_mm) × \(product.height_mm) mm")
+                    LabeledContent("纸张 / 装订", value: "\(product.paper) / \(product.binding)")
+                    LabeledContent("数量", value: "\(quantity) 份")
+                    LabeledContent("外壳", value: book.shell == nil ? "未设置" : "1 面，位于内容页之前")
+                    LabeledContent("内页", value: "\(prepared.pageCount) 面 · 每份 \(product.duplex ? prepared.pageCount / 2 : prepared.pageCount) 张纸")
+                    if !product.lead_time.isEmpty { Text(product.lead_time).font(.footnote).foregroundStyle(.secondary) }
+                }
+                Section("费用") {
+                    if let quote {
+                        LabeledContent("印制费", value: PrintText.money(quote.production_fen))
+                        LabeledContent("运费", value: PrintText.money(quote.shipping_fen))
+                        LabeledContent("实付", value: quote.total_fen == 0 ? "免费 · ¥0.00" : PrintText.money(quote.total_fen)).font(.headline)
+                    } else if busy { ProgressView("正在确认费用…") }
+                    else { Text("请选择配送地区，以确认费用。").foregroundStyle(.secondary) }
+                    errorMessage
+                    if error != nil { Button("重试确认费用") { Task { await calculate() } }.disabled(busy) }
+                }
+                Section("购买与售后") {
+                    Text(product.terms).font(.footnote).foregroundStyle(.secondary)
+                    Toggle("我已检查成品预览，并同意购买及售后说明", isOn: $confirmed)
+                    Text(revisionOrder != nil ? "新稿替换当前生产稿，保留原订单及付款信息。" : "上传完成后，免费订单直接进入人工审核；收费订单需完成微信支付。").font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+    private var submitTitle: String {
+        if revisionOrder != nil { return "替换生产稿并重新提交" }
+        guard let quote else { return "确认配送地区后提交" }
+        return quote.total_fen == 0 ? "提交免费印制订单" : "提交订单 · \(PrintText.money(quote.total_fen))"
+    }
+    private func steps(_ current: Int) -> some View {
+        HStack(spacing: 8) {
+            ForEach(Array(["选择规格", "预览成品", "确认订单"].enumerated()), id: \.offset) { index, title in
+                if index > 0 { Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary) }
+                Text("\(index + 1) \(title)").font(.caption.weight(current == index + 1 ? .semibold : .regular)).foregroundStyle(current == index + 1 ? ink : .secondary)
+            }
+        }.accessibilityElement(children: .ignore).accessibilityLabel("第 \(current) 步，共 3 步")
+    }
+    @ViewBuilder private var errorMessage: some View { if let error { Text(error).foregroundStyle(.red).font(.subheadline) } }
+    private func action(_ title: String, disabled: Bool, perform: @escaping () -> Void) -> some View {
+        Button(action: perform) { Text(title).font(.headline).frame(maxWidth: .infinity).padding(12) }
+            .buttonStyle(.borderedProminent).disabled(disabled || busy).padding().background(.regularMaterial)
+    }
     private func invalidate() {
-        if let prepared { try? FileManager.default.removeItem(at: prepared.directory) }
-        prepared = nil; confirmed = false; sawCover = false; sawInterior = false; quote = nil
+        if let directory = prepared?.directory ?? preparationDirectory { try? FileManager.default.removeItem(at: directory) }
+        prepared = nil; preparationDirectory = nil; previewPages = [:]
+        preparationDone = 0; preparationTotal = 0
+        confirmed = false; quote = nil
     }
     private func load() async {
         busy = true; error = nil; defer { busy = false }
@@ -146,73 +279,264 @@ struct PrintCheckoutScreen: View {
                 products = [revisionOrder.spec]; productID = revisionOrder.spec.id; quantity = revisionOrder.quantity; address = revisionOrder.address
             } else {
                 products = try await service.products(owner: store.ownerID)
-                if !products.contains(where: { $0.id == productID }) { productID = products.first?.id ?? "" }
+                if !products.contains(where: { $0.id == productID }) {
+                    productID = products.min { left, right in
+                        let size = book.contentPages.first?.size ?? book.defaultPageSize
+                        return DiaryBookPrintExporter.proportionDifference(size, product: left) < DiaryBookPrintExporter.proportionDifference(size, product: right)
+                    }?.id ?? ""
+                }
                 revisions = try await service.revisionOrders(bookID: book.id, owner: store.ownerID)
+                if address.name.isEmpty, let last = try? await service.orders(owner: store.ownerID, offset: 0).results.first {
+                    address = last.address
+                    if !(product?.regions.contains(address.region) ?? false) { address.region = "" }
+                }
             }
-        }
-        catch { self.error = error.localizedDescription }
+        } catch { self.error = error.localizedDescription }
     }
     private func prepare() async {
-        guard let product, let front, let back else { return }
-        invalidate(); busy = true; error = nil; defer { busy = false; progressText = "" }
+        guard let product, !busy else { return }
+        invalidate(); busy = true; error = nil
+        preparationTotal = book.contentPages.count + (book.shell == nil ? 0 : 1)
+        defer { busy = false }
         var dir: URL?
         do {
             try service.requireOwner(store.ownerID, bound: true)
-            let directory = try service.draftDirectory(owner: store.ownerID); dir = directory
-            prepared = try await DiaryBookPrintExporter.prepare(book: book, store: store, product: product, front: front, back: back, directory: directory) { done, total in progressText = "正在准备生产稿 \(done)/\(total)" }
-        } catch { if let dir { try? FileManager.default.removeItem(at: dir) }; self.error = error.localizedDescription }
+            let directory = try service.draftDirectory(owner: store.ownerID); dir = directory; preparationDirectory = directory
+            let result = try await DiaryBookPrintExporter.prepare(book: book, store: store, product: product, directory: directory,
+                onPageReady: { pageID, thumbnail in previewPages[pageID] = thumbnail }) { done, total in
+                    preparationDone = done; preparationTotal = total
+                }
+            try Task.checkCancellation()
+            if let revisionOrder, result.pageCount != revisionOrder.page_count { throw PrintFailure("重提需保持 \(revisionOrder.page_count) 面内页，当前为 \(result.pageCount) 面，请返回作品调整。") }
+            prepared = result
+        } catch {
+            if let dir { try? FileManager.default.removeItem(at: dir) }
+            previewPages = [:]; preparationDirectory = nil; preparationDone = 0
+            if !(error is CancellationError) { self.error = error.localizedDescription }
+        }
     }
     private func calculate() async {
-        guard let product, let prepared else { return }
+        guard let product, let prepared, !address.region.isEmpty else { quote = nil; return }
+        let key = quoteKey
         busy = true; error = nil; defer { busy = false }
         do {
+            let result: PrintQuote
             if let revisionOrder {
-                guard prepared.pageCount == revisionOrder.page_count else { throw PrintFailure("重提需保持 \(revisionOrder.page_count) 面内页；当前为 \(prepared.pageCount) 面。如需更改页数，请取消后重新下单。") }
-                quote = PrintQuote(total_fen: revisionOrder.total_fen, production_fen: revisionOrder.total_fen - product.shipping_fen, shipping_fen: product.shipping_fen, page_count: prepared.pageCount, sheets: product.duplex ? (prepared.pageCount+1)/2 : prepared.pageCount, product_revision: product.revision)
-                return
-            }
-            let result = try await service.quote(product: product, pages: prepared.pageCount, quantity: quantity, address: address, owner: store.ownerID)
-            guard result.product_revision == product.revision else { throw PrintFailure("规格已更新，请重新打开印制页面") }
+                result = PrintQuote(total_fen: revisionOrder.total_fen, production_fen: revisionOrder.total_fen - product.shipping_fen, shipping_fen: product.shipping_fen, page_count: prepared.pageCount, sheets: product.duplex ? prepared.pageCount/2 : prepared.pageCount, product_revision: product.revision)
+            } else { result = try await service.quote(product: product, pages: prepared.pageCount, quantity: quantity, address: address, owner: store.ownerID) }
+            try Task.checkCancellation()
+            guard key == quoteKey else { return }
+            guard result.product_revision == product.revision else { throw PrintFailure("规格已更新，请关闭并重新打开印制页面") }
             quote = result
-        } catch { self.error = error.localizedDescription; quote = nil }
+        } catch { if key == quoteKey && !(error is CancellationError) { self.error = error.localizedDescription; quote = nil } }
     }
     private func submit(_ prepared: PrintPrepared) {
-        guard let product, let quote, confirmed else { return }
+        guard let product, let quote, confirmed, address.complete, jobID == nil else { return }
         do {
             let submission = PrintSubmission(key: submissionKey, product_id: product.id, product_revision: product.revision,
-                title: book.title, quantity: quantity, page_count: prepared.pageCount, address: address,
+                title: book.title, quantity: quantity, page_count: prepared.pageCount, address: address.trimmed,
                 snapshot: prepared.snapshot, files: prepared.files, confirmed: true, quote_total_fen: quote.total_fen, revise_order_id: revisionOrder?.id, order_revision: revisionOrder?.revision)
-            jobID = try service.enqueue(submission, directory: prepared.directory, owner: store.ownerID)
+            let id = try service.enqueue(submission, directory: prepared.directory, owner: store.ownerID)
+            jobID = id; path.append(.submission(id))
         } catch { self.error = error.localizedDescription }
     }
 }
 
-struct PrintPreviewItem: Identifiable { let id = UUID(); let url: URL; let title: String }
+private struct PrintProductionPreview: View {
+    let book: DiaryBook
+    let pageSize: CGSize
+    let thumbnails: [UUID: URL]
+    let open: (String, String, Int?, Int?) -> Void
+    private var aspect: CGFloat {
+        2 / (0.955 * (1 - DiaryBookSpine.halfGapFraction) * pageSize.height / max(pageSize.width, 1) + 0.09)
+    }
+    private var spreads: [[DiaryPageEntry?]] { DiaryBookImageExporter.spreadPages(book) }
+    private var readySpreads: [Int] {
+        DiaryBookPrintExporter.readySpreads(book: book, readyPageIDs: Set(thumbnails.keys))
+    }
+    private func index(_ page: DiaryPageEntry?) -> Int? {
+        guard let page else { return nil }
+        return book.contentPages.firstIndex { $0.id == page.id }
+    }
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
+            if let shell = book.shell, let url = thumbnails[shell.id] {
+                Button { open("cover", "外壳", 0, nil) } label: {
+                    VStack(spacing: 8) {
+                        PrintPreparedThumbnail(url: url).frame(maxWidth: .infinity).aspectRatio(aspect, contentMode: .fit)
+                        Text("外壳").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            ForEach(readySpreads, id: \.self) { spread in
+                let pair = spreads[spread]
+                let left = index(pair[0])
+                let right = index(pair[1])
+                Button { open("interior", "内容页", left, right) } label: {
+                    VStack(spacing: 8) {
+                        PrintPreparedSpread(left: pair[0].flatMap { thumbnails[$0.id] }, right: pair[1].flatMap { thumbnails[$0.id] }, lining: spread == 0)
+                            .aspectRatio(aspect, contentMode: .fit)
+                        Text("第 " + [left, right].compactMap { $0.map { String($0 + 1) } }.joined(separator: "–") + " 页")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }.buttonStyle(.plain)
+    }
+}
+
+private enum PrintPreviewImageLoader {
+    nonisolated static func load(_ url: URL?) async -> UIImage? {
+        guard let url else { return nil }
+        let image = await Task.detached(priority: .utility) { UIImage(contentsOfFile: url.path)?.preparingForDisplay() }.value
+        return Task.isCancelled ? nil : image
+    }
+}
+
+private struct PrintPreparedSpread: View {
+    let left: URL?
+    let right: URL?
+    let lining: Bool
+    @State private var leftImage: UIImage?
+    @State private var rightImage: UIImage?
+    var body: some View {
+        DiaryExportSpread(left: leftImage, right: rightImage, lining: lining)
+            .task(id: left) { leftImage = await PrintPreviewImageLoader.load(left) }
+            .task(id: right) { rightImage = await PrintPreviewImageLoader.load(right) }
+    }
+}
+
+private struct PrintPreparedThumbnail: View {
+    let url: URL
+    @State private var image: UIImage?
+    var body: some View {
+        Group {
+            if let image { Image(uiImage: image).resizable().scaledToFit() }
+            else { Color.clear }
+        }.task(id: url) { image = await PrintPreviewImageLoader.load(url) }
+    }
+}
+
+private struct PrintBoundPDFSpread: View {
+    let left: PDFPage?
+    let right: PDFPage?
+    let lining: Bool
+    var thumbnailSize = CGSize(width: 300, height: 440)
+    @State private var leftImage: UIImage?
+    @State private var rightImage: UIImage?
+    var body: some View {
+        DiaryExportSpread(left: leftImage, right: rightImage, lining: lining)
+            .task(id: left) { leftImage = left?.thumbnail(of: thumbnailSize, for: .mediaBox) }
+            .task(id: right) { rightImage = right?.thumbnail(of: thumbnailSize, for: .mediaBox) }
+    }
+}
+
+private struct PrintProgressivePreviewItem: Identifiable {
+    let id = UUID()
+    let title: String
+    let left: URL?
+    let right: URL?
+    let isSpread: Bool
+    let lining: Bool
+    let pageSize: CGSize
+}
+
+private struct PrintProgressivePreview: View {
+    let item: PrintProgressivePreviewItem
+    @Environment(\.dismiss) private var dismiss
+    @State private var left: UIImage?
+    @State private var right: UIImage?
+    var body: some View {
+        NavigationStack {
+            GeometryReader { geometry in
+                let aspect = 2 / (0.955 * (1 - DiaryBookSpine.halfGapFraction) * item.pageSize.height / max(item.pageSize.width, 1) + 0.09)
+                DiaryBookZoomViewport(contentSize: geometry.size, resetToken: 0) {
+                    Group {
+                        if item.isSpread { DiaryExportSpread(left: left, right: right, lining: item.lining).aspectRatio(aspect, contentMode: .fit) }
+                        else if let left { Image(uiImage: left).resizable().scaledToFit() }
+                        else { ProgressView() }
+                    }.padding(12).frame(width: geometry.size.width, height: geometry.size.height)
+                }
+            }
+            .navigationTitle(item.title).navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+            .task {
+                let urls = (item.left, item.right)
+                let result = await Task.detached(priority: .userInitiated) {
+                    func image(_ url: URL?) -> UIImage? {
+                        guard let url else { return nil }
+                        return autoreleasepool { PDFDocument(url: url)?.page(at: 0)?.thumbnail(of: CGSize(width: 1400, height: 2000), for: .mediaBox) }
+                    }
+                    return (image(urls.0), image(urls.1))
+                }.value
+                guard !Task.isCancelled else { return }
+                left = result.0; right = result.1
+            }
+        }
+    }
+}
+
+struct PrintPreviewItem: Identifiable { let id = UUID(); let url: URL; let title: String; var pageIndex: Int = 0; var isSpread = false; var leftPageIndex: Int? = nil; var rightPageIndex: Int? = nil }
 private struct PrintPDFPreview: View {
     let item: PrintPreviewItem
     @Environment(\.dismiss) private var dismiss
     var body: some View {
-        NavigationStack { PrintPDFView(url: item.url).navigationTitle(item.title).navigationBarTitleDisplayMode(.inline)
+        NavigationStack { Group {
+            if item.isSpread { PrintEnlargedSpread(item: item) }
+            else { PrintPDFView(url: item.url, pageIndex: item.pageIndex) }
+        }.navigationTitle(item.title).navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } } }
     }
 }
+private struct PrintEnlargedSpread: View {
+    let item: PrintPreviewItem
+    @State private var document: PDFDocument?
+    var body: some View {
+        GeometryReader { geometry in
+            let size = document?.page(at: 0)?.bounds(for: .mediaBox).size ?? CGSize(width: 148, height: 210)
+            let aspect = 2 / (0.955 * (1 - DiaryBookSpine.halfGapFraction) * size.height / max(size.width, 1) + 0.09)
+            DiaryBookZoomViewport(contentSize: geometry.size, resetToken: 0) {
+                PrintBoundPDFSpread(left: item.leftPageIndex.flatMap { document?.page(at: $0) },
+                                    right: item.rightPageIndex.flatMap { document?.page(at: $0) }, lining: item.leftPageIndex == nil, thumbnailSize: CGSize(width: 1400, height: 2000))
+                    .aspectRatio(aspect, contentMode: .fit).padding(12)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+            }
+        }.task { document = PDFDocument(url: item.url) }
+    }
+}
+
 private struct PrintPDFView: UIViewRepresentable {
     let url: URL
-    func makeUIView(context: Context) -> PDFView { let view = PDFView(); view.document = PDFDocument(url: url); view.autoScales = true; view.displayMode = .singlePageContinuous; return view }
+    var pageIndex: Int = 0
+    func makeUIView(context: Context) -> PDFView { let view = PDFView(); view.document = PDFDocument(url: url); view.autoScales = true; view.displayMode = .singlePageContinuous; if let page = view.document?.page(at: pageIndex) { view.go(to: page) }; return view }
     func updateUIView(_ uiView: PDFView, context: Context) { }
 }
 
 struct PrintUploadScreen: View {
     let id: UUID
     let owner: String
+    var onClose: (() -> Void)? = nil
+    @Environment(\.dismiss) private var dismiss
     @ObservedObject private var service = PrintOrderService.shared
     @State private var latestOrder: PrintOrder?
     @State private var refreshError: String?
     private var job: PrintLocalJob? { service.jobs.first { $0.id == id && $0.owner == owner } }
+    private func close() {
+        if let onClose { onClose() } else { dismiss() }
+    }
     var body: some View {
         List {
             if let job {
-                Section { Text(job.submission.title).font(.headline); Text(job.state)
+                Section {
+                    Label(job.state == "已上传" ? "订单已提交" : "正在提交印制", systemImage: job.state == "已上传" ? "checkmark.circle.fill" : "arrow.up.doc").font(.headline)
+                    HStack {
+                        Label("文件已准备", systemImage: "checkmark.circle.fill")
+                        Image(systemName: "chevron.right")
+                        Text(job.state == "已上传" ? "上传完成" : "上传文件")
+                        Image(systemName: "chevron.right")
+                        Text("提交完成").foregroundStyle(job.state == "已上传" ? .primary : .secondary)
+                    }.font(.caption)
+                    Text(job.submission.title).font(.headline); Text(job.state)
                     if let latestOrder, job.state == "已上传" { Text(latestOrder.statusText).foregroundStyle(.secondary) }
                     if let latestOrder, !latestOrder.production_error.isEmpty { Text(latestOrder.production_error).foregroundStyle(.red) }
                     if let refreshError { Text(refreshError).foregroundStyle(.red) }
@@ -220,11 +544,24 @@ struct PrintUploadScreen: View {
                     if let error = job.error { Text(error).foregroundStyle(.red) }
                     if service.isRunning(id) { Button("暂停上传") { service.pause(id) } }
                     else if job.state != "已上传" || latestOrder?.file_state == "failed" { Button(latestOrder?.file_state == "failed" ? "重新上传生产稿" : "继续上传") { latestOrder = nil; service.resume(id) } }
-                    Text("可以离开此页面，订单与上传记录已保存。系统中断后，可从“我的印制订单”继续。").font(.footnote).foregroundStyle(.secondary)
+//                    Text("可以离开此页面，订单与上传记录已保存。系统中断后，可从“我的印制订单”继续。").font(.footnote).foregroundStyle(.secondary)
                 }
                 if let orderID = job.orderID { Section { NavigationLink(job.submission.quote_total_fen == 0 ? "查看免费印制订单" : "查看订单 / 微信支付") { PrintOrderDetailScreen(id: orderID, owner: owner) } } }
             } else { Text("此账号下没有该上传任务") }
         }.navigationTitle("提交印制")
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button(job?.state == "已上传" ? "完成" : "关闭", action: close)
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            Button(action: close) {
+                Text(job?.state == "已上传" ? "完成并关闭" : "关闭页面")
+                    .font(.headline).frame(maxWidth: .infinity).padding(12)
+            }
+            .buttonStyle(.borderedProminent)
+            .padding().background(.regularMaterial)
+        }
         .task {
             while !Task.isCancelled {
                 if let orderID = job?.orderID, !service.isRunning(id) {

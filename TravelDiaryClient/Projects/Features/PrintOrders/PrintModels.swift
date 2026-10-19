@@ -27,7 +27,18 @@ nonisolated struct PrintAddress: Codable, Sendable {
     var phone = ""
     var region = ""
     var detail = ""
-    var complete: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty && phone.count >= 7 && !region.isEmpty && !detail.trimmingCharacters(in: .whitespaces).isEmpty }
+    var trimmed: PrintAddress {
+        PrintAddress(name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                     phone: phone.trimmingCharacters(in: .whitespacesAndNewlines),
+                     region: region.trimmingCharacters(in: .whitespacesAndNewlines),
+                     detail: detail.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+    var complete: Bool {
+        let value = trimmed
+        return !value.name.isEmpty && value.name.count <= 60 && !value.region.isEmpty &&
+            !value.detail.isEmpty && value.detail.count <= 240 &&
+            value.phone.range(of: #"^\+?[0-9 -]{7,20}$"#, options: .regularExpression) != nil
+    }
 }
 nonisolated struct PrintFile: Codable, Sendable {
     let role: String
@@ -76,6 +87,7 @@ nonisolated struct PrintOrder: Decodable, Identifiable, Sendable {
     let quantity: Int
     let page_count: Int
     let total_fen: Int
+    var cover_page_count: Int? = nil
     let file_state: String
     let payment_state: String
     let state: String

@@ -69,6 +69,58 @@ enum DiaryPageRenderer {
         context.restoreGState()
     }
 
+    /// 印制导出按图层让出主线程，让滚动、点击和预览在页面生成期间继续响应。
+    static func drawForPrinting(_ document: DiaryDocument, images: [UUID: UIImage], in context: CGContext) async throws {
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.clip(to: CGRect(origin: .zero, size: document.root.referenceSize))
+        try await drawPrintContent(document.root, document: document, images: images, in: context)
+    }
+
+    private static func drawPrintContent(_ content: DiaryObjectContent, document: DiaryDocument, images: [UUID: UIImage], in context: CGContext) async throws {
+        context.saveGState()
+        defer { context.restoreGState() }
+        if let background = content.background {
+            context.setFillColor(color(background).cgColor)
+            context.fill(CGRect(origin: .zero, size: content.referenceSize))
+        }
+        for layer in content.layers where layer.visible {
+            try Task.checkCancellation()
+            if layer.kind == .object, let id = layer.contentID, let child = document.objects[id] {
+                context.saveGState()
+                context.concatenate(matrix(layer, siblings: content.layers))
+                switch layer.blendMode ?? .normal {
+                case .normal: context.setBlendMode(.normal)
+                case .multiply: context.setBlendMode(.multiply)
+                case .darken: context.setBlendMode(.darken)
+                case .linearBurn: context.setBlendMode(.plusDarker)
+                case .lighten: context.setBlendMode(.lighten)
+                }
+                let translucent = layer.effectiveOpacity < 1
+                if translucent { context.setAlpha(layer.effectiveOpacity); context.beginTransparencyLayer(auxiliaryInfo: nil) }
+                if let rect = layer.displayBounds {
+                    context.clip(to: rect)
+                    if let background = child.background { context.setFillColor(color(background).cgColor); context.fill(rect) }
+                }
+                // 嵌套对象也按图层分段；只在最外层裁切，与常规渲染一致。
+                try await drawPrintContent(child, document: document, images: images, in: context)
+                if translucent { context.endTransparencyLayer() }
+                context.restoreGState()
+            } else {
+                UIGraphicsPushContext(context)
+                drawLayers([layer], document: document, images: images, in: context, cacheObjects: false, siblings: content.layers)
+                UIGraphicsPopContext()
+            }
+            // 不跨 await 保留 UIKit 的线程局部绘制上下文。
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        if let drawing = try? PKDrawing(data: content.drawing), !drawing.strokes.isEmpty {
+            UIGraphicsPushContext(context)
+            drawInk(drawing, in: objectBounds(content, document: document))
+            UIGraphicsPopContext()
+        }
+    }
+
     private static func drawInk(_ drawing: PKDrawing, in rect: CGRect) {
         guard !drawing.strokes.isEmpty, !rect.isNull, !rect.isEmpty else { return }
         UITraitCollection(userInterfaceStyle: .light).performAsCurrent {

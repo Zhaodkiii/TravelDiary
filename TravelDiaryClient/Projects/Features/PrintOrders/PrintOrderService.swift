@@ -170,7 +170,7 @@ final class PrintOrderService: ObservableObject {
             let total = job.submission.files.reduce(0) { $0 + $1.size }
             var sent = job.submission.files.filter { completed.contains($0.role) }.reduce(0) { $0 + $1.size }
             progress[id] = Double(sent) / Double(max(total, 1))
-            for role in ["cover", "interior"] {
+            for role in job.submission.files.map(\.role).sorted() {
                 if completed.contains(role) { continue }
                 guard var file = plan.files.first(where: { $0.role == role }),
                       let expected = job.submission.files.first(where: { $0.role == role }) else { throw PrintFailure("上传计划不完整") }

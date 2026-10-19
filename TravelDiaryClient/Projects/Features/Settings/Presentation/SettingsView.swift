@@ -41,22 +41,22 @@ struct SettingsView: View {
                 }
             }
 
-            Section(L10n.text("settings.section.ai", fallback: "AI")) {
-                MainNavigationLink {
-                    AISettingsView(viewModel: aiSettingsViewModel)
-                } label: {
-                    HStack {
-                        Label(
-                            L10n.text("settings.ai_scenarios", fallback: "AI 场景"),
-                            systemImage: "cpu"
-                        )
-                        Spacer()
-                        Text(L10n.text("settings.ai_scenarios.subtitle", fallback: "模型与能力"))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
+//            Section(L10n.text("settings.section.ai", fallback: "AI")) {
+//                MainNavigationLink {
+//                    AISettingsView(viewModel: aiSettingsViewModel)
+//                } label: {
+//                    HStack {
+//                        Label(
+//                            L10n.text("settings.ai_scenarios", fallback: "AI 场景"),
+//                            systemImage: "cpu"
+//                        )
+//                        Spacer()
+//                        Text(L10n.text("settings.ai_scenarios.subtitle", fallback: "模型与能力"))
+//                            .font(.footnote)
+//                            .foregroundStyle(.secondary)
+//                    }
+//                }
+//            }
         }
         .navigationTitle(L10n.text("settings.title", fallback: "设置"))
     }

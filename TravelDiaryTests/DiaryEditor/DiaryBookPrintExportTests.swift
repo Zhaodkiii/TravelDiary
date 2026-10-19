@@ -7,7 +7,7 @@ import PDFKit
 struct DiaryBookPrintExportTests {
     private var product: PrintProduct {
         PrintProduct(id: "test", title: "A5", revision: 1, width_mm: 148, height_mm: 210, paper: "测试", binding: "测试",
-                     description: "", cover_mode: "separate_front_back", duplex: true, min_pages: 2, max_pages: 200,
+                     description: "", cover_mode: "optional_shell", duplex: true, min_pages: 2, max_pages: 200,
                      max_quantity: 10, base_fen: 1000, page_fen: 10, shipping_fen: 0, regions: ["上海"], lead_time: "", terms: "测试")
     }
     private func page(_ book: DiaryBook, text: String) -> DiaryDocument {
@@ -16,7 +16,7 @@ struct DiaryBookPrintExportTests {
             transform: DiaryTransform(position: CGPoint(x: 80, y: 80), pivot: .zero), size: CGSize(width: 600, height: 120), text: text))
         return d
     }
-    @Test func separatesCoverExcludesShellPadsAndPreservesConfirmedBytes() async throws {
+    @Test func printsOptionalShellThenAllContentWithoutExtractingLastPage() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let library = DiaryDocumentStore(ownerID: "print-test", baseDirectory: folder)
@@ -28,29 +28,147 @@ struct DiaryBookPrintExportTests {
         let snapshot = try await store.loadBook()
         let output = folder.appendingPathComponent("output")
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        let result = try await DiaryBookPrintExporter.prepare(book: snapshot, store: store, product: product, front: front.id, back: back.id, directory: output) { _,_ in }
+        var published: [UUID: URL] = [:]
+        var completionCounts: [Int] = []
+        let result = try await DiaryBookPrintExporter.prepare(book: snapshot, store: store, product: product, directory: output, onPageReady: { id, url in
+            #expect(UIImage(contentsOfFile: url.path) != nil)
+            let readyPDF = output.appendingPathComponent("page-\(id).pdf")
+            #expect(PDFDocument(url: readyPDF)?.pageCount == 1)
+            #expect(published[id] == nil)
+            #expect(completionCounts.count == published.count)
+            published[id] = url
+        }) { done, total in
+            #expect(total == 4)
+            #expect(published.count == done)
+            completionCounts.append(done)
+        }
+        #expect(completionCounts == [1, 2, 3, 4])
+        #expect(Set(published.keys) == Set(snapshot.pages.map(\.id)))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: output.path).filter { $0.hasPrefix("page-") }.count == 4)
         let cover = try #require(PDFDocument(url: output.appendingPathComponent("cover.pdf")))
         let inner = try #require(PDFDocument(url: output.appendingPathComponent("interior.pdf")))
-        #expect(cover.pageCount == 2)
-        #expect(cover.page(at: 0)?.string?.contains("FRONT") == true)
-        #expect(cover.page(at: 1)?.string?.contains("BACK") == true)
-        #expect(inner.pageCount == 2)
-        #expect(inner.page(at: 0)?.string?.contains("INSIDE") == true)
+        #expect(cover.pageCount == 1)
+        #expect(cover.page(at: 0)?.string?.contains("SHELL") == true)
+        #expect(inner.pageCount == 4)
+        #expect(inner.page(at: 0)?.string?.contains("FRONT") == true)
+        #expect(inner.page(at: 1)?.string?.contains("INSIDE") == true)
+        #expect(inner.page(at: 2)?.string?.contains("BACK") == true)
         #expect(inner.string?.contains("SHELL") != true)
-        #expect(inner.string?.contains("FRONT") != true)
-        #expect(result.snapshot.pages.count == 3)
+        #expect(result.snapshot.pages.map(\.role) == ["shell", "interior", "interior", "interior"])
+        #expect(result.snapshot.pages.count == 4)
         #expect(result.warnings.contains { $0.contains("空白") })
         let size = try #require(inner.page(at: 0)).bounds(for: .trimBox).size
         #expect(abs(size.width * 25.4 / 72 - 148) < 0.1)
         try await library.deleteBook(book.id)
         for f in result.files { #expect(try DiaryBookPrintExporter.hashFile(output.appendingPathComponent(f.role + ".pdf")) == f.sha256) }
     }
-    @Test func rejectsDuplicateCoverAndUnsupportedDimensions() throws {
+    @Test func automaticallyMapsSortedContentAndEnforcesProportionThreshold() throws {
         var book = DiaryBook(title: "test")
-        book.pages = (0..<3).map { _ in DiaryPageEntry(id: UUID(), title: "", revisionID: UUID(), size: DiaryPagePreset.a5.size) }
-        #expect(throws: PrintFailure.self) { try DiaryBookPrintExporter.mapping(book: book, front: book.pages[0].id, back: book.pages[0].id, product: product) }
-        book.pages[1].size = CGSize(width: 1000, height: 1000)
-        #expect(throws: PrintFailure.self) { try DiaryBookPrintExporter.mapping(book: book, front: book.pages[0].id, back: book.pages[2].id, product: product) }
+        book.pages = (0..<6).map { _ in DiaryPageEntry(id: UUID(), title: "", revisionID: UUID(), size: DiaryPagePreset.a5.size) }
+        book.shellPageID = book.pages[0].id
+        let map = try DiaryBookPrintExporter.mapping(book: book, product: product)
+        #expect(map.cover.map(\.id) == [book.pages[0].id])
+        #expect(map.inner.map(\.id) == Array(book.pages[1...5]).map(\.id))
+        #expect(map.count == 6)
+        let ratio = CGFloat(product.width_mm) / CGFloat(product.height_mm)
+        book.pages[2].size = CGSize(width: ratio * 1.15 * 1000, height: 1000)
+        #expect(try DiaryBookPrintExporter.mapping(book: book, product: product).count == 6)
+        book.pages[3].size = CGSize(width: ratio / 1.15 * 1000, height: 1000)
+        #expect(DiaryBookPrintExporter.incompatiblePages(book: book, product: product).isEmpty)
+        book.pages[2].size.width += 0.1
+        #expect(DiaryBookPrintExporter.incompatiblePages(book: book, product: product) == [2])
+        #expect(throws: PrintFailure.self) { try DiaryBookPrintExporter.mapping(book: book, product: product) }
+        book.pages = Array(book.pages.prefix(1))
+        #expect(throws: PrintFailure.self) { try DiaryBookPrintExporter.mapping(book: book, product: product) }
+    }
+    @Test func singleContentPageNeedsNoCoverOrBack() throws {
+        var book = DiaryBook(title: "one")
+        let entry = DiaryPageEntry(id: UUID(), title: "", revisionID: UUID(), size: DiaryPagePreset.a5.size)
+        book.pages = [entry]
+        let map = try DiaryBookPrintExporter.mapping(book: book, product: product)
+        #expect(map.cover.isEmpty)
+        #expect(map.inner.map(\.id) == [entry.id])
+        #expect(map.count == 2)
+        #expect(DiaryBookImageExporter.spreadPages(book).count == 1)
+        #expect(DiaryBookImageExporter.spreadPages(book)[0][0] == nil)
+        #expect(DiaryBookImageExporter.spreadPages(book)[0][1]?.id == entry.id)
+    }
+    @Test func cooperativePrintDrawingMatchesNormalRendererAndLetsUIRun() async throws {
+        var document = page(DiaryBook(title: "responsive"), text: "SAME CONTENT")
+        document.appendObject(containing: DiaryLayer(name: "second", kind: .text,
+            transform: DiaryTransform(position: CGPoint(x: 120, y: 260), pivot: .zero), size: CGSize(width: 600, height: 120), text: "SECOND"))
+        func context() throws -> CGContext {
+            let ctx = try #require(CGContext(data: nil, width: 400, height: 600, bitsPerComponent: 8, bytesPerRow: 1600,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            ctx.scaleBy(x: 400 / document.root.referenceSize.width, y: 600 / document.root.referenceSize.height)
+            return ctx
+        }
+        let normal = try context(), cooperative = try context()
+        UIGraphicsPushContext(normal)
+        DiaryPageRenderer.draw(document, images: [:], in: normal, cacheObjects: false)
+        UIGraphicsPopContext()
+        var uiRan = false
+        let uiTask = Task { @MainActor in uiRan = true }
+        try await DiaryPageRenderer.drawForPrinting(document, images: [:], in: cooperative)
+        #expect(uiRan)
+        await uiTask.value
+        let first = try #require(normal.data), second = try #require(cooperative.data)
+        #expect(Data(bytes: first, count: 1600 * 600) == Data(bytes: second, count: 1600 * 600))
+    }
+    @Test func revealsOnlyCompletedSpreadsInReadingOrder() {
+        var book = DiaryBook(title: "progress")
+        book.pages = (0..<4).map { _ in DiaryPageEntry(id: UUID(), title: "", revisionID: UUID(), size: DiaryPagePreset.a5.size) }
+        var ready = Set<UUID>()
+        #expect(DiaryBookPrintExporter.readySpreads(book: book, readyPageIDs: ready).isEmpty)
+        ready.insert(book.pages[0].id)
+        #expect(DiaryBookPrintExporter.readySpreads(book: book, readyPageIDs: ready) == [0])
+        ready.insert(book.pages[1].id)
+        #expect(DiaryBookPrintExporter.readySpreads(book: book, readyPageIDs: ready) == [0])
+        ready.insert(book.pages[2].id)
+        #expect(DiaryBookPrintExporter.readySpreads(book: book, readyPageIDs: ready) == [0, 1])
+        ready.insert(book.pages[3].id)
+        #expect(DiaryBookPrintExporter.readySpreads(book: book, readyPageIDs: ready) == [0, 1, 2])
+    }
+    @Test func proportionAllowsUniformResizingAndRejectsInvalidSizes() {
+        #expect(DiaryBookPrintExporter.proportionDifference(CGSize(width: 1480, height: 2100), product: product) < 0.001)
+        #expect(DiaryBookPrintExporter.proportionDifference(.zero, product: product).isInfinite)
+        #expect(DiaryBookPrintExporter.proportionDifference(CGSize(width: 1000, height: 1000), product: product) > 0.15)
+    }
+    @Test func adaptedProductionPDFMatchesTargetSizeAndPreservesPageOrder() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let library = DiaryDocumentStore(ownerID: "print-adapt", baseDirectory: folder)
+        let book = try await library.createBook(title: "adapt", preset: .a5)
+        let store = DiaryDocumentStore(ownerID: "print-adapt", baseDirectory: folder, bookID: book.id)
+        for text in ["FRONT", "INSIDE", "BACK"] { try await store.save(page(book, text: text)) }
+        var spec = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(product)) as? [String: Any])
+        spec["width_mm"] = 160
+        let adaptedProduct = try JSONDecoder().decode(PrintProduct.self, from: JSONSerialization.data(withJSONObject: spec))
+        let snapshot = try await store.loadBook()
+        let output = folder.appendingPathComponent("output")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let result = try await DiaryBookPrintExporter.prepare(book: snapshot, store: store, product: adaptedProduct, directory: output) { _,_ in }
+        #expect(result.warnings.contains { $0.contains("调整比例") })
+        let pdf = try #require(PDFDocument(url: output.appendingPathComponent("interior.pdf")))
+        let first = try #require(pdf.page(at: 0))
+        #expect(first.string?.contains("FRONT") == true)
+        #expect(pdf.page(at: 1)?.string?.contains("INSIDE") == true)
+        #expect(pdf.page(at: 2)?.string?.contains("BACK") == true)
+        #expect(result.files.map(\.role) == ["interior"])
+        #expect(!FileManager.default.fileExists(atPath: output.appendingPathComponent("cover.pdf").path))
+        #expect(abs(first.bounds(for: .mediaBox).width * 25.4 / 72 - 160) < 0.1)
+        #expect(abs(first.bounds(for: .mediaBox).height * 25.4 / 72 - 210) < 0.1)
+        #expect(pdf.pageCount == 4)
+    }
+    @Test func addressTrimsWhitespaceAndRejectsInvalidPhone() {
+        var address = PrintAddress(name: " 张三 ", phone: " 13800138000 ", region: "上海", detail: " 某街道 1 号 ")
+        #expect(address.complete)
+        #expect(address.trimmed.name == "张三")
+        #expect(address.trimmed.phone == "13800138000")
+        address.phone = "abcdefghi"
+        #expect(!address.complete)
+        address.phone = "13800138000"; address.detail = "  \n "
+        #expect(!address.complete)
     }
     @Test func changedCatalogCannotBeSilentlyFrozen() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
