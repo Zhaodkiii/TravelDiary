@@ -118,6 +118,12 @@ final class DiaryCanvasRenderCache {
             } else {
                 entry = Entry(source: layer, stamp: stamp, version: nextVersion(),
                     rect: DiaryPageRenderer.bounds(layer, document: document, siblings: content.layers))
+                // 资源或内容更新时保留同一局部区域的旧位图，待新位图完成后再替换。
+                // renderedVersion 仍为 0，因此旧图只作过渡，不会被当成最新内容。
+                if let previous = entries[layer.id], previous.rect == entry.rect {
+                    entry.image = previous.image
+                    entry.pixelScale = previous.pixelScale
+                }
             }
             if !layer.visible { entry.image = nil; entry.alpha = nil }
             retained[layer.id] = entry

@@ -24,13 +24,16 @@ struct DiaryContextToolbar: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            if let selected = session.selected {
-                HStack {
-                    Text(selected.name).font(.caption).lineLimit(1).foregroundStyle(.secondary)
-                    Spacer()
-                    Button(action: onLayers) { Label("图层", systemImage: "square.3.layers.3d") }.font(.caption)
-                }.padding(.horizontal, 16)
+            // 保留信息行的布局高度，选择切换不会改变画布尺寸或重置浏览倍率。
+            HStack {
+                Text(session.selected?.name ?? "").font(.caption).lineLimit(1).foregroundStyle(.secondary)
+                Spacer()
+                Button(action: onLayers) { Label("图层", systemImage: "square.3.layers.3d") }.font(.caption)
             }
+            .padding(.horizontal, 16)
+            .opacity(session.selected == nil ? 0 : 1)
+            .allowsHitTesting(session.selected != nil)
+            .accessibilityHidden(session.selected == nil)
             HStack(spacing: 0) {
                 Menu {
                     Button(action: onPhotos) { Label("照片（可多选）", systemImage: "photo.on.rectangle") }

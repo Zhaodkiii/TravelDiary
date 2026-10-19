@@ -1,6 +1,7 @@
 import Testing
 import UIKit
 import PencilKit
+import SwiftUI
 @testable import TravelDiary
 
 @MainActor
@@ -49,6 +50,58 @@ struct DiaryCanvasPerformanceTests {
         }
         #expect(surface.renderCache.synchronizationCount == syncs)
         #expect(surface.renderCache.visualVersion == version)
+    }
+
+    @Test func selectionKeepsToolbarHeightAndViewport() {
+        let (document, images) = fixture()
+        let session = session(document, images)
+        func toolbarHeight() -> CGFloat {
+            let host = UIHostingController(rootView: DiaryContextToolbar(session: session,
+                onPhotos: {}, onDrawing: {}, onLayers: {}, onOpenObject: {}))
+            return host.sizeThatFits(in: CGSize(width: 390, height: 1000)).height
+        }
+        let height = toolbarHeight()
+        session.select(document.root.layers[0].id)
+        #expect(abs(toolbarHeight() - height) < 0.01)
+        session.select(nil)
+        #expect(abs(toolbarHeight() - height) < 0.01)
+    }
+
+    @Test func resourceRefreshKeepsPreviousImageUntilReplacementIsReady() throws {
+        let (document, images) = fixture()
+        let cache = cache(document, images)
+        let oldImage = try #require(cache.ordered[0].image)
+        let assetID = try #require(images.keys.first)
+        var loaded = images
+        loaded[assetID] = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 200)).image { _ in
+            UIColor.blue.setFill(); UIRectFill(CGRect(x: 0, y: 0, width: 200, height: 200))
+        }
+        cache.synchronize(document: document, images: loaded, contentID: document.rootContentID)
+        let replacement = cache.ordered[0]
+        #expect(replacement.image === oldImage)
+        #expect(replacement.needsRaster)
+        cache.prepareResolution(pointsToPixels: 2)
+        #expect(cache.rasterize(replacement))
+        #expect(replacement.image != nil)
+        #expect(replacement.image !== oldImage)
+        #expect(!replacement.needsRaster)
+    }
+
+    @Test func resizingReusesDisplayedPixelsUntilNewResolutionIsReady() throws {
+        let (document, images) = fixture()
+        var resized = document
+        let cache = cache(document, images)
+        let entry = cache.ordered[0]
+        let oldImage = try #require(entry.image)
+        resized.objects[document.rootContentID]?.layers[0].transform.scale = 2
+        cache.synchronize(document: resized, images: images, contentID: document.rootContentID)
+        cache.prepareResolution(pointsToPixels: 1)
+        #expect(cache.ordered[0] === entry)
+        #expect(entry.image === oldImage)
+        #expect(entry.needsRaster)
+        #expect(cache.rasterize(entry))
+        #expect(entry.image !== oldImage)
+        #expect(!entry.needsRaster)
     }
 
     @Test func transformsReusePixelsAndCommitOneUndo() throws {

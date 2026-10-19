@@ -176,7 +176,8 @@ final class DiaryCanvasSurface: UIView {
                     return
                 }
                 self.renderCache.rasterize(next)
-                self.updateArtwork()
+                // 保留屏幕上的完整旧画面，全部位图就绪后在同一事务里替换。
+                // 对象之间仍让出主线程，但不逐层提交半更新的画面。
                 do { try await Task.sleep(for: .milliseconds(1)) } catch { return }
             }
         }
