@@ -35,6 +35,12 @@ struct SettingsView: View {
                 )
             }
 
+            Section("实物印制") {
+                MainNavigationLink { PrintOrdersScreen(owner: String(session.accountID)) } label: {
+                    Label("我的印制订单", systemImage: "shippingbox")
+                }
+            }
+
             Section(L10n.text("settings.section.ai", fallback: "AI")) {
                 MainNavigationLink {
                     AISettingsView(viewModel: aiSettingsViewModel)

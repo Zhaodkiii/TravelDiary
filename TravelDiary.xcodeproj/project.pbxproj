@@ -11,6 +11,7 @@
 		A1OSS0022FFB252D00137E68 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1OSS0122FFB252D00137E68 /* SystemConfiguration.framework */; };
 		A1OSS0032FFB252D00137E68 /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A1OSS0132FFB252D00137E68 /* libresolv.tbd */; };
 		A1TEST0D2FFB401000137E68 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1TEST0C2FFB401000137E68 /* XCTest.framework */; };
+		C0DE00100000000000000001 /* Vendor/WeChat/WechatOpenSDK.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0DE00100000000000000002 /* Vendor/WeChat/WechatOpenSDK.xcframework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -30,6 +31,7 @@
 		A1OSS0132FFB252D00137E68 /* libresolv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libresolv.tbd; path = usr/lib/libresolv.tbd; sourceTree = SDKROOT; };
 		A1TEST012FFB401000137E68 /* TravelDiaryTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TravelDiaryTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1TEST0C2FFB401000137E68 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/iPhoneOS.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
+		C0DE00100000000000000002 /* Vendor/WeChat/WechatOpenSDK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Vendor/WeChat/WechatOpenSDK.xcframework; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -215,6 +217,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0DE00100000000000000001 /* Vendor/WeChat/WechatOpenSDK.xcframework in Frameworks */,
 				A1OSS0022FFB252D00137E68 /* SystemConfiguration.framework in Frameworks */,
 				A1OSS0012FFB252D00137E68 /* CoreTelephony.framework in Frameworks */,
 				A1OSS0032FFB252D00137E68 /* libresolv.tbd in Frameworks */,
@@ -254,6 +257,7 @@
 		A1OSS0202FFB252D00137E68 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				C0DE00100000000000000002 /* Vendor/WeChat/WechatOpenSDK.xcframework */,
 				A1OSS0132FFB252D00137E68 /* libresolv.tbd */,
 				A1OSS0122FFB252D00137E68 /* SystemConfiguration.framework */,
 				A1OSS0112FFB252D00137E68 /* CoreTelephony.framework */,

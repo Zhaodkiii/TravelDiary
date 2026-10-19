@@ -43,11 +43,12 @@ nonisolated struct DiaryTrashedPage: Codable, Identifiable, Equatable, Sendable 
 
 /// 新建本子的标准页面规格；设计坐标直接采用 A5 在 300 DPI 下的整数像素。
 nonisolated enum DiaryPagePreset: String, CaseIterable, Identifiable, Sendable {
-    case a5, portrait, square
+    case a5, b5, portrait, square
     var id: String { rawValue }
     var title: String {
         switch self {
         case .a5: "A5｜148 × 210 mm @300 DPI"
+        case .b5: "B5（ISO）｜176 × 250 mm @300 DPI"
         case .portrait: "竖版｜1000 × 1400 px"
         case .square: "正方形｜1000 × 1000 px"
         }
@@ -55,6 +56,7 @@ nonisolated enum DiaryPagePreset: String, CaseIterable, Identifiable, Sendable {
     var size: CGSize {
         switch self {
         case .a5: CGSize(width: 1748, height: 2480)
+        case .b5: CGSize(width: 2079, height: 2953)
         case .portrait: CGSize(width: 1000, height: 1400)
         case .square: CGSize(width: 1000, height: 1000)
         }

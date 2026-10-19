@@ -782,3 +782,17 @@ private nonisolated struct PresetImportJournal: Codable {
     var pageIDs: [UUID]
     var assetIDs: [UUID]
 }
+
+extension DiaryDocumentStore {
+    /// 在发布队列中复制印制来源，删除原书、清理素材或继续编辑均不会影响本次导出。
+    func freezeForPrinting(_ book: DiaryBook, at base: URL) async throws -> DiaryDocumentStore {
+        let target = DiaryDocumentStore(ownerID: ownerID, baseDirectory: base, bookID: book.id)
+        try await run {
+            let current = try self.readBook(book.id)
+            guard current.catalogRevision == book.catalogRevision else { throw DiaryEditorError.pageConflict }
+            try FileManager.default.createDirectory(at: target.root.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: self.root, to: target.root)
+        }
+        return target
+    }
+}

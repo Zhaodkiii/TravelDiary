@@ -29,7 +29,8 @@ struct URLSessionNetworkTransport: SupportNetworkTransport {
         let requestId = request.value(forHTTPHeaderField: "X-Request-ID") ?? "-"
 
         let requestHeaders = NetworkLogSanitizer.headersPreview(request.allHTTPHeaderFields)
-        let requestBody = NetworkLogSanitizer.bodyFullUTF8(data: request.httpBody, contentType: request.value(forHTTPHeaderField: "Content-Type"))
+        let privatePrint = request.url?.path.contains("/print/") == true
+        let requestBody = privatePrint ? "<private print payload>" : NetworkLogSanitizer.bodyFullUTF8(data: request.httpBody, contentType: request.value(forHTTPHeaderField: "Content-Type"))
 
         logger.info(
             SupportNetworkingStrings.HTTPClient.outbound(
@@ -53,7 +54,7 @@ struct URLSessionNetworkTransport: SupportNetworkTransport {
             let cost = Date().timeIntervalSince(roundTripStart)
             let responseByteCount = data.count
             let responseHeaders = NetworkLogSanitizer.headersPreview(httpResponse.allHeaderFields)
-            let responseBody = NetworkLogSanitizer.bodyFullUTF8(
+            let responseBody = privatePrint ? "<private print payload>" : NetworkLogSanitizer.bodyFullUTF8(
                 data: data,
                 contentType: httpResponse.value(forHTTPHeaderField: "Content-Type")
             )

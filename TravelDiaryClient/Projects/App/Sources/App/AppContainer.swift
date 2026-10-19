@@ -58,6 +58,7 @@ final class AppContainer {
         self.environment = environment
         self.backend = backend
         PresetDownloadManager.shared.configure(engine: backend.engine)
+        PrintOrderService.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
         self.coreDataStack = coreDataStack
         self.contentDependencies = contentDependencies
         self.aiSettingsRepository = aiSettingsRepository

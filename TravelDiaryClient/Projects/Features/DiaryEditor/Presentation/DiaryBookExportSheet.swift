@@ -19,6 +19,7 @@ struct DiaryBookExportSheet: View {
         }
     }
 
+    @State private var showingPrint = false
     @State private var path: [Route] = []
     @State private var selected: Set<UUID> = []
     @State private var spreadCount = 1
@@ -40,7 +41,7 @@ struct DiaryBookExportSheet: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            page(title: "选择导出格式") {
+            page(title: "导出与印制") {
                 DiaryExportFormatPage(book: book,
                     onSelectSpreads: { path.append(.spreads) },
                     onSelectPages: { path.append(.singlePages) },
@@ -49,7 +50,7 @@ struct DiaryBookExportSheet: View {
                         videoOptions.firstSpread = 0
                         videoOptions.lastSpread = max(0, DiaryBookImageExporter.spreadPages(book).count - 1)
                         path.append(.video)
-                    })
+                    }, onSelectPrint: { showingPrint = true })
             }
             .navigationDestination(for: Route.self) { route in
                 page(title: route.title) {
@@ -88,6 +89,7 @@ struct DiaryBookExportSheet: View {
                 }
             }
         }
+        .fullScreenCover(isPresented: $showingPrint) { PrintCheckoutScreen(book: book, store: store) }
         .tint(ink)
         .sheet(item: $pdf, onDismiss: {
             if let pdfDirectory { try? FileManager.default.removeItem(at: pdfDirectory) }

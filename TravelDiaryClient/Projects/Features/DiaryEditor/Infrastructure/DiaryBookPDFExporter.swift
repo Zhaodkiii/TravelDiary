@@ -28,6 +28,9 @@ enum DiaryBookPDFExporter {
         if designSize == DiaryPagePreset.a5.size {
             return CGSize(width: 148 / 25.4 * 72, height: 210 / 25.4 * 72)
         }
+        if designSize == DiaryPagePreset.b5.size {
+            return CGSize(width: 176 / 25.4 * 72, height: 250 / 25.4 * 72)
+        }
         // 自定义页面以 300 DPI 把设计像素换算为 PDF point，保留原始长宽比。
         return CGSize(width: designSize.width * 72 / 300, height: designSize.height * 72 / 300)
     }

@@ -8,6 +8,8 @@ struct TravelDiaryApp: App {
         WindowGroup {
             ContentView(dependencies: container.contentDependencies)
                 .environment(\.managedObjectContext, container.coreDataStack.viewContext)
+                .onOpenURL { WeChatPrintPayment.shared.handle($0) }
+                .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { WeChatPrintPayment.shared.handle($0) }
         }
     }
 }
