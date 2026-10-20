@@ -59,6 +59,7 @@ final class AppContainer {
         self.backend = backend
         PresetDownloadManager.shared.configure(engine: backend.engine)
         PrintOrderService.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
+        CustomizationService.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
         self.coreDataStack = coreDataStack
         self.contentDependencies = contentDependencies
         self.aiSettingsRepository = aiSettingsRepository
@@ -130,6 +131,7 @@ final class AppContainer {
             logger: logger
         )
         notification.routeCoordinator.bind(lifecycle: lifecycle)
+        PushAdapter.shared.configure(sessions: sessionStore, devices: auth.deviceRegistrationCoordinator, client: notification.notificationClient)
 
         container = AppContainer(
             environment: environment,

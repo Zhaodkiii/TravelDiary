@@ -91,6 +91,8 @@ struct SupportMainCoordinatorView: View {
     @StateObject private var upgradeLoginViewModel: LoginViewModel
     @State private var showsDeviceAccountUpgradeSheet = false
     @State private var showsCreateDiaryBookForm = false
+    @ObservedObject private var customizations = CustomizationService.shared
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: SupportRootTab = .diaryEditor
     @State private var path = NavigationPath()
 
@@ -140,6 +142,12 @@ struct SupportMainCoordinatorView: View {
 //                    }
 //                    .tag(SupportRootTab.secondCamera)
 
+                CustomizationHomeView(owner: String(session.accountID))
+                    .id(session.accountID)
+                    .tabItem { Label("定制", systemImage: "sparkles") }
+                    .badge(customizations.unread)
+                    .tag(SupportRootTab.customization)
+
                 SettingsView(
                     accountManagementViewModel: accountViewModel,
                     aiSettingsViewModel: aiSettingsViewModel,
@@ -161,9 +169,27 @@ struct SupportMainCoordinatorView: View {
                 DiaryBookDestination(ownerID: String(session.accountID), bookID: route.bookID, managePages: route.managePages)
                     .id(route.bookID)
             }
+            .navigationDestination(for: CustomizationRoute.self) { route in
+                CustomizationDetailView(id: route.id, owner: String(session.accountID))
+                    .id("\(session.accountID):\(route.id)")
+                    .id("\(session.accountID)-\(route.id)")
+            }
             .navigationDestination(for: AccountRoute.self) { _ in
                 AccountManagementView(viewModel: accountViewModel, session: session)
             }
+        }
+        .task(id: customizations.routeID) {
+            guard let id = customizations.routeID else { return }
+            do {
+                _ = try await customizations.detail(id, owner: String(session.accountID))
+                customizations.routeError = nil
+                selectedTab = .customization
+                path = NavigationPath(); path.append(CustomizationRoute(id: id))
+            } catch { selectedTab = .customization; customizations.routeError = "此内容在当前账号下不可用，或已被移除。" }
+            customizations.routeID = nil; PushAdapter.shared.routeConsumed()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await PushAdapter.shared.refreshRegistration(); await customizations.refreshUnread(owner: String(session.accountID)) } }
         }
         .sheet(isPresented: $showsDeviceAccountUpgradeSheet) {
             LoginView(viewModel: upgradeLoginViewModel, mode: .upgradeDeviceAccount)
@@ -175,37 +201,26 @@ struct SupportMainCoordinatorView: View {
         }
     }
 
+    private var currentTabTitle: String {
+        switch selectedTab {
+        case .healthHome: return L10n.tr("home.title", fallback: "首页")
+        case .photoEditor: return "照片编辑"
+        case .diaryEditor: return "我的手帐"
+        case .diaryPresets: return "旅行模板"
+        case .customization: return "专属定制"
+        case .secondCamera: return ""
+        case .settings: return L10n.text("settings.title", fallback: "设置")
+        }
+    }
     @ToolbarContentBuilder
     private var tabToolbar: some ToolbarContent {
-        switch selectedTab {
-        case .healthHome:
-            ToolbarItem(placement: .principal) {
-                tabTitle(L10n.tr("home.title", fallback: "首页"))
-            }
-        case .photoEditor:
-            ToolbarItem(placement: .principal) {
-                tabTitle("照片编辑")
-            }
-        case .diaryEditor:
-            ToolbarItem(placement: .principal) {
-                tabTitle("我的手帐")
-            }
+        if selectedTab != .secondCamera {
+            ToolbarItem(placement: .principal) { tabTitle(currentTabTitle) }
+        }
+        if selectedTab == .diaryEditor {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showsCreateDiaryBookForm = true } label: { Image(systemName: "plus") }
                     .accessibilityLabel("新建手帐本")
-            }
-        case .diaryPresets:
-            ToolbarItem(placement: .principal) {
-                tabTitle("旅行模板")
-            }
-        case .secondCamera:
-            // The camera deliberately presents an immersive, navigation-bar-free surface.
-            ToolbarItem(placement: .automatic) {
-                EmptyView()
-            }
-        case .settings:
-            ToolbarItem(placement: .principal) {
-                tabTitle(L10n.text("settings.title", fallback: "设置"))
             }
         }
     }
@@ -230,6 +245,7 @@ private enum SupportRootTab: Hashable {
     case photoEditor
     case diaryEditor
     case diaryPresets
+    case customization
     case secondCamera
     case settings
 }

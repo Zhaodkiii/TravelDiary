@@ -9,6 +9,8 @@ nonisolated struct RemotePresetBook: Codable, Identifiable, Sendable {
     let version: Int
     let page_count: Int
     let cover_url: String
+    var privateOwner: String? = nil
+    var customizationID: String? = nil
     var content_page_count: Int? = nil
     var style_tags: [String]? = nil
     var usage_tags: [String]? = nil
@@ -51,6 +53,8 @@ nonisolated struct PresetDownloadJob: Codable, Identifiable, Sendable, Equatable
     let targetID: UUID?
     let afterPageID: UUID?
     let expectedRevision: UUID?
+    var privateOwner: String? = nil
+    var customizationID: String? = nil
     var downloadOnly: Bool? = nil
     var status = "queued"
     var bytes: Int64 = 0
@@ -133,7 +137,7 @@ final class PresetDownloadManager: ObservableObject {
     }
     private func rebuildAvailability() {
         var pages: [String: Set<String>] = [:]
-        for package in packages.values {
+        for (id, package) in packages where canUsePackage(id) {
             let manifest = package.manifest
             pages["\(manifest.templateBookID):\(manifest.packageVersion)", default: []].formUnion(manifest.pages.map(\.id))
         }
@@ -146,11 +150,16 @@ final class PresetDownloadManager: ObservableObject {
         self.engine = engine
         MaterialCatalogRepository.shared.engine = engine
     }
+    func deactivate() {
+        for job in jobs where running[job.id] != nil { pause(job.id) }
+        owner = nil; signedURLs.removeAll(); browseCache.removeAll(); rebuildAvailability()
+    }
     func activate(owner: String) {
         MaterialCatalogRepository.shared.activate(owner)
         if self.owner != owner {
             for job in jobs where running[job.id] != nil { pause(job.id) }
             self.owner = owner
+            signedURLs.removeAll(); browseCache.removeAll(); rebuildAvailability()
         }
     }
     func request(_ path: String, body: [String: [String]]? = nil, allowETag: Bool = false) async throws -> Data {
@@ -212,7 +221,7 @@ final class PresetDownloadManager: ObservableObject {
         jobs.append(PresetDownloadJob(id: jobID, owner: owner, planID: plan, title: book.title,
             manifestData: bytes, wholeBook: pageIDs == nil, targetID: pageIDs == nil ? nil : target?.id,
             afterPageID: after, expectedRevision: target?.catalogRevision,
-            downloadOnly: downloadOnly, total: Int64(package.files.reduce(0) { $0 + $1.byteCount })))
+            privateOwner: book.privateOwner, customizationID: book.customizationID, downloadOnly: downloadOnly, total: Int64(package.files.reduce(0) { $0 + $1.byteCount })))
         persist(); schedule()
         return jobID
     }
@@ -250,19 +259,27 @@ final class PresetDownloadManager: ObservableObject {
         return PresetImportPreparation(package: DiaryPresetPackage(root: root.appendingPathComponent(id.uuidString), manifest: manifest), downloadID: id)
     }
 
+    private func canUsePackage(_ id: UUID) -> Bool {
+        guard let job = jobs.first(where: { $0.id == id }) else { return false }
+        return job.privateOwner == nil || (job.privateOwner == owner && job.owner == owner)
+    }
     func cachedPackage(bookID: String, version: Int, pageIDs: [String]) -> DiaryPresetPackage? {
-        packages.values.first {
+        packages.filter { id, _ in canUsePackage(id) }.map(\.value).first {
             $0.manifest.templateBookID == bookID && $0.manifest.packageVersion == version
                 && Set(pageIDs).isSubset(of: Set($0.manifest.pages.map(\.id)))
         }
     }
     func completeCachedPackage(for book: RemotePresetBook) -> DiaryPresetPackage? {
-        packages.values.first {
+        packages.filter { id, _ in canUsePackage(id) }.map(\.value).first {
             $0.id == book.id && $0.manifest.packageVersion == book.version
                 && book.page_count > 0 && $0.manifest.pages.count == book.page_count
         }
     }
-    func preparedPackage(_ id: UUID) -> DiaryPresetPackage? { packages[id] }
+    func preparedPackage(_ id: UUID) -> DiaryPresetPackage? {
+        guard canUsePackage(id) else { return nil }
+        return packages[id]
+    }
+    func isRunning(_ id: UUID) -> Bool { running[id] != nil }
     func pause(_ id: UUID) {
         guard let i = jobs.firstIndex(where: { $0.id == id }), !["completed", "ready", "importing"].contains(jobs[i].status) else { return }
         jobs[i].status = "paused"; running[id]?.cancel(); persist()
@@ -304,6 +321,18 @@ final class PresetDownloadManager: ObservableObject {
                 if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
             }
         }
+        for scope in Set(removable.compactMap(\.privateOwner)) {
+            let removedHashes = Set(removable.filter { $0.privateOwner == scope }.flatMap { job in
+                (try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData).files.map(\.sha256)) ?? []
+            })
+            let liveHashes = Set(remaining.filter { $0.privateOwner == scope }.flatMap { job in
+                (try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData).files.map(\.sha256)) ?? []
+            })
+            let name = "private-" + SHA256.hash(data: Data(scope.utf8)).map { String(format: "%02x", $0) }.joined()
+            for hash in removedHashes.subtracting(liveHashes) where hash.count == 64 && hash.allSatisfy({ $0.isHexDigit }) && !lockedHashes.contains(hash) {
+                for suffix in ["", ".parts"] { try? fm.removeItem(at: root.appendingPathComponent(name).appendingPathComponent(hash + suffix)) }
+            }
+        }
         jobs = remaining
         for id in removedIDs { packages.removeValue(forKey: id) }
         rebuildAvailability()
@@ -322,7 +351,7 @@ final class PresetDownloadManager: ObservableObject {
             saveTask = nil
             // A serial queue prevents older snapshots overwriting newer snapshots.
             saveQueue.async {
-                do { try JSONEncoder().encode(snapshot).write(to: url, options: .atomic) }
+                do { try JSONEncoder().encode(snapshot).write(to: url, options: [.atomic, .completeFileProtectionUnlessOpen]) }
                 catch { NSLog("Preset download state persistence failed: %@", error.localizedDescription) }
             }
         }
@@ -347,12 +376,13 @@ final class PresetDownloadManager: ObservableObject {
         do {
             let manifest = try await Task.detached(priority: .utility) { try JSONDecoder().decode(PresetManifest.self, from: job.manifestData) }.value
             let directory = root.appendingPathComponent(id.uuidString)
-            try await Task.detached(priority: .utility) { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }.value
+            try await Task.detached(priority: .utility) { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true); try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: directory.path) }.value
             let package = DiaryPresetPackage(root: directory, manifest: manifest)
             update(id) { $0.status = "downloading"; $0.bytes = 0 }
             var complete: Int64 = 0
             for (fileIndex, file) in manifest.files.enumerated() {
                 try Task.checkCancellation()
+                guard owner == job.owner else { throw CancellationError() }
                 let destination = try await Task.detached(priority: .utility) { try package.url(file.path) }.value
                 let completedBytes = complete
                 let cached = try await download(file, plan: job.planID, paths: Array(manifest.files.dropFirst(fileIndex).prefix(50).map(\.path))) { bytes in
@@ -371,6 +401,7 @@ final class PresetDownloadManager: ObservableObject {
             update(id) { $0.status = "verifying"; $0.bytes = complete }
             try await Task.detached(priority: .utility) { try package.validate() }.value
             try Task.checkCancellation()
+            guard owner == job.owner else { throw CancellationError() }
             packages[id] = package; rebuildAvailability()
             if job.downloadOnly == true {
                 update(id) { $0.status = "ready" }
@@ -410,7 +441,9 @@ final class PresetDownloadManager: ObservableObject {
         try Task.checkCancellation()
         lockedHashes.insert(file.sha256)
         defer { lockedHashes.remove(file.sha256) }
-        let cache = root.appendingPathComponent("blobs")
+        let cacheOwner = jobs.first(where: { $0.planID == plan })?.privateOwner
+        let cacheName = cacheOwner.map { "private-" + SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() } ?? "blobs"
+        let cache = root.appendingPathComponent(cacheName)
         let final = cache.appendingPathComponent(file.sha256)
         let parts = cache.appendingPathComponent(file.sha256 + ".parts")
         let hit = try await Task.detached(priority: .utility) {
@@ -421,6 +454,7 @@ final class PresetDownloadManager: ObservableObject {
             try FileManager.default.removeItem(at: final)
             return false
         }.value
+        if let cacheOwner, cacheOwner != owner { throw CancellationError() }
         if hit { progress(file.byteCount); return final }
         var offset = 0
         while offset < file.byteCount {

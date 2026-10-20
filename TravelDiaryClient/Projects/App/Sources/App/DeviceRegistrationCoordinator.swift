@@ -1,6 +1,7 @@
 import UIKit
 
 enum DeviceRegistrationReason: String, Sendable {
+    case pushStateChanged
     case guestColdLaunch
     case signedInColdLaunch
     case signedInForeground
@@ -95,7 +96,7 @@ final class DeviceRegistrationCoordinator {
         }
 
         let info = SupportSystemInfo.shared
-        let key = "\(authenticated)-\(userID ?? 0)-\(info.installationDeviceID)"
+        let key = "\(authenticated)-\(userID ?? 0)-\(info.installationDeviceID)-\(PushAdapter.shared.token ?? "unknown")-\(String(describing: PushAdapter.shared.notificationsEnabled))"
         if key == lastRegisteredKey, reason != .signedInForeground {
             logger.info(
                 "设备登记阶段跳过 outcome=skipped_same_launch_submission reason=\(reason.rawValue) accountID=\(accountID.map(String.init) ?? "-")",
@@ -112,8 +113,8 @@ final class DeviceRegistrationCoordinator {
         let request = DeviceRegistrationRequest(
             deviceID: info.installationDeviceID,
             userID: userID,
-            pushToken: "",
-            notificationsEnabled: false,
+            pushToken: PushAdapter.shared.token,
+            notificationsEnabled: PushAdapter.shared.notificationsEnabled,
             appVersion: info.appVersion,
             buildVersion: info.buildVersion,
             bundleIdentifier: info.bundleIdentifier,
@@ -133,7 +134,7 @@ final class DeviceRegistrationCoordinator {
         )
 
         logger.info(
-            "设备登记提交 reasons=[\(reason.rawValue)] includesPushToken=false authenticated=\(authenticated)",
+            "设备登记提交 reasons=[\(reason.rawValue)] includesPushToken=\(PushAdapter.shared.token != nil) authenticated=\(authenticated)",
             module: .device
         )
 

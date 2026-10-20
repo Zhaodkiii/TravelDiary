@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct TravelDiaryApp: App {
+    @UIApplicationDelegateAdaptor(RemotePushAppDelegateBridge.self) private var pushDelegate
     @State private var container = AppContainer.live()
 
     var body: some Scene {

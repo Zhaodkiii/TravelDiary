@@ -575,7 +575,7 @@
 				SWIFT_OBJC_BRIDGING_HEADER = "TravelDiaryClient/Core/Utilities/Objective-C/TravelDiary-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -630,7 +630,7 @@
 				SWIFT_OBJC_BRIDGING_HEADER = "TravelDiaryClient/Core/Utilities/Objective-C/TravelDiary-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};

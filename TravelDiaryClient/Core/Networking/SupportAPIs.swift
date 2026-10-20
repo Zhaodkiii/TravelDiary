@@ -3,8 +3,8 @@ import Foundation
 struct DeviceRegistrationRequest: Codable, Sendable, Equatable {
     var deviceID: String
     var userID: Int64?
-    var pushToken: String
-    var notificationsEnabled: Bool
+    var pushToken: String?
+    var notificationsEnabled: Bool?
     var appVersion: String
     var buildVersion: String
     var bundleIdentifier: String
