@@ -12,6 +12,7 @@ struct AppContentDependencies {
 
 @MainActor
 struct AppCoordinatorDependencies {
+    let storageService: StorageService
     let sessionStore: AppSessionStore
     let lifecycle: AppLifecycleCoordinator
     let authRepository: AuthRepository
@@ -143,6 +144,7 @@ final class AppContainer {
                 routeCoordinator: notification.routeCoordinator,
                 notificationDeliveryCoordinator: notification.notificationDeliveryCoordinator,
                 coordinator: AppCoordinatorDependencies(
+                    storageService: infrastructure.storageService,
                     sessionStore: sessionStore,
                     lifecycle: lifecycle,
                     authRepository: auth.authRepository,

@@ -26,12 +26,7 @@ nonisolated private enum MasteryFileStore {
     }
 
     nonisolated private static func storeURL(accountID: Int64, fileManager: FileManager) -> URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        return base
-            .appending(path: "TravelDiary", directoryHint: .isDirectory)
-            .appending(path: "Mastery", directoryHint: .isDirectory)
-            .appending(path: "\(accountID)", directoryHint: .isDirectory)
+        return StoragePaths.system.business("Mastery", owner: String(accountID))
             .appending(path: "mastery.json")
     }
 }

@@ -22,10 +22,9 @@ struct DiaryBookOpeningStage<Pages: View>: View, Animatable {
         let closedHeight = closedWidth / coverRatio
         // 外沿占单侧外壳宽度的 4.5%；内页宽高仍严格遵循内容页比例。
         let rimFraction: CGFloat = 0.045
-        let openHeightPerWidth = (1 - rimFraction) * (1 - DiaryBookSpine.halfGapFraction) / paperRatio + 2 * rimFraction
-        let openWidth = min(max(viewport.width - 24, 1) / 2,
-                            max(viewport.height - 24, 1) / openHeightPerWidth)
-        let openHeight = openWidth * openHeightPerWidth
+        let openSize = DiaryBookStageLayout.openSize(viewport: viewport, paperRatio: paperRatio)
+        let openWidth = openSize.width / 2
+        let openHeight = openSize.height
         let width = closedWidth + (openWidth - closedWidth) * p
         let height = closedHeight + (openHeight - closedHeight) * p
         let rim = width * rimFraction
@@ -108,4 +107,15 @@ private struct DiaryBookBackingHalf: View {
 /// 每张纸在书脊侧留出 1.8% 宽度，左右合成一条可见的装订缝。
 nonisolated enum DiaryBookSpine {
     static let halfGapFraction: CGFloat = 0.018
+}
+
+/// Shared fitted bounds for rendering and the immersive background hit area.
+nonisolated enum DiaryBookStageLayout {
+    static func openSize(viewport: CGSize, paperRatio: CGFloat) -> CGSize {
+        let rimFraction: CGFloat = 0.045
+        let heightPerHalfWidth = (1 - rimFraction) * (1 - DiaryBookSpine.halfGapFraction) / paperRatio + 2 * rimFraction
+        let halfWidth = min(max(viewport.width - 24, 1) / 2,
+                            max(viewport.height - 24, 1) / heightPerHalfWidth)
+        return CGSize(width: halfWidth * 2, height: halfWidth * heightPerHalfWidth)
+    }
 }

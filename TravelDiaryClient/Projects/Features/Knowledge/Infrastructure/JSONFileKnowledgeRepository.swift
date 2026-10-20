@@ -26,12 +26,7 @@ nonisolated private enum KnowledgeFileStore {
     }
 
     nonisolated private static func storeURL(accountID: Int64, fileManager: FileManager) -> URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        return base
-            .appending(path: "TravelDiary", directoryHint: .isDirectory)
-            .appending(path: "Knowledge", directoryHint: .isDirectory)
-            .appending(path: "\(accountID)", directoryHint: .isDirectory)
+        return StoragePaths.system.business("Knowledge", owner: String(accountID))
             .appending(path: "knowledge_bases.json")
     }
 }

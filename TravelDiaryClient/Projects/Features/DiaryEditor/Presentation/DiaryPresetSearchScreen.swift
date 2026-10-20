@@ -32,8 +32,7 @@ struct DiaryPresetSearchScreen: View {
         "\(ownerID)|\(kind)|\(searchText)|\(onlyDownloaded)|\(activeSeries ?? "")|\(filters.keys.sorted().map { $0 + (filters[$0] ?? []).sorted().joined(separator: ",") }.joined())|\(reload)"
     }
     private var taxonomyURL: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("PresetTaxonomy-\(Data(ownerID.utf8).map { String(format: "%02x", $0) }.joined()).json")
+        StoragePaths.system.cacheAccount(ownerID).appendingPathComponent("Catalog/taxonomy.json")
     }
     var body: some View {
         if showsSearchField {
@@ -117,7 +116,8 @@ struct DiaryPresetSearchScreen: View {
                 try Task.checkCancellation()
                 guard owner == ownerID else { return }
                 taxonomy = value
-                if let data = try? JSONEncoder().encode(value) { try? data.write(to: taxonomyURL, options: .atomic) }
+                if let data = try? JSONEncoder().encode(value) { try? FileManager.default.createDirectory(at: taxonomyURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try? data.write(to: taxonomyURL, options: .atomic) }
             } catch { }
         }
         .refreshable { reload += 1 }

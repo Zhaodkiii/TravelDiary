@@ -132,7 +132,7 @@ struct SupportMainCoordinatorView: View {
             Tab(L10n.tr("tab.settings", fallback: "设置"), systemImage: "gearshape", value: SupportRootTab.settings) {
                 rootNavigation(path: $settingsPath) {
                     SettingsView(accountManagementViewModel: accountViewModel,
-                        aiSettingsViewModel: aiSettingsViewModel, session: session,
+                        aiSettingsViewModel: aiSettingsViewModel, session: session, storageService: dependencies.storageService,
                         onAccountEntryTap: handleAccountEntryTap)
                 }
             }

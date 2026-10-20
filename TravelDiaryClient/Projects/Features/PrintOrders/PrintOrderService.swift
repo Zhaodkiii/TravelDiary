@@ -25,7 +25,7 @@ final class PrintOrderService: ObservableObject {
     private var boundAccount = false
     private var subscription: AnyCancellable?
     private var tasks: [UUID: Task<Void, Never>] = [:]
-    private let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("PrintOrders", isDirectory: true)
+    private let root = StoragePaths.system.accounts
 
     func configure(engine: SupportNetworkEngine, sessions: AppSessionStore) {
         self.engine = engine
@@ -106,13 +106,12 @@ final class PrintOrderService: ObservableObject {
     func isRunning(_ id: UUID) -> Bool { tasks[id] != nil }
     func draftDirectory(owner: String) throws -> URL {
         try requireOwner(owner)
-        let dir = root.appendingPathComponent(scope(owner)).appendingPathComponent(UUID().uuidString)
+        let dir = StoragePaths.system.printOrders(owner).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: dir.path)
         return dir
     }
-    private func index(_ owner: String) -> URL { root.appendingPathComponent(scope(owner)).appendingPathComponent("jobs.json") }
-    private func scope(_ owner: String) -> String { SHA256.hash(data: Data(owner.utf8)).map { String(format: "%02x", $0) }.joined() }
+    private func index(_ owner: String) -> URL { StoragePaths.system.printOrders(owner).appendingPathComponent("jobs.json") }
     private func persist(_ owner: String) throws {
         let url = index(owner)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

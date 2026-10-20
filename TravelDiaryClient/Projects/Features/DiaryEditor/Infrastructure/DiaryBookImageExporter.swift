@@ -15,12 +15,18 @@ enum DiaryBookImageExporter {
     }
 
     static func export(book: DiaryBook, store: DiaryDocumentStore, mode: Mode,
-                       outputDirectory: URL = FileManager.default.temporaryDirectory,
+                       outputDirectory: URL? = nil,
                        progress: (Int, Int) -> Void) async throws -> Result {
-        let directory = outputDirectory.appendingPathComponent("DiaryJPG-\(UUID())")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let bookLease = StorageActivity.shared.acquire(store.storageRoot)
+        defer { withExtendedLifetime(bookLease) {} }
+        let directory = try StorageWorkspace.create(owner: store.ownerID, bookID: book.id, parent: outputDirectory)
         var completed = false
         defer { if !completed { try? FileManager.default.removeItem(at: directory) } }
+        let workspaceLease = StorageActivity.shared.acquire(directory)
+        defer { withExtendedLifetime(workspaceLease) {} }
+        let reservation = try StorageSpaceBudget.shared.reserve(at: directory, estimatedPeak: Int64(book.pages.count) * 16_000_000)
+        defer { withExtendedLifetime(reservation) {} }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var urls: [URL] = [], fallback = false
         func render(_ page: DiaryPageEntry) async throws -> UIImage {
             let loaded = try await store.loadPDFSource(page)
@@ -61,7 +67,7 @@ enum DiaryBookImageExporter {
                 try write(collage(images))
             }
         }
-        try Task.checkCancellation(); completed = true
+        try Task.checkCancellation(); try StorageWorkspace.complete(directory); completed = true
         return Result(urls: urls, directory: directory, usedFallbackFonts: fallback)
     }
 

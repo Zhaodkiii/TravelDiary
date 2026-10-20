@@ -55,7 +55,7 @@ final class MaterialCatalogRepository {
         let cacheable = (method ?? (body == nil ? .get : .post)) == .get
         let capturedOwner = owner
         let key = SHA256.hash(data: Data((owner + "|" + path).utf8)).map { String(format: "%02x", $0) }.joined()
-        let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("MaterialCatalog")
+        let root = StoragePaths.system.cacheAccount(capturedOwner).appendingPathComponent("MaterialCatalog")
         let cache = root.appendingPathComponent(key)
         do {
             let response = try await engine.sendRaw(Self.networkRequest(path, body: body, method: method))
@@ -342,15 +342,14 @@ actor MaterialThumbnailCache {
     func cachedOriginal(_ item: CloudMaterial) -> Data? {
         guard item.thumbnail_sha256 == item.sha256, item.sha256.count == 64,
               item.sha256.allSatisfy({ $0.isHexDigit }) else { return nil }
-        let path = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MaterialThumbnails").appendingPathComponent(item.sha256)
+        let path = StoragePaths.system.cache("MaterialThumbnails").appendingPathComponent(item.sha256)
         guard let data = try? Data(contentsOf: path), data.count == item.byte_size,
               SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == item.sha256 else { return nil }
         return data
     }
     func load(_ item: CloudMaterial) async throws -> Data {
         guard item.thumbnail_sha256.count == 64, item.thumbnail_sha256.allSatisfy({ $0.isHexDigit }) else { throw URLError(.badURL) }
-        let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("MaterialThumbnails")
+        let root = StoragePaths.system.cache("MaterialThumbnails")
         let path = root.appendingPathComponent(item.thumbnail_sha256)
         if let data = try? Data(contentsOf: path) { return data }
         guard let url = URL(string: item.thumbnail_url), url.scheme == "https", url.host?.hasSuffix(".aliyuncs.com") == true else { throw URLError(.badURL) }

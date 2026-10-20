@@ -81,11 +81,19 @@ struct StorageRegistry {
     }
 
     static func live(
+        storageService: StorageService,
         fileCacheManager: FileCacheManager,
         fileTransferService: FileTransferService,
         logger: Logger
     ) -> StorageRegistry {
         return StorageRegistry(entries: [
+            Entry(id: "storage.resourceCatalog", backend: .fileSystem, scope: .accountScoped,
+                  accountIsolated: true, owner: "StorageService", resetPolicy: "Invalidate scoped plans before session changes.", reset: { reason in
+                switch reason {
+                case .accountSwitch(_, let accountID): await storageService.activate(owner: String(accountID))
+                case .signOut: await storageService.activate(owner: nil)
+                }
+            }),
             Entry(
                 id: "coreData.supportClient",
                 backend: .coreData,

@@ -63,6 +63,8 @@ nonisolated final class DiaryDocumentStore: Sendable {
     let stickerPreferenceKey: String
     let ownerID: String
     private let root: URL
+    private let storagePaths: StoragePaths
+    private let trashRoot: URL
     private let libraryRoot: URL
     private let bookID: UUID?
     /// 所有 Store 共用串行发布队列，同一本不能由多个独立队列覆盖目录。
@@ -76,18 +78,23 @@ nonisolated final class DiaryDocumentStore: Sendable {
 
     init(ownerID: String, baseDirectory: URL? = nil, bookID: UUID? = nil) {
         self.ownerID = ownerID
-        let scope = Data(ownerID.utf8).base64EncodedString().replacingOccurrences(of: "/", with: "_")
-        stickerPreferenceKey = "diary.stickers." + scope
-        let scopeRoot = (baseDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
-            .appendingPathComponent("Diaries", isDirectory: true).appendingPathComponent(scope, isDirectory: true)
-        let booksRoot = scopeRoot.appendingPathComponent("books", isDirectory: true)
+        let paths = baseDirectory.map { StoragePaths(support: $0, caches: $0.appendingPathComponent("Caches"), temporary: $0.appendingPathComponent("Temporary")) } ?? StoragePaths.system
+        storagePaths = paths
+        stickerPreferenceKey = "diary.stickers." + StoragePaths.scopeKey(ownerID)
+        let scopeRoot = paths.diaryOwner(ownerID)
+        let booksRoot = paths.books(ownerID)
         libraryRoot = booksRoot
+        trashRoot = paths.trash(ownerID)
         self.bookID = bookID
         root = bookID.map { booksRoot.appendingPathComponent($0.uuidString, isDirectory: true) } ?? scopeRoot
     }
-    private func run<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
+    private func run<T: Sendable>(protect: Bool = true, _ operation: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
-            queue.async { continuation.resume(with: Result { try operation() }) }
+            queue.async {
+                let lease = protect ? StorageActivity.shared.acquire(self.root) : nil
+                defer { withExtendedLifetime(lease) {} }
+                continuation.resume(with: Result { try operation() })
+            }
         }
     }
     /// 裁剪读取源文件，不能使用编辑器的 1800 像素缓存。
@@ -367,8 +374,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
     }
     private func assetDirectory(_ id: UUID) -> URL { bookID == nil ? directory(id) : root }
     private func resolve(_ path: String, in directory: URL) throws -> URL {
-        guard !path.isEmpty, !path.hasPrefix("/"), !path.split(separator: "/").contains("..") else { throw DiaryEditorError.invalidDocument.logged() }
-        return directory.appendingPathComponent(path)
+        try StoragePaths.resolve(path, within: directory)
     }
     private static func decode(_ data: Data, maximumDimension: Int) throws -> UIImage {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
@@ -488,13 +494,64 @@ extension DiaryDocumentStore {
             return ShelfSnapshot(books: DiaryShelfSort.updated.apply(to: books, search: ""), unreadableIDs: failures)
         }
     }
-    /// 删除当前账号下整本手帐，包括页面、回收站和独立素材。
-    nonisolated func deleteBook(_ id: UUID) async throws {
-        try await run {
+    /// Moving a whole book into trash preserves its complete editable contents.
+    nonisolated func trashBook(_ id: UUID) async throws {
+        try await run(protect: false) {
             let directory = self.libraryRoot.appendingPathComponent(id.uuidString, isDirectory: true)
-            if FileManager.default.fileExists(atPath: directory.path) {
-                try FileManager.default.removeItem(at: directory)
+            guard FileManager.default.fileExists(atPath: directory.path) else { return }
+            try StorageActivity.shared.exclusively(directory) {
+                guard StoragePaths.contains(directory.resolvingSymlinksInPath(), in: self.libraryRoot) else { throw StorageFailure.unsafePath }
+                _ = try self.readBook(id)
+                let target = self.trashRoot.appendingPathComponent(id.uuidString, isDirectory: true)
+                guard !FileManager.default.fileExists(atPath: target.path) else { throw StorageFailure.conflict }
+                try FileManager.default.createDirectory(at: self.trashRoot, withIntermediateDirectories: true)
+                try JSONEncoder().encode(Date()).write(to: directory.appendingPathComponent(".deleted-at.json"), options: .atomic)
+                try FileManager.default.moveItem(at: directory, to: target)
             }
+        }
+    }
+    nonisolated struct TrashedBook: Identifiable, Sendable {
+        let book: DiaryBook
+        let deletedAt: Date
+        var id: UUID { book.id }
+    }
+    var storageRoot: URL { root }
+    nonisolated func listTrashedBooks() async throws -> [TrashedBook] {
+        try await run {
+            guard FileManager.default.fileExists(atPath: self.trashRoot.path) else { return [] }
+            return try FileManager.default.contentsOfDirectory(at: self.trashRoot, includingPropertiesForKeys: nil).map { directory in
+                guard let id = UUID(uuidString: directory.lastPathComponent) else { throw StorageFailure.unsafePath }
+                let book = try JSONDecoder().decode(DiaryBook.self, from: Data(contentsOf: directory.appendingPathComponent("book.json")))
+                guard book.id == id else { throw DiaryEditorError.invalidDocument }
+                let deleted = try JSONDecoder().decode(Date.self, from: Data(contentsOf: directory.appendingPathComponent(".deleted-at.json")))
+                return TrashedBook(book: book, deletedAt: deleted)
+            }.sorted { $0.deletedAt > $1.deletedAt }
+        }
+    }
+    nonisolated func restoreBook(_ id: UUID) async throws {
+        try await run(protect: false) {
+            let source = self.trashRoot.appendingPathComponent(id.uuidString, isDirectory: true)
+            try StorageActivity.shared.exclusively(source) {
+                guard StoragePaths.contains(source.resolvingSymlinksInPath(), in: self.trashRoot) else { throw StorageFailure.unsafePath }
+                let target = self.libraryRoot.appendingPathComponent(id.uuidString, isDirectory: true)
+                guard !FileManager.default.fileExists(atPath: target.path) else { throw StorageFailure.conflict }
+                let book = try JSONDecoder().decode(DiaryBook.self, from: Data(contentsOf: source.appendingPathComponent("book.json")))
+                guard book.id == id else { throw DiaryEditorError.invalidDocument }
+                try FileManager.default.createDirectory(at: self.libraryRoot, withIntermediateDirectories: true)
+                try FileManager.default.moveItem(at: source, to: target)
+                try? FileManager.default.removeItem(at: target.appendingPathComponent(".deleted-at.json"))
+            }
+        }
+    }
+    nonisolated func permanentlyDeleteBook(_ id: UUID) async throws {
+        try await run(protect: false) {
+            let source = self.trashRoot.appendingPathComponent(id.uuidString, isDirectory: true)
+            guard FileManager.default.fileExists(atPath: source.path) else { return }
+            guard StoragePaths.contains(source.resolvingSymlinksInPath(), in: self.trashRoot) else { throw StorageFailure.unsafePath }
+            // Only complete, recognizable trash records can be permanently removed.
+            let book = try JSONDecoder().decode(DiaryBook.self, from: Data(contentsOf: source.appendingPathComponent("book.json")))
+            guard book.id == id, FileManager.default.fileExists(atPath: source.appendingPathComponent(".deleted-at.json").path) else { throw StorageFailure.unsafePath }
+            try StorageActivity.shared.exclusively(source) { try FileManager.default.removeItem(at: source) }
         }
     }
     nonisolated func createBook(title: String, preset: DiaryPagePreset = .a5) async throws -> DiaryBook {
@@ -621,20 +678,25 @@ extension DiaryDocumentStore {
         }
     }
     nonisolated func cachedPreview(_ page: DiaryPageEntry, large: Bool) async throws -> Data? {
-        try await run { try? Data(contentsOf: self.previewURL(page, large: large)) }
+        try await run {
+            let url = self.previewURL(page, large: large)
+            let lease = StorageActivity.shared.acquire(url)
+            defer { withExtendedLifetime(lease) {} }
+            return try? Data(contentsOf: url)
+        }
     }
     nonisolated func cachePreview(_ data: Data, page: DiaryPageEntry, large: Bool) async throws {
         try await run {
             let url = self.previewURL(page, large: large)
+            let lease = StorageActivity.shared.acquire(url)
+            defer { withExtendedLifetime(lease) {} }
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
         }
     }
     nonisolated var previewScope: String { root.path }
     private nonisolated func previewURL(_ page: DiaryPageEntry, large: Bool) -> URL {
-        let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let scope = libraryRoot.deletingLastPathComponent().lastPathComponent
-        return cache.appendingPathComponent("DiaryPreviews/\(scope)/\(bookID?.uuidString ?? "single")/\(page.id)/\(page.revisionID)/v2-light-ink-\(large ? 1800 : 480).png")
+        storagePaths.previews(ownerID).appendingPathComponent("\(bookID?.uuidString ?? "single")/\(page.id)/\(page.revisionID)/v2-light-ink-\(large ? 1800 : 480).png")
     }
 }
 
@@ -646,6 +708,8 @@ extension DiaryDocumentStore {
                       progress: @escaping @Sendable (String) -> Void = { _ in },
                       cancellation: DiaryPresetCancellation? = nil) async throws -> DiaryBook {
         try await run {
+            let packageLease = StorageActivity.shared.acquire(package.root)
+            defer { withExtendedLifetime(packageLease) {} }
             let destinationID = self.bookID ?? operationID
             if let existing = try? self.readBook(destinationID), existing.presetImports?[operationID.uuidString] != nil { return existing }
             progress("正在校验预设资源…")

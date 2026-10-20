@@ -74,7 +74,6 @@ final class CustomizationService: ObservableObject {
     private var engine: SupportNetworkEngine?
     private var subscription: AnyCancellable?
     private var tasks: [UUID: Task<Void, Never>] = [:]
-    private let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Customizations", isDirectory: true)
     private var generation = UUID()
     private var lastProgress: [UUID: Date] = [:]
     func configure(engine: SupportNetworkEngine, sessions: AppSessionStore) {
@@ -271,7 +270,7 @@ final class CustomizationService: ObservableObject {
         } catch { if Task.isCancelled { return }; update(source.id) { $0.state = "失败"; $0.error = error.localizedDescription } }
     }
     private func directory(_ owner: String) -> URL {
-        root.appendingPathComponent(SHA256.hash(data: Data(owner.utf8)).map { String(format: "%02x", $0) }.joined(), isDirectory: true)
+        StoragePaths.system.business("Customizations", owner: owner)
     }
     private func persist(_ bytes: Data, to url: URL) throws {
         let parent = url.deletingLastPathComponent(); try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)

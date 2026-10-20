@@ -56,6 +56,7 @@ nonisolated struct PresetDownloadJob: Codable, Identifiable, Sendable, Equatable
     var privateOwner: String? = nil
     var customizationID: String? = nil
     var downloadOnly: Bool? = nil
+    var pinned = false
     var status = "queued"
     var bytes: Int64 = 0
     var total: Int64 = 0
@@ -109,8 +110,7 @@ final class PresetDownloadManager: ObservableObject {
     private let chunkSize = 8 * 1024 * 1024
 
     init(directory: URL? = nil) {
-        root = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("PresetDownloads", isDirectory: true)
+        root = directory ?? StoragePaths.system.downloads
         let directory = root
         restoreTask = Task {
             let restored = await Task.detached(priority: .utility) {
@@ -305,10 +305,16 @@ final class PresetDownloadManager: ObservableObject {
         guard let i = jobs.firstIndex(where: { $0.id == id }), !["importing", "completed"].contains(jobs[i].status) else { return }
         jobs[i].status = "cancelled"; running[id]?.cancel(); persist()
     }
+    func setPinned(_ value: Bool, id: UUID, ownerID: String) throws {
+        guard owner == ownerID, let i = jobs.firstIndex(where: { $0.id == id && $0.owner == ownerID }) else { throw StorageFailure.accountChanged }
+        jobs[i].pinned = value; persist()
+    }
     /// 仅删除停止运行的下载资源；手帐使用独立副本，不受影响。
     func removeDownloads(_ ids: Set<UUID>, ownerID: String) throws {
+        guard owner == ownerID else { throw StorageFailure.accountChanged }
+        for id in ids where StorageActivity.shared.isInUse(root.appendingPathComponent(id.uuidString)) { throw StorageFailure.inUse }
         let removable = jobs.filter {
-            ids.contains($0.id) && $0.owner == ownerID && running[$0.id] == nil
+            ids.contains($0.id) && $0.owner == ownerID && !$0.pinned && running[$0.id] == nil
                 && ["ready", "completed", "cancelled", "paused", "failed"].contains($0.status)
         }
         let removedIDs = Set(removable.map(\.id))
@@ -385,6 +391,8 @@ final class PresetDownloadManager: ObservableObject {
     }
     private func execute(_ id: UUID) async {
         guard let job = jobs.first(where: { $0.id == id }) else { return }
+        let lease = StorageActivity.shared.acquire(root.appendingPathComponent(id.uuidString))
+        defer { withExtendedLifetime(lease) {} }
         do {
             let manifest = try await Task.detached(priority: .utility) { try JSONDecoder().decode(PresetManifest.self, from: job.manifestData) }.value
             let directory = root.appendingPathComponent(id.uuidString)

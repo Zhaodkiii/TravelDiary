@@ -108,9 +108,7 @@ actor MarkdownRemoteImageCache {
     private let cacheDirectory: URL
 
     init() {
-        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-        cacheDirectory = caches.appendingPathComponent("MarkdownRemoteImages", isDirectory: true)
+        cacheDirectory = StoragePaths.system.cache("MarkdownRemoteImages")
         try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
     }
 

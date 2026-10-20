@@ -9,7 +9,8 @@ public enum SecondCameraEditorFileSystem {
         fileExtension: String,
         isAvailableWhileDeviceLocked: Bool = true,
     ) -> URL {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let dir = StoragePaths.system.camera
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let filename = UUID().uuidString + "." + fileExtension
         return dir.appendingPathComponent(filename)
     }
@@ -47,7 +48,9 @@ public enum SecondCameraEditorFileSystem {
     }
 
     nonisolated public static func appDocumentDirectoryPath() -> String {
-        NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
+        let directory = StoragePaths.system.persistent("CameraEditor")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.path
     }
 
     nonisolated public static func appSharedDataDirectoryPath() -> String {

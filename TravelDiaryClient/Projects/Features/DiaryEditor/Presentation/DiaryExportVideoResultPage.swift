@@ -10,6 +10,8 @@ struct DiaryExportVideoResultPage: View {
     @State private var exportingFile = false
     @Environment(\.scenePhase) private var scenePhase
 
+    @State private var storageLease: StorageActivity.Lease?
+
     var body: some View {
         VStack(spacing: 20) {
             Image(systemName: saved ? "checkmark.seal.fill" : "film").font(.system(size: 48)).foregroundStyle(.tint)
@@ -31,8 +33,8 @@ struct DiaryExportVideoResultPage: View {
             Button("存储到文件", systemImage: "folder") { exportingFile = true }.disabled(saving)
         }
         .frame(maxWidth: .infinity).padding(.vertical, 16)
-        .onAppear { player = AVPlayer(url: result.url) }
-        .onDisappear { player?.pause(); player = nil }
+        .onAppear { storageLease = StorageActivity.shared.acquire(result.url.deletingLastPathComponent()); player = AVPlayer(url: result.url) }
+        .onDisappear { player?.pause(); player = nil; storageLease = nil }
         .onChange(of: scenePhase) { _, phase in if phase != .active { player?.pause() } }
         .sheet(isPresented: $exportingFile) { DiaryVideoFilePicker(url: result.url) }
     }

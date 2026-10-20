@@ -24,14 +24,12 @@ extension FileManager {
 }
 private extension FileManager {
     static func getFileUrl() -> URL? {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-            .first?
-            .appendingPathComponent(videoPath)
+        let directory = StoragePaths.system.camera
+        do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
+        catch { return nil }
+        return directory.appendingPathComponent(UUID().uuidString + ".mp4")
     }
     static func clearPlaceIfTaken(_ url: URL) {
         try? FileManager.default.removeItem(at: url)
     }
-}
-private extension FileManager {
-    static var videoPath: String { "mijick-camera-video-output.mp4" }
 }

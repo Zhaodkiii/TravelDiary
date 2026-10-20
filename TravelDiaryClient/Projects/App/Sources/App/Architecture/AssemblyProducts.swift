@@ -2,6 +2,7 @@ import Foundation
 
 /// App 级基础设施装配产物。
 struct AppInfrastructureAssemblyProduct {
+    let storageService: StorageService
     let storageRegistry: StorageRegistry
     let fileCacheManager: FileCacheManager
     let ossConfigurationStore: SupportOSSConfigurationStore
@@ -97,13 +98,16 @@ enum AppAssembly {
             logger: logger
         )
 
+        let storageService = StorageService()
         let storageRegistry = StorageRegistry.live(
+            storageService: storageService,
             fileCacheManager: fileCacheManager,
             fileTransferService: fileTransferService,
             logger: logger
         )
 
         return AppInfrastructureAssemblyProduct(
+            storageService: storageService,
             storageRegistry: storageRegistry,
             fileCacheManager: fileCacheManager,
             ossConfigurationStore: ossConfigurationStore,

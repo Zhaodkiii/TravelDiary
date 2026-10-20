@@ -91,10 +91,7 @@ actor LocalModelService {
     }
 
     func localModelsDirectoryURL() throws -> URL {
-        guard let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            throw LocalModelServiceError.fileNotFound
-        }
-        let dir = base.appendingPathComponent("LocalModels", isDirectory: true)
+        let dir = StoragePaths.system.persistent("LocalModels")
         if fileManager.fileExists(atPath: dir.path) == false {
             try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
         }

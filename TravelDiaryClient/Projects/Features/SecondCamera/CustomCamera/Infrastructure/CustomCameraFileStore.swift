@@ -4,7 +4,7 @@ import Foundation
 
 enum CustomCameraFileStore {
     static var temporaryDirectory: URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("custom-camera", isDirectory: true)
+        StoragePaths.system.camera
     }
 
     static func ensureTemporaryDirectory() throws {
@@ -12,22 +12,8 @@ enum CustomCameraFileStore {
     }
 
     static func removeExpiredTemporaryFiles(olderThan interval: TimeInterval = 24 * 60 * 60) {
-        let fileManager = FileManager.default
-        guard let urls = try? fileManager.contentsOfDirectory(
-            at: temporaryDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else { return }
-
-        let expirationDate = Date().addingTimeInterval(-interval)
-
-        for url in urls {
-            guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
-                  let modifiedAt = values.contentModificationDate,
-                  modifiedAt < expirationDate
-            else { continue }
-
-            try? fileManager.removeItem(at: url)
-        }
+        // Age alone cannot prove that a capture is saved or unused. The owning session
+        // removes its abandoned files explicitly; unfinished media is preserved.
+        _ = interval
     }
 }

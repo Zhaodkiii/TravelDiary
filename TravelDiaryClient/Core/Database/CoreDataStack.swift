@@ -52,8 +52,7 @@ final class CoreDataStack: @unchecked Sendable {
     }
 
     private static func defaultStoreURL() -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
+        let base = StoragePaths.system.support
         return base
             .appending(path: "TravelDiary", directoryHint: .isDirectory)
             .appending(path: "CoreData", directoryHint: .isDirectory)

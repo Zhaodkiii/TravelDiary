@@ -17,6 +17,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     private var closing = false
     private let parentStateBeforeOpen: Snapshot?
     let store: DiaryDocumentStore
+    private let storageLease: StorageActivity.Lease
     @Published private(set) var document: DiaryDocument {
         didSet { renderGeneration &+= 1; selectedIndex = nil }
     }
@@ -59,6 +60,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     /// 主画布和子对象共享会话类型；子会话持有值拷贝，取消时不会污染父文档。
     init(document: DiaryDocument, images: [UUID: UIImage], store: DiaryDocumentStore,
          contentID: UUID? = nil, parent: DiaryEditorSession? = nil, parentStateBeforeOpen: Snapshot? = nil) {
+        self.storageLease = StorageActivity.shared.acquire(store.storageRoot)
         self.document = document; self.images = images; self.store = store
         self.contentID = contentID ?? document.rootContentID
         self.parent = parent

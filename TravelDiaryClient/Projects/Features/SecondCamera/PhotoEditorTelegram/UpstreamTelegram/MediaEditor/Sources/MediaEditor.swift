@@ -1774,7 +1774,7 @@ public final class MediaEditor {
             } else {
                 switch item.content {
                 case let .image(image):
-                    let tempImagePath = NSTemporaryDirectory() + "\(Int64.random(in: Int64.min ... Int64.max)).jpg"
+                    let tempImagePath = StoragePaths.system.camera.appendingPathComponent(UUID().uuidString + ".jpg").path
                     if let data = image.jpegData(compressionQuality: 0.85) {
                         try? data.write(to: URL(fileURLWithPath: tempImagePath))
                     }

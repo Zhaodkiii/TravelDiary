@@ -49,8 +49,7 @@ struct FileETagStore: ETagStore {
             self.baseDirectory = baseDirectory
         } else {
             // 系统缓存目录，随设备清理策略可被清空。
-            let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            self.baseDirectory = caches.appendingPathComponent("TravelDiary.ETagCache", isDirectory: true)
+            self.baseDirectory = StoragePaths.system.cache("ETagResponses")
         }
     }
 

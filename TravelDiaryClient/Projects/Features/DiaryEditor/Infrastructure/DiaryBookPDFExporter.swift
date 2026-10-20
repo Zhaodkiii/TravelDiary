@@ -36,14 +36,20 @@ enum DiaryBookPDFExporter {
     }
 
     static func export(book: DiaryBook, store: DiaryDocumentStore,
-                       outputDirectory: URL = FileManager.default.temporaryDirectory.appendingPathComponent("DiaryPDFExports", isDirectory: true),
+                       outputDirectory: URL? = nil,
                        progress: (Int, Int) -> Void = { _, _ in }) async throws -> DiaryBookPDFExport {
         guard !book.pages.isEmpty else { throw ExportError.emptyBook }
         try Task.checkCancellation()
-        let directory = outputDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let bookLease = StorageActivity.shared.acquire(store.storageRoot)
+        defer { withExtendedLifetime(bookLease) {} }
+        let directory = try StorageWorkspace.create(owner: store.ownerID, bookID: book.id, parent: outputDirectory)
         var completed = false
         defer { if !completed { try? FileManager.default.removeItem(at: directory) } }
+        let workspaceLease = StorageActivity.shared.acquire(directory)
+        defer { withExtendedLifetime(workspaceLease) {} }
+        let reservation = try StorageSpaceBudget.shared.reserve(at: directory, estimatedPeak: Int64(book.pages.count) * 12_000_000)
+        defer { withExtendedLifetime(reservation) {} }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let safeName = String(book.title.unicodeScalars.filter {
             !CharacterSet.controlCharacters.contains($0) && !"/\\:".unicodeScalars.contains($0)
         }.map(String.init).joined().prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -70,6 +76,7 @@ enum DiaryBookPDFExporter {
         context.closePDF(); closed = true
         guard let pdf = CGPDFDocument(partial as CFURL), pdf.numberOfPages == book.pages.count else { throw ExportError.cannotWrite }
         try FileManager.default.moveItem(at: partial, to: destination)
+        try StorageWorkspace.complete(directory)
         completed = true
         return DiaryBookPDFExport(url: destination, pageCount: book.pages.count, usedFallbackFonts: fallback)
     }

@@ -4,6 +4,7 @@ struct SettingsView: View {
     @ObservedObject var accountManagementViewModel: AccountManagementViewModel
     @ObservedObject var aiSettingsViewModel: AISettingsViewModel
     let session: UserSession
+    let storageService: StorageService
     let onAccountEntryTap: () -> Void
 
     var body: some View {
@@ -33,6 +34,15 @@ struct SettingsView: View {
                         )
                         : L10n.text("settings.account_management", fallback: "账户管理")
                 )
+            }
+
+            Section("通用") {
+                MainNavigationLink {
+                    StorageManagementScreen(owner: String(session.accountID), service: storageService)
+                        .id(session.accountID)
+                } label: {
+                    Label("存储空间", systemImage: "internaldrive")
+                }
             }
 
             Section("实物印制") {

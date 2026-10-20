@@ -69,7 +69,9 @@ public final class SecondCameraEditorAppContextImpl: SecondCameraEditorAppContex
     public let appLaunchTime = Date()
 
     public func appDocumentDirectoryPath() -> String {
-        NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
+        let directory = StoragePaths.system.persistent("CameraEditor")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.path
     }
 
     public func appSharedDataDirectoryPath() -> String {

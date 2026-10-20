@@ -882,7 +882,7 @@ struct DiaryPresetPagePicker: View {
 }
 
 private final class DiaryPresetPhotoTemporaryFiles {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("preset-photos-" + UUID().uuidString)
+    let directory = StoragePaths.system.temporaryRoot.appendingPathComponent("preset-photos-" + UUID().uuidString)
     deinit { try? FileManager.default.removeItem(at: directory) }
 }
 

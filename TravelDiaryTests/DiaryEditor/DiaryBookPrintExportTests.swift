@@ -59,7 +59,7 @@ struct DiaryBookPrintExportTests {
         #expect(result.warnings.contains { $0.contains("空白") })
         let size = try #require(inner.page(at: 0)).bounds(for: .trimBox).size
         #expect(abs(size.width * 25.4 / 72 - 148) < 0.1)
-        try await library.deleteBook(book.id)
+        try await library.trashBook(book.id)
         for f in result.files { #expect(try DiaryBookPrintExporter.hashFile(output.appendingPathComponent(f.role + ".pdf")) == f.sha256) }
     }
     @Test func automaticallyMapsSortedContentAndEnforcesProportionThreshold() throws {

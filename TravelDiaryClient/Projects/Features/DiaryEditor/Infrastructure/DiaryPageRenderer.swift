@@ -274,7 +274,8 @@ enum DiaryPageRenderer {
         let properties: [CFString: Any] = isA5 ? [kCGImagePropertyDPIWidth: 300, kCGImagePropertyDPIHeight: 300] : [:]
         CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { throw DiaryEditorError.exportFailed.logged() }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("手帐-\(UUID().uuidString).png")
+        let url = StoragePaths.system.temporaryRoot.appendingPathComponent("手帐-\(UUID().uuidString).png")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try (data as Data).write(to: url, options: .atomic)
         return url
     }

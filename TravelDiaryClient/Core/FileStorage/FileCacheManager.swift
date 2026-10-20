@@ -8,18 +8,13 @@ actor FileCacheManager {
     private let fileManager: FileManager
     private let logger: Logger
     private let baseDirectory: URL
-    private var accountNamespace: String = "guest"
+    private var accountNamespace: String = "signed-out"
 
-    init(fileManager: FileManager = .default, logger: Logger = ConsoleLogger()) {
+    init(fileManager: FileManager = .default, logger: Logger = ConsoleLogger(), baseDirectory: URL? = nil) {
         self.fileManager = fileManager
         self.logger = logger
 
-        if let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first {
-            self.baseDirectory = caches.appendingPathComponent("TravelDiary.FileCache", isDirectory: true)
-        } else {
-            self.baseDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("TravelDiary.FileCache", isDirectory: true)
-        }
+        self.baseDirectory = baseDirectory ?? StoragePaths.system.fileCache
     }
 
     func cachedFileURL(fileUUID: String, fileName: String) -> URL? {
@@ -32,12 +27,12 @@ actor FileCacheManager {
     }
 
     func activateAccountContext(_ accountID: Int64) {
-        accountNamespace = "account-\(accountID)"
+        accountNamespace = StoragePaths.scopeKey(String(accountID))
         logger.info("文件缓存已切换到账号命名空间 accountID=\(accountID)", module: .cache)
     }
 
     func activateGuestContext() {
-        accountNamespace = "guest"
+        accountNamespace = "signed-out"
         logger.info("文件缓存已切换到访客命名空间", module: .cache)
     }
 
@@ -81,15 +76,22 @@ actor FileCacheManager {
     }
 
     func clearAll() throws {
-        guard fileManager.fileExists(atPath: baseDirectory.path) else { return }
-        try fileManager.removeItem(at: baseDirectory)
-        logger.info("已清理所有文件缓存", module: .cache)
+        try clear(namespace: accountNamespace)
+    }
+
+    func clear(namespace: String) throws {
+        guard namespace == "signed-out" || (namespace.count == 64 && namespace.allSatisfy({ $0.isHexDigit })) else { throw StorageFailure.unsafePath }
+        let directory = baseDirectory.appendingPathComponent(namespace, isDirectory: true).appendingPathComponent("Attachments", isDirectory: true)
+        guard fileManager.fileExists(atPath: directory.path) else { return }
+        try fileManager.removeItem(at: directory)
+        logger.info("已清理当前账号的附件缓存", module: .cache)
     }
 
     func cacheStatistics() -> (fileCount: Int, totalBytes: Int64) {
-        guard fileManager.fileExists(atPath: baseDirectory.path),
+        let directory = baseDirectory.appendingPathComponent(accountNamespace, isDirectory: true).appendingPathComponent("Attachments", isDirectory: true)
+        guard fileManager.fileExists(atPath: directory.path),
               let enumerator = fileManager.enumerator(
-                at: baseDirectory,
+                at: directory,
                 includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]
               ) else {
             return (0, 0)
@@ -111,7 +113,8 @@ actor FileCacheManager {
     private func directoryURL(for fileUUID: String) -> URL {
         baseDirectory
             .appendingPathComponent(accountNamespace, isDirectory: true)
-            .appendingPathComponent(fileUUID, isDirectory: true)
+            .appendingPathComponent("Attachments", isDirectory: true)
+            .appendingPathComponent(StoragePaths.digest(fileUUID.lowercased()), isDirectory: true)
     }
 
     private func fileURL(fileUUID: String, fileName: String) -> URL {

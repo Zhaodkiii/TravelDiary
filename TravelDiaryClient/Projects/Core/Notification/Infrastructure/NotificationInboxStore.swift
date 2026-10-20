@@ -6,10 +6,7 @@ actor NotificationInboxStore {
     private var items: [NotificationInboxItem]
 
     init(fileURL: URL? = nil, maxItems: Int = 500) {
-        let defaultURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("TravelDiary", isDirectory: true)
-            .appendingPathComponent("notification_inbox.json")
-        self.fileURL = fileURL ?? defaultURL ?? URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("notification_inbox.json")
+        self.fileURL = fileURL ?? StoragePaths.system.persistent("Notifications").appendingPathComponent("inbox.json")
         self.maxItems = maxItems
         self.items = NotificationInboxStore.loadItems(from: self.fileURL)
     }

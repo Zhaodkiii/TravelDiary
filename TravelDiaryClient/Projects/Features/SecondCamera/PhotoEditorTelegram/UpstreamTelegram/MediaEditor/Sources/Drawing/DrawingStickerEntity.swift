@@ -5,11 +5,11 @@ import AccountContext
 import TelegramCore
 
 func entitiesPath() -> String {
-    return NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)[0] + "/mediaEntities"
+    return StoragePaths.system.persistent("CameraEditor/mediaEntities").path
 }
 
 func fullEntityMediaPath(_ path: String) -> String {
-    return NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)[0] + "/mediaEntities/" + path
+    return StoragePaths.system.persistent("CameraEditor/mediaEntities").appendingPathComponent(path).path
 }
 
 public final class DrawingStickerEntity: DrawingEntity, Codable {

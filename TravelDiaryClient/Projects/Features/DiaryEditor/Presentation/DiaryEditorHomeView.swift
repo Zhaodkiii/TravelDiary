@@ -72,19 +72,19 @@ struct DiaryEditorHomeView: View {
             }
         }
         .fullScreenCover(item: $editor, onDismiss: { Task { await reload() } }) { DiaryEditorScreen(session: $0) }
-        .confirmationDialog("删除整本手帐？", isPresented: Binding(get: { deletingBook != nil }, set: { if !$0 { deletingBook = nil } }), titleVisibility: .visible) {
+        .confirmationDialog("移到最近删除？", isPresented: Binding(get: { deletingBook != nil }, set: { if !$0 { deletingBook = nil } }), titleVisibility: .visible) {
             if let book = deletingBook {
-                Button("删除「\(book.title)」", role: .destructive) {
+                Button("移到最近删除", role: .destructive) {
                     Task {
                         do {
-                            try await DiaryDocumentStore(ownerID: ownerID).deleteBook(book.id)
+                            try await DiaryDocumentStore(ownerID: ownerID).trashBook(book.id)
                             access.remove(book.id); await reload()
                         } catch { message = error.localizedDescription }
                     }
                 }
             }
             Button("取消", role: .cancel) { deletingBook = nil }
-        } message: { Text("将永久删除这本手帐的所有页面、回收站和素材，无法恢复。预设下载资源会保留。") }
+        } message: { Text("将保留这本手帐的页面与素材。可在设置 → 存储空间 → 最近删除中恢复；移入最近删除不会立即释放空间。") }
         .alert("重命名手帐", isPresented: Binding(get: { renamingBook != nil }, set: { if !$0 { renamingBook = nil } })) {
             TextField("手帐名称", text: $newTitle)
             if let book = renamingBook {

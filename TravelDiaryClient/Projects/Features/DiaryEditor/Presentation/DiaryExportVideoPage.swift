@@ -93,7 +93,7 @@ struct DiaryExportVideoPage: View {
     }
     private func loadPreview() async {
         current = nil; next = nil; rings = nil; message = nil; fallback = false
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DiaryVideoPreview-\(UUID())")
+        let directory = StoragePaths.system.temporaryRoot.appendingPathComponent("DiaryVideoPreview-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         do {
             try await Task.sleep(for: .milliseconds(250))

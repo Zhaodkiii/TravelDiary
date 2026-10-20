@@ -9,6 +9,11 @@ struct DiaryPhysicalBookScreen: View {
     private let onShowList: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isLandscape = false
+    @State private var immersionDismissed = false
+    @State private var showingPreviewExit = false
+    private var isImmersive: Bool { isLandscape && !immersionDismissed }
+    private var readerSpreadCount: Int { isImmersive ? contentSpreadCount : spreadCount }
     @State private var opened = false
     @State private var spread = 0
     @State private var turningCover = false
@@ -45,42 +50,73 @@ struct DiaryPhysicalBookScreen: View {
     }
 
     private var readerContent: some View {
-            VStack(spacing: 16) {
-                GeometryReader { geometry in
-                    DiaryBookZoomViewport(contentSize: geometry.size,
-                                          resetToken: opened ? spread + 1 : 0) {
-                        DiaryBookOpeningStage(progress: opened ? 1 : 0, viewport: geometry.size,
-                                              paperRatio: paperRatio, cover: book.shell,
-                                              firstPage: innerPages.first, store: store) {
-                            DiaryCurlBook(pages: innerPages, store: store, spreadCount: spreadCount, spread: $spread,
-                                reduceMotion: reduceMotion, onSelectPage: openEditor, onAddPage: handleAdd)
-                                .id(book.catalogRevision)
-                        }
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.85), value: opened)
-                        .simultaneousGesture(TapGesture().onEnded { if !opened { openBook() } })
-                    }
-                    .allowsHitTesting(!turningCover)
-                }.clipped()
-                HStack {
-                    Button { if spread > 0 { spread -= 1 } else { closeBook() } } label: {
-                        Image(systemName: "chevron.left")
-                    }.disabled(!opened || (spread == 0 && book.shell == nil)).accessibilityLabel(spread == 0 ? "合上手帐" : "上一跨页")
-                    Spacer()
-                    Text(opened ? (spread >= contentSpreadCount ? "添加页面" : "\(spreadTitle(spread)) / \(innerPages.count)") : "外壳")
-                        .font(.subheadline.monospacedDigit())
-                    Spacer()
-                    Button { if opened { spread += 1 } else { openBook() } } label: {
-                        Image(systemName: "chevron.right")
-                    }.disabled(spreadCount == 0 || (opened && spread >= spreadCount - 1))
-                        .accessibilityLabel(opened ? "下一跨页" : "展开手帐")
-                }.padding(.horizontal, 28).disabled(turningCover)
-                HStack(spacing: 0) {
-                    thumbnailRail
-                    Menu { addActions } label: {
-                        Image(systemName: "plus.circle.fill").font(.title2).padding(.trailing, 16)
-                    }.accessibilityLabel("添加页面")
-                }.disabled(turningCover)
+            VStack(spacing: isImmersive ? 0 : 16) {
+                bookViewport
+                if !isImmersive {
+                    HStack {
+                        Button { if spread > 0 { spread -= 1 } else { closeBook() } } label: {
+                            Image(systemName: "chevron.left")
+                        }.disabled(!opened || (spread == 0 && book.shell == nil)).accessibilityLabel(spread == 0 ? "合上手帐" : "上一跨页")
+                        Spacer()
+                        Text(opened ? (spread >= contentSpreadCount ? "添加页面" : "\(spreadTitle(spread)) / \(innerPages.count)") : "外壳")
+                            .font(.subheadline.monospacedDigit())
+                        Spacer()
+                        Button { if opened { spread += 1 } else { openBook() } } label: {
+                            Image(systemName: "chevron.right")
+                        }.disabled(spreadCount == 0 || (opened && spread >= spreadCount - 1))
+                            .accessibilityLabel(opened ? "下一跨页" : "展开手帐")
+                    }.padding(.horizontal, 28).disabled(turningCover)
+                    HStack(spacing: 0) {
+                        thumbnailRail
+                        Menu { addActions } label: {
+                            Image(systemName: "plus.circle.fill").font(.title2).padding(.trailing, 16)
+                        }.accessibilityLabel("添加页面")
+                    }.disabled(turningCover)
+                }
             }
+            .onGeometryChange(for: Bool.self) { geometry in
+                // Include system insets so hiding the navigation bar cannot flip the classification.
+                geometry.size.width + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing >
+                    geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom
+            } action: { landscape in
+                isLandscape = landscape
+                if !landscape { immersionDismissed = false }
+            }
+            .onChange(of: isImmersive) { _, immersive in
+                showingPreviewExit = false
+                if immersive {
+                    spread = min(spread, max(contentSpreadCount - 1, 0))
+                    openBook()
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if isImmersive && showingPreviewExit {
+                    Button("退出预览", systemImage: "arrow.down.right.and.arrow.up.left") {
+                        immersionDismissed = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.gray.opacity(0.8))
+                    .padding(12)
+                }
+            }
+            .task(id: showingPreviewExit) {
+                guard showingPreviewExit else { return }
+                do {
+                    try await Task.sleep(for: .seconds(3))
+                    showingPreviewExit = false
+                } catch { }
+            }
+            .accessibilityAction(named: "退出沉浸预览") { immersionDismissed = true }
+            .accessibilityAction(named: "下一跨页") {
+                if opened && spread < readerSpreadCount - 1 { spread += 1 }
+            }
+            .accessibilityAction(named: "上一跨页") {
+                if spread > 0 { spread -= 1 }
+            }
+            .toolbar(isImmersive ? .hidden : .visible, for: .navigationBar)
+            .toolbar(isImmersive ? .hidden : .automatic, for: .tabBar)
+            .statusBarHidden(isImmersive)
+            .persistentSystemOverlays(isImmersive ? .hidden : .automatic)
             .disabled(loadingEditor)
             .overlay { if loadingEditor { ProgressView("正在打开页面…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
             .photosPicker(isPresented: $pickingPhoto, selection: $photo, matching: .images)
@@ -110,7 +146,10 @@ struct DiaryPhysicalBookScreen: View {
                 Button("确定") { errorMessage = nil }
             } message: { Text(errorMessage ?? "") }
             .task { await refreshAfterEditing() }
-            .background(Color(uiColor: .systemGroupedBackground))
+            .background {
+                (isImmersive ? Color.black : Color(uiColor: .systemGroupedBackground))
+                    .ignoresSafeArea()
+            }
             .navigationTitle(book.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -132,6 +171,49 @@ struct DiaryPhysicalBookScreen: View {
                     }
                 }
             }
+    }
+
+    private var bookViewport: some View {
+        GeometryReader { geometry in
+            if isImmersive {
+                // Keep UIKit's interactive page curl directly under the finger.
+                // Only the black side margins handle exit taps; no overlay covers the paper.
+                bookStage(viewport: geometry.size)
+                    .allowsHitTesting(!turningCover)
+                    .overlay {
+                        let size = DiaryBookStageLayout.openSize(viewport: geometry.size, paperRatio: paperRatio)
+                        HStack(spacing: 0) {
+                            previewExitMargin
+                            Spacer(minLength: 0).frame(width: size.width).allowsHitTesting(false)
+                            previewExitMargin
+                        }
+                    }
+            } else {
+                DiaryBookZoomViewport(contentSize: geometry.size,
+                                      resetToken: opened ? spread + 1 : 0) {
+                    bookStage(viewport: geometry.size)
+                        .simultaneousGesture(TapGesture().onEnded { if !opened { openBook() } })
+                }
+                .allowsHitTesting(!turningCover)
+            }
+        }.clipped()
+    }
+
+    private func bookStage(viewport: CGSize) -> some View {
+        DiaryBookOpeningStage(progress: opened ? 1 : 0, viewport: viewport,
+                              paperRatio: paperRatio, cover: book.shell,
+                              firstPage: innerPages.first, store: store) {
+            DiaryCurlBook(pages: innerPages, store: store, spreadCount: readerSpreadCount, spread: $spread,
+                allowsEditing: !isImmersive, reduceMotion: reduceMotion, onSelectPage: openEditor, onAddPage: handleAdd)
+                .id(book.catalogRevision)
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.85), value: opened)
+    }
+
+    private var previewExitMargin: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture { showingPreviewExit.toggle() }
     }
 
     @ViewBuilder private var addActions: some View {
@@ -187,7 +269,7 @@ struct DiaryPhysicalBookScreen: View {
     private func refreshAfterEditing() async {
         do {
             book = try await store.loadBook()
-            spread = min(spread, max(spreadCount - 1, 0))
+            spread = min(spread, max(readerSpreadCount - 1, 0))
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -261,14 +343,15 @@ private struct DiaryCurlBook: View {
     let store: DiaryDocumentStore
     let spreadCount: Int
     @Binding var spread: Int
+    let allowsEditing: Bool
     let reduceMotion: Bool
     let onSelectPage: (DiaryPageEntry) -> Void
     let onAddPage: (DiaryReaderAddAction) -> Void
 
     var body: some View {
-        DiaryPageCurlReader(spreadCount: spreadCount, spread: $spread, reduceMotion: reduceMotion) { index, canSelect in
+        DiaryPageCurlReader(spreadCount: spreadCount, spread: $spread, reduceMotion: reduceMotion, allowsPageActions: allowsEditing) { index, canSelect in
             DiaryPaperController(index: index, page: pages.indices.contains(index - 1) ? pages[index - 1] : nil,
-                store: store, onAdd: { if canSelect() { onAddPage($0) } },
+                store: store, showsAddPlaceholder: allowsEditing, canSelect: canSelect, onAdd: { if canSelect() { onAddPage($0) } },
                 onSelect: { if canSelect() { onSelectPage($0) } })
         }
     }
@@ -292,6 +375,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
     let spreadCount: Int
     @Binding var spread: Int
     let reduceMotion: Bool
+    var allowsPageActions = true
     let makePaper: (Int, @escaping () -> Bool) -> UIViewController
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -308,6 +392,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
             coordinator.setZoomSuspended(suspended, in: controller)
         }
         controller.view.backgroundColor = .clear
+        context.coordinator.installReducedMotionSwipes(in: controller)
         context.coordinator.installRings(in: controller)
         context.coordinator.show(spread, in: controller, animated: false)
         return controller
@@ -325,12 +410,31 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
         private var zoomSuspended = false
         private var pageSource: DiaryPageCurlReader
         private var papers: [Int: UIViewController] = [:]
+        private var reducedMotionSwipes: [UISwipeGestureRecognizer] = []
+
+        func installReducedMotionSwipes(in controller: UIPageViewController) {
+            for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
+                let swipe = UISwipeGestureRecognizer(target: self, action: #selector(turnWithoutAnimation(_:)))
+                swipe.direction = direction
+                swipe.isEnabled = false
+                controller.view.addGestureRecognizer(swipe)
+                reducedMotionSwipes.append(swipe)
+            }
+        }
+
+        @objc private func turnWithoutAnimation(_ gesture: UISwipeGestureRecognizer) {
+            guard parent.reduceMotion, !transitioning, !zoomSuspended else { return }
+            let next = parent.spread + (gesture.direction == .left ? 1 : -1)
+            guard (0..<parent.spreadCount).contains(next) else { return }
+            parent.spread = next
+        }
 
         func updateMotionPolicy(in controller: UIPageViewController) {
             // UIKit owns curl gesture state, including disabled boundary recognizers.
             // A nil data source disables native navigation without disabling page taps.
             // Never change the data source during an interactive transition.
             guard !transitioning else { return }
+            reducedMotionSwipes.forEach { $0.isEnabled = parent.reduceMotion && !zoomSuspended }
             if parent.reduceMotion || zoomSuspended {
                 if controller.dataSource != nil { controller.dataSource = nil }
             } else if controller.dataSource !== self {
@@ -377,13 +481,13 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
             // A mid-spine controller must always start with two leaves, even for an empty book.
             guard (0..<(max(1, pageSource.spreadCount) * 2)).contains(index) else { return nil }
             if let paper = papers[index] { return paper }
-            let paper = pageSource.makePaper(index) { [weak self] in self?.transitioning == false }
+            let paper = pageSource.makePaper(index) { [weak self] in self?.transitioning == false && self?.parent.allowsPageActions == true }
             papers[index] = paper
             return paper
         }
         func show(_ requested: Int, in controller: UIPageViewController, animated: Bool) {
             guard !transitioning else { return }
-            let countChanged = pageSource.spreadCount != parent.spreadCount
+            let countChanged = pageSource.spreadCount != parent.spreadCount || pageSource.allowsPageActions != parent.allowsPageActions
             pageSource = parent
             if countChanged { papers.removeAll() }
             let target = min(max(requested, 0), max(1, pageSource.spreadCount) - 1)
@@ -396,8 +500,10 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
             transitioning = true
             // Prevent a pan from starting while a button-driven curl is running.
             controller.dataSource = nil
-            if animated { setRingsVisible(false, animated: false) }
-            controller.setViewControllers([left, right], direction: direction, animated: animated) { [weak self, weak controller] finished in
+            // Refreshing read-only paper views during rotation is not a page turn.
+            let animateTurn = animated && target != displayed
+            if animateTurn { setRingsVisible(false, animated: false) }
+            controller.setViewControllers([left, right], direction: direction, animated: animateTurn) { [weak self, weak controller] finished in
                 // UIKit is still unwinding its transition inside this callback.
                 // Keep the lock until the next main-queue turn before starting another curl.
                 DispatchQueue.main.async {
@@ -444,8 +550,9 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
                 if requested != old {
                     self.show(requested, in: pageViewController, animated: !self.parent.reduceMotion)
                 } else {
-                    self.parent.spread = max(self.displayed, 0)
-                    self.show(self.displayed, in: pageViewController, animated: false)
+                    // Rotation may remove the add spread while a native curl is finishing.
+                    self.parent.spread = min(max(self.displayed, 0), max(self.parent.spreadCount - 1, 0))
+                    self.show(self.parent.spread, in: pageViewController, animated: false)
                 }
                 self.restoreAfterTransition(in: pageViewController)
             }
@@ -459,24 +566,27 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
 /// 每次只加载 UIKit 请求的相邻页；复用现有带版本号的预览缓存，不解码整本原图。
 @MainActor private final class DiaryPaperController: UIHostingController<DiaryBookPaper>, UIPopoverPresentationControllerDelegate, DiaryIndexedPaper {
     let index: Int
+    private let canSelect: () -> Bool
     private let selectedPage: DiaryPageEntry?
     private let onSelect: (DiaryPageEntry) -> Void
     private let onAdd: (DiaryReaderAddAction) -> Void
-    init(index: Int, page: DiaryPageEntry?, store: DiaryDocumentStore, onAdd: @escaping (DiaryReaderAddAction) -> Void, onSelect: @escaping (DiaryPageEntry) -> Void) {
+    init(index: Int, page: DiaryPageEntry?, store: DiaryDocumentStore, showsAddPlaceholder: Bool, canSelect: @escaping () -> Bool, onAdd: @escaping (DiaryReaderAddAction) -> Void, onSelect: @escaping (DiaryPageEntry) -> Void) {
         self.index = index
+        self.canSelect = canSelect
         self.selectedPage = page
         self.onSelect = onSelect
         self.onAdd = onAdd
-        super.init(rootView: DiaryBookPaper(page: page, store: store, left: index.isMultiple(of: 2), insideCover: index == 0))
+        super.init(rootView: DiaryBookPaper(page: page, store: store, left: index.isMultiple(of: 2), insideCover: index == 0, showsAddPlaceholder: showsAddPlaceholder))
         view.backgroundColor = .clear
         safeAreaRegions = []
-        if page != nil || index > 0 {
+        if showsAddPlaceholder && (page != nil || index > 0) {
             let tap = UITapGestureRecognizer(target: self, action: #selector(selectPage(_:)))
             view.addGestureRecognizer(tap)
             view.accessibilityHint = page == nil ? "轻点添加页面" : "轻点编辑这一页"
         }
     }
     @objc private func selectPage(_ gesture: UITapGestureRecognizer) {
+        guard canSelect() else { return }
         if let selectedPage { onSelect(selectedPage) }
         else if index > 0 { showAddMenu(at: gesture.location(in: view)) }
     }
@@ -514,6 +624,7 @@ private struct DiaryBookPaper: View {
     let store: DiaryDocumentStore
     let left: Bool
     let insideCover: Bool
+    let showsAddPlaceholder: Bool
     var body: some View {
         GeometryReader { geometry in
         ZStack {
@@ -523,7 +634,7 @@ private struct DiaryBookPaper: View {
                     .accessibilityLabel("内封皮")
             } else if let page {
                 DiaryPagePreview(page: page, store: store, large: true, undecorated: true)
-            } else {
+            } else if showsAddPlaceholder {
                 Label("添加页面", systemImage: "plus.circle").font(.caption).foregroundStyle(.brown.opacity(0.5))
             }
             HStack(spacing: 0) {

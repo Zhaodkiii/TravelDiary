@@ -84,13 +84,17 @@ final class PresetReaderPresentation: ObservableObject {
         case remote(RemotePresetBook)
     }
     let source: Source?
+    private let storageLease: StorageActivity.Lease?
 
     init(item: PresetLibraryItem, cachedPackage: DiaryPresetPackage?) {
         if let local = item.local ?? cachedPackage {
+            storageLease = StorageActivity.shared.acquire(local.root)
             source = .local(local)
         } else if let remote = item.remote {
+            storageLease = nil
             source = .remote(remote)
         } else {
+            storageLease = nil
             source = nil
         }
     }
@@ -99,9 +103,7 @@ final class PresetReaderPresentation: ObservableObject {
 /// 目录只是浏览提示；过期 URL 失败时由图片状态处理，不将它作为素材身份。
 nonisolated enum PresetLibraryCatalogCache {
     private static func url(ownerID: String) -> URL {
-        let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let key = Data(ownerID.utf8).map { String(format: "%02x", $0) }.joined()
-        return root.appendingPathComponent("DiaryCatalog-\(key).json")
+        StoragePaths.system.catalog(ownerID)
     }
     static func read(ownerID: String) -> RemotePresetCatalog? {
         guard let data = try? Data(contentsOf: url(ownerID: ownerID)) else { return nil }
@@ -109,6 +111,10 @@ nonisolated enum PresetLibraryCatalogCache {
     }
     static func save(_ catalog: RemotePresetCatalog, ownerID: String) {
         guard let data = try? JSONEncoder().encode(catalog) else { return }
-        try? data.write(to: url(ownerID: ownerID), options: .atomic)
+        let target = url(ownerID: ownerID)
+        let lease = StorageActivity.shared.acquire(target)
+        defer { withExtendedLifetime(lease) {} }
+        try? FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: target, options: .atomic)
     }
 }

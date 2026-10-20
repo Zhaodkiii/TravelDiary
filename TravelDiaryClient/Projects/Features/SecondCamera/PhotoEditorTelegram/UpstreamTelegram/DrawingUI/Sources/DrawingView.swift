@@ -1131,7 +1131,8 @@ private class DrawingSlice {
                 
         self._image = image
         self.rect = rect
-        self.path = NSTemporaryDirectory() + "/drawing_\(uuid.hashValue).slice"
+        try? FileManager.default.createDirectory(at: StoragePaths.system.camera, withIntermediateDirectories: true)
+        self.path = StoragePaths.system.camera.appendingPathComponent("drawing_\(uuid.hashValue).slice").path
         
         DrawingSlice.queue.after(2.0) {
             let image = UIImage(cgImage: image)

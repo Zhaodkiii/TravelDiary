@@ -10,6 +10,8 @@ struct DiaryExportResultPage: View {
     @State private var previewID: URL?
     private let ink = Color(red: 0.23, green: 0.36, blue: 0.31)
 
+    @State private var storageLease: StorageActivity.Lease?
+
     var body: some View {
         VStack(spacing: 22) {
             Image(systemName: saved ? "checkmark.seal.fill" : "photo.stack").font(.system(size: 64)).foregroundStyle(ink)
@@ -22,7 +24,8 @@ struct DiaryExportResultPage: View {
             ShareLink(items: result.urls) { Label("分享图片", systemImage: "square.and.arrow.up") }.buttonStyle(.borderedProminent).disabled(busy)
             previewGallery
         }.frame(maxWidth: .infinity).padding(.vertical, 24)
-        .onAppear { if previewID == nil { previewID = result.urls.first } }
+        .onAppear { storageLease = StorageActivity.shared.acquire(result.directory); if previewID == nil { previewID = result.urls.first } }
+        .onDisappear { storageLease = nil }
     }
 
     private var previewGallery: some View {

@@ -109,4 +109,25 @@ struct PresetDownloadPerformanceTests {
         // Allow the immediate save to be submitted before removing the fixture.
         await Task.yield()
     }
+    @Test func offlinePinAndReaderLeaseProtectDownloadRemoval() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let job = try fixture(root)
+        let manager = PresetDownloadManager(directory: root)
+        await manager.waitUntilRestored()
+        manager.activate(owner: "owner")
+        try manager.setPinned(true, id: job.id, ownerID: "owner")
+        #expect(throws: DiaryEditorError.self) { try manager.removeDownloads([job.id], ownerID: "owner") }
+        try manager.setPinned(false, id: job.id, ownerID: "owner")
+        do {
+            let lease = StorageActivity.shared.acquire(root.appendingPathComponent(job.id.uuidString))
+            #expect(throws: StorageFailure.self) { try manager.removeDownloads([job.id], ownerID: "owner") }
+            withExtendedLifetime(lease) {}
+        }
+        try manager.removeDownloads([job.id], ownerID: "owner")
+        #expect(manager.jobs.isEmpty)
+        #expect(manager.availability.pages.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(job.id.uuidString).path))
+    }
+
 }

@@ -79,11 +79,17 @@ enum DiaryBookVideoExporter {
     }
 
     static func export(book: DiaryBook, store: DiaryDocumentStore, options: DiaryVideoOptions,
-                       outputDirectory: URL = FileManager.default.temporaryDirectory,
+                       outputDirectory: URL? = nil,
                        progress: @escaping @MainActor @Sendable (String, Double) -> Void) async throws -> DiaryBookVideoExport {
-        let directory = outputDirectory.appendingPathComponent("DiaryMP4-\(UUID())", isDirectory: true)
+        let bookLease = StorageActivity.shared.acquire(store.storageRoot)
+        defer { withExtendedLifetime(bookLease) {} }
+        let directory = try StorageWorkspace.create(owner: store.ownerID, bookID: book.id, parent: outputDirectory)
         var completed = false
         defer { if !completed { try? FileManager.default.removeItem(at: directory) } }
+        let workspaceLease = StorageActivity.shared.acquire(directory)
+        defer { withExtendedLifetime(workspaceLease) {} }
+        let reservation = try StorageSpaceBudget.shared.reserve(at: directory, estimatedPeak: Int64(book.pages.count) * 24_000_000 + 100_000_000)
+        defer { withExtendedLifetime(reservation) {} }
         let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
         let prepared = try await prepare(book: book, store: store, options: options, directory: framesDirectory,
             width: options.frame.size.width * 0.9) { done, total in
@@ -102,6 +108,7 @@ enum DiaryBookVideoExporter {
         let url = directory.appendingPathComponent((safeName.isEmpty ? "我的手帐" : safeName) + "-翻页.mp4")
         try FileManager.default.moveItem(at: partial, to: url)
         try FileManager.default.removeItem(at: framesDirectory)
+        try StorageWorkspace.complete(directory)
         completed = true; progress("视频已生成", 1)
         return DiaryBookVideoExport(url: url, directory: directory, duration: options.timeline.duration,
             size: options.frame.size, spreadCount: prepared.urls.count, usedFallbackFonts: prepared.usedFallbackFonts)

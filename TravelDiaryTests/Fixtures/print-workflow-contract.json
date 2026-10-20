@@ -1,0 +1,241 @@
+[
+  {
+    "id": "1e4a73cd-f5c7-4ef1-8c58-8c93eb1c8fce",
+    "number": "1E4A73CDF5C74EF18C588C93EB1C8FCE",
+    "title": "旅行",
+    "spec": {
+      "id": "6c69931f-581f-4b0a-9bd7-c28d38969de1",
+      "title": "A5",
+      "revision": 1,
+      "width_mm": 148,
+      "height_mm": 210,
+      "paper": "测试纸",
+      "binding": "测试装订",
+      "description": "",
+      "cover_mode": "separate_front_back",
+      "duplex": true,
+      "min_pages": 2,
+      "max_pages": 200,
+      "max_quantity": 10,
+      "base_fen": 1000,
+      "free_printing": false,
+      "page_fen": 10,
+      "shipping_fen": 0,
+      "regions": [
+        "上海"
+      ],
+      "lead_time": "",
+      "terms": "测试"
+    },
+    "address": {
+      "name": "测试用户",
+      "phone": "13800000000",
+      "region": "上海",
+      "detail": "测试地址"
+    },
+    "quantity": 1,
+    "page_count": 2,
+    "total_fen": 0,
+    "file_state": "ready",
+    "payment_state": "not_required",
+    "state": "needs_revision",
+    "revision": 1,
+    "allowed_actions": [
+      "cancel",
+      "after_sale",
+      "revise"
+    ],
+    "created_at": "2026-10-19T05:07:31.099211+00:00",
+    "source_book_id": "bcfab37c-e658-4c81-a7a1-941327805b17",
+    "production_id": "c7d02a6e-11b5-4328-9f8c-4983e8ae9598",
+    "production_number": 1,
+    "production_error": "",
+    "exception_reason": "第 2 页文字需调整边距",
+    "after_sale_state": "",
+    "after_sale_message": "",
+    "after_sale_resolution": "",
+    "refund_state": "",
+    "refund_reason": "",
+    "stage_started_at": "2026-10-19T05:07:31.099087+00:00",
+    "updated_at": "2026-10-19T05:07:31.101696+00:00",
+    "sheets_per_copy": 1,
+    "checks": [],
+    "can_download": false,
+    "checklists": {},
+    "events": [
+      {
+        "id": 1,
+        "action": "created",
+        "message": "订单已创建，等待上传生产文件",
+        "created_at": "2026-10-19T05:07:31.099Z",
+        "actor": "本人",
+        "details": {}
+      }
+    ],
+    "shipments": []
+  },
+  {
+    "id": "1e4a73cd-f5c7-4ef1-8c58-8c93eb1c8fce",
+    "number": "1E4A73CDF5C74EF18C588C93EB1C8FCE",
+    "title": "旅行",
+    "spec": {
+      "id": "6c69931f-581f-4b0a-9bd7-c28d38969de1",
+      "title": "A5",
+      "revision": 1,
+      "width_mm": 148,
+      "height_mm": 210,
+      "paper": "测试纸",
+      "binding": "测试装订",
+      "description": "",
+      "cover_mode": "separate_front_back",
+      "duplex": true,
+      "min_pages": 2,
+      "max_pages": 200,
+      "max_quantity": 10,
+      "base_fen": 1000,
+      "free_printing": false,
+      "page_fen": 10,
+      "shipping_fen": 0,
+      "regions": [
+        "上海"
+      ],
+      "lead_time": "",
+      "terms": "测试"
+    },
+    "address": {
+      "name": "测试用户",
+      "phone": "13800000000",
+      "region": "上海",
+      "detail": "测试地址"
+    },
+    "quantity": 1,
+    "page_count": 2,
+    "total_fen": 0,
+    "file_state": "ready",
+    "payment_state": "not_required",
+    "state": "paused",
+    "revision": 1,
+    "allowed_actions": [
+      "after_sale"
+    ],
+    "created_at": "2026-10-19T05:07:31.099211+00:00",
+    "source_book_id": "bcfab37c-e658-4c81-a7a1-941327805b17",
+    "production_id": "c7d02a6e-11b5-4328-9f8c-4983e8ae9598",
+    "production_number": 1,
+    "production_error": "",
+    "exception_reason": "装订设备检修",
+    "after_sale_state": "",
+    "after_sale_message": "",
+    "after_sale_resolution": "",
+    "refund_state": "",
+    "refund_reason": "",
+    "stage_started_at": "2026-10-19T05:07:31.099087+00:00",
+    "updated_at": "2026-10-19T05:07:31.102318+00:00",
+    "sheets_per_copy": 1,
+    "checks": [],
+    "can_download": false,
+    "checklists": {},
+    "events": [
+      {
+        "id": 1,
+        "action": "created",
+        "message": "订单已创建，等待上传生产文件",
+        "created_at": "2026-10-19T05:07:31.099Z",
+        "actor": "本人",
+        "details": {}
+      }
+    ],
+    "shipments": []
+  },
+  {
+    "id": "1e4a73cd-f5c7-4ef1-8c58-8c93eb1c8fce",
+    "number": "1E4A73CDF5C74EF18C588C93EB1C8FCE",
+    "title": "旅行",
+    "spec": {
+      "id": "6c69931f-581f-4b0a-9bd7-c28d38969de1",
+      "title": "A5",
+      "revision": 1,
+      "width_mm": 148,
+      "height_mm": 210,
+      "paper": "测试纸",
+      "binding": "测试装订",
+      "description": "",
+      "cover_mode": "separate_front_back",
+      "duplex": true,
+      "min_pages": 2,
+      "max_pages": 200,
+      "max_quantity": 10,
+      "base_fen": 1000,
+      "free_printing": false,
+      "page_fen": 10,
+      "shipping_fen": 0,
+      "regions": [
+        "上海"
+      ],
+      "lead_time": "",
+      "terms": "测试"
+    },
+    "address": {
+      "name": "测试用户",
+      "phone": "13800000000",
+      "region": "上海",
+      "detail": "测试地址"
+    },
+    "quantity": 1,
+    "page_count": 2,
+    "total_fen": 0,
+    "file_state": "ready",
+    "payment_state": "not_required",
+    "state": "shipped",
+    "revision": 1,
+    "allowed_actions": [
+      "receive",
+      "after_sale"
+    ],
+    "created_at": "2026-10-19T05:07:31.099211+00:00",
+    "source_book_id": "bcfab37c-e658-4c81-a7a1-941327805b17",
+    "production_id": "c7d02a6e-11b5-4328-9f8c-4983e8ae9598",
+    "production_number": 1,
+    "production_error": "",
+    "exception_reason": "",
+    "after_sale_state": "resolved",
+    "after_sale_message": "运输损坏",
+    "after_sale_resolution": "已补寄",
+    "refund_state": "",
+    "refund_reason": "",
+    "stage_started_at": "2026-10-19T05:07:31.099087+00:00",
+    "updated_at": "2026-10-19T05:07:31.102862+00:00",
+    "sheets_per_copy": 1,
+    "checks": [],
+    "can_download": false,
+    "checklists": {},
+    "events": [
+      {
+        "id": 1,
+        "action": "created",
+        "message": "订单已创建，等待上传生产文件",
+        "created_at": "2026-10-19T05:07:31.099Z",
+        "actor": "本人",
+        "details": {}
+      }
+    ],
+    "shipments": [
+      {
+        "id": 1,
+        "carrier": "测试快递",
+        "tracking_number": "TEST12345",
+        "created_at": "2026-10-19T05:07:31.103Z",
+        "updated_at": "2026-10-19T05:07:31.103Z",
+        "kind": "initial"
+      },
+      {
+        "id": 2,
+        "carrier": "测试快递",
+        "tracking_number": "TEST67890",
+        "created_at": "2026-10-19T05:07:31.103Z",
+        "updated_at": "2026-10-19T05:07:31.103Z",
+        "kind": "reship"
+      }
+    ]
+  }
+]

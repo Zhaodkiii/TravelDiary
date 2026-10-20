@@ -51,6 +51,8 @@ enum DiaryBookPrintExporter {
 
     static func prepare(book: DiaryBook, store: DiaryDocumentStore, product: PrintProduct,
                         directory: URL, onPageReady: ((UUID, URL) -> Void)? = nil, progress: (Int, Int) -> Void) async throws -> PrintPrepared {
+        let lease = StorageActivity.shared.acquire(store.storageRoot)
+        defer { withExtendedLifetime(lease) {} }
         let map = try mapping(book: book, product: product)
         let sourceDirectory = directory.appendingPathComponent("source")
         let source = try await store.freezeForPrinting(book, at: sourceDirectory)
