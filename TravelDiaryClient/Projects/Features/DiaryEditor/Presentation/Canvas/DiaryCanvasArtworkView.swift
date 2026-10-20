@@ -50,13 +50,13 @@ final class DiaryCanvasArtworkView: UIView {
         }
         guard composited else { return }
         for entry in cache.ordered where entry.source.visible {
-            var matrix = entry.source.transform.matrix
-            if let target = entry.source.frameTargetID, let frameTarget = cache.entries[target] { matrix = frameTarget.source.transform.matrix }
-            if let preview, preview.id == entry.id || entry.source.frameTargetID == preview.id { matrix = preview.transform.matrix }
+            var transform = entry.source.transform
+            if let target = entry.source.frameTargetID, let frameTarget = cache.entries[target] { transform = frameTarget.source.transform }
+            if let preview, preview.id == entry.id || entry.source.frameTargetID == preview.id { transform = preview.transform }
             // 先粗筛；不为屏幕外对象执行合成。
-            guard entry.rect.applying(matrix).intersects(bounds) else { continue }
+            guard transform.projection.bounds(entry.rect).intersects(bounds) else { continue }
             context.saveGState()
-            context.concatenate(matrix)
+            context.concatenate(transform.matrix)
             switch entry.source.blendMode ?? .normal {
             case .normal: context.setBlendMode(.normal)
             case .multiply: context.setBlendMode(.multiply)
@@ -69,12 +69,12 @@ final class DiaryCanvasArtworkView: UIView {
                 context.setAlpha(entry.source.effectiveOpacity)
                 context.beginTransparencyLayer(auxiliaryInfo: nil)
             }
-            if entry.source.displayBounds != nil, let child = entry.source.contentID,
+            if transform.warp == nil, entry.source.displayBounds != nil, let child = entry.source.contentID,
                let background = cache.document.objects[child]?.background {
                 context.setFillColor(DiaryPageRenderer.color(background).cgColor)
                 context.fill(entry.rect)
             }
-            entry.image?.draw(in: entry.rect)
+            if let image = entry.image { DiaryWarpRenderer.draw(image, rect: entry.rect, warp: transform.warp, in: context) }
             if translucent { context.endTransparencyLayer() }
             context.restoreGState()
         }

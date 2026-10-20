@@ -24,8 +24,30 @@ enum DiaryPageRenderer {
         case .right: paragraph.alignment = .right
         }
         paragraph.lineHeightMultiple = layer.textLineHeight ?? 1.2
-        return [.font: DiaryFontCatalog.shared.font(layer.font, size: layer.fontSize), .foregroundColor: layer.textColor.map(color) ?? UIColor.darkText,
-                .kern: layer.textLetterSpacing ?? 0, .paragraphStyle: paragraph]
+        let style = layer.textAppearance ?? DiaryTextAppearance()
+        var font = DiaryFontCatalog.shared.font(layer.font, size: layer.fontSize)
+        var traits = font.fontDescriptor.symbolicTraits
+        if style.bold { traits.insert(.traitBold) }
+        if style.italic { traits.insert(.traitItalic) }
+        if let descriptor = font.fontDescriptor.withSymbolicTraits(traits) { font = UIFont(descriptor: descriptor, size: layer.fontSize) }
+        let foreground = layer.textColor.map(color) ?? UIColor.darkText
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: font, .foregroundColor: foreground.withAlphaComponent(foreground.cgColor.alpha * style.opacity),
+            .kern: layer.textLetterSpacing ?? 0, .paragraphStyle: paragraph]
+        if style.underline { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+        if style.strikethrough { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+        if style.strokeWidth > 0 {
+            attributes[.strokeWidth] = -style.strokeWidth
+            attributes[.strokeColor] = color(style.strokeColor)
+        }
+        if style.shadowRadius > 0 {
+            let shadow = NSShadow()
+            shadow.shadowColor = color(style.shadowColor)
+            shadow.shadowBlurRadius = style.shadowRadius
+            shadow.shadowOffset = CGSize(width: style.shadowRadius / 2, height: style.shadowRadius / 2)
+            attributes[.shadow] = shadow
+        }
+        return attributes
     }
 
     static func bounds(_ layer: DiaryLayer, document: DiaryDocument? = nil, siblings: [DiaryLayer] = []) -> CGRect {
@@ -33,28 +55,34 @@ enum DiaryPageRenderer {
         if layer.kind == .object, let id = layer.contentID, let content = document?.objects[id] {
             return objectBounds(content, document: document!)
         }
-        if layer.kind == .frame, let target = siblings.first(where: { $0.id == layer.frameTargetID }) {
+        if layer.isPhotoFrame, let target = siblings.first(where: { $0.id == layer.frameTargetID }) {
+            if let opening = layer.frameOpening, opening.width > 0, opening.height > 0 {
+                let width = target.size.width / opening.width, height = target.size.height / opening.height
+                return CGRect(x: -opening.minX * width, y: -opening.minY * height, width: width, height: height)
+            }
             return CGRect(origin: .zero, size: target.size).insetBy(dx: -(layer.frameWidth ?? 12), dy: -(layer.frameWidth ?? 12))
         }
         if layer.kind == .text {
-            let rect = (layer.text as NSString).boundingRect(with: CGSize(width: layer.size.width, height: CGFloat.greatestFiniteMagnitude),
-                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: textStyle(layer), context: nil)
-            return CGRect(x: 0, y: 0, width: layer.size.width, height: max(ceil(rect.height), layer.fontSize * 1.2))
+            return textBounds(layer)
         }
         return CGRect(origin: .zero, size: layer.size)
     }
 
     /// 画框绑定照片而非页面坐标。移动或缩放照片后，画框仍使用目标照片的变换。
     static func matrix(_ layer: DiaryLayer, siblings: [DiaryLayer]) -> CGAffineTransform {
-        if layer.kind == .frame, let target = siblings.first(where: { $0.id == layer.frameTargetID }) {
+        if layer.isPhotoFrame, let target = siblings.first(where: { $0.id == layer.frameTargetID }) {
             return target.transform.matrix
         }
         return layer.transform.matrix
     }
+    static func effectiveTransform(_ layer: DiaryLayer, siblings: [DiaryLayer]) -> DiaryTransform {
+        if layer.isPhotoFrame, let target = siblings.first(where: { $0.id == layer.frameTargetID }) { return target.transform }
+        return layer.transform
+    }
     static func objectBounds(_ content: DiaryObjectContent, document: DiaryDocument) -> CGRect {
         var rect = content.background == nil ? CGRect.null : CGRect(origin: .zero, size: content.referenceSize)
         for node in content.layers where node.visible {
-            rect = rect.union(bounds(node, document: document, siblings: content.layers).applying(matrix(node, siblings: content.layers)))
+            rect = rect.union(effectiveTransform(node, siblings: content.layers).projection.bounds(bounds(node, document: document, siblings: content.layers)))
         }
         if let drawing = try? PKDrawing(data: content.drawing), !drawing.strokes.isEmpty { rect = rect.union(drawing.bounds) }
         return rect.isNull || rect.isEmpty ? CGRect(origin: .zero, size: content.referenceSize) : rect
@@ -86,7 +114,7 @@ enum DiaryPageRenderer {
         }
         for layer in content.layers where layer.visible {
             try Task.checkCancellation()
-            if layer.kind == .object, let id = layer.contentID, let child = document.objects[id] {
+            if layer.kind == .object, layer.transform.warp == nil, let id = layer.contentID, let child = document.objects[id] {
                 context.saveGState()
                 context.concatenate(matrix(layer, siblings: content.layers))
                 switch layer.blendMode ?? .normal {
@@ -141,7 +169,8 @@ enum DiaryPageRenderer {
         let siblings = siblings ?? layers
         for layer in layers where layer.visible {
             context.saveGState()
-            context.concatenate(matrix(layer, siblings: siblings))
+            let transform = effectiveTransform(layer, siblings: siblings)
+            context.concatenate(transform.matrix)
             switch layer.blendMode ?? .normal {
             case .normal: context.setBlendMode(.normal)
             case .multiply: context.setBlendMode(.multiply)
@@ -154,6 +183,31 @@ enum DiaryPageRenderer {
             if translucent {
                 context.setAlpha(layer.effectiveOpacity)
                 context.beginTransparencyLayer(auxiliaryInfo: nil)
+            }
+            if let warp = transform.warp {
+                let rect = bounds(layer, document: document, siblings: siblings)
+                let warpedBounds = warp.projection.bounds(rect)
+                let scale = max(hypot(context.ctm.a, context.ctm.b), hypot(context.ctm.c, context.ctm.d))
+                // Render source sharply enough for the projected output, with a fixed memory ceiling.
+                let ratio = max(1, max(warpedBounds.width/max(1,rect.width), warpedBounds.height/max(1,rect.height)))
+                let format = UIGraphicsImageRendererFormat(); format.opaque = false
+                format.scale = max(0.01, min(scale*ratio, sqrt(16*1024*1024/max(1,max(rect.width*rect.height,warpedBounds.width*warpedBounds.height)))))
+                var local = layer
+                local.transform = DiaryTransform(position: .zero, pivot: .zero)
+                local.opacity = nil; local.blendMode = .normal
+                var localSiblings = siblings
+                if let target = local.frameTargetID, let index = localSiblings.firstIndex(where: { $0.id == target }) {
+                    localSiblings[index].transform = local.transform
+                }
+                let image = UIGraphicsImageRenderer(size: rect.size, format: format).image { renderer in
+                    renderer.cgContext.translateBy(x: -rect.minX, y: -rect.minY)
+                    drawLayers([local], document: document, images: images, in: renderer.cgContext,
+                               cacheObjects: false, siblings: localSiblings)
+                }
+                DiaryWarpRenderer.draw(image, rect: rect, warp: warp, in: context)
+                if translucent { context.endTransparencyLayer() }
+                context.restoreGState()
+                continue
             }
             if let rect = layer.displayBounds { context.clip(to: rect) }
             switch layer.kind {
@@ -183,17 +237,20 @@ enum DiaryPageRenderer {
                 }
             case .canvas: break
             case .text:
-                (layer.text as NSString).draw(with: bounds(layer), options: [.usesLineFragmentOrigin, .usesFontLeading],
-                                             attributes: textStyle(layer), context: nil)
+                drawText(layer, in: context)
             case .frame:
-                if let target = siblings.first(where: { $0.id == layer.frameTargetID }) {
+                if let id = layer.assetID, let image = images[id] {
+                    image.draw(in: bounds(layer, document: document, siblings: siblings))
+                } else if let target = siblings.first(where: { $0.id == layer.frameTargetID }) {
                     let width = layer.frameWidth ?? 12
                     context.setStrokeColor(color(layer.frameColor ?? .white).cgColor)
                     context.setLineWidth(width)
                     context.stroke(CGRect(origin: .zero, size: target.size).insetBy(dx: -width / 2, dy: -width / 2))
                 }
             case .photo, .sticker:
-                if let id = layer.assetID, let image = images[id], let asset = document.assets[id] {
+                if layer.isPhotoFrame, layer.frameTargetID != nil, let id = layer.assetID, let image = images[id] {
+                    image.draw(in: bounds(layer, document: document, siblings: siblings))
+                } else if let id = layer.assetID, let image = images[id], let asset = document.assets[id] {
                     let frame = layer.photoFill == true ? (layer.displayBounds ?? CGRect(origin: .zero, size: layer.size)) : CGRect(origin: .zero, size: layer.size)
                     context.clip(to: frame)
                     if layer.photoFill == true, let slot = layer.photoSlot {
@@ -209,7 +266,7 @@ enum DiaryPageRenderer {
                                               y: -placement.size.height * frame.height / 2,
                                               width: placement.size.width * frame.width, height: placement.size.height * frame.height))
                     } else {
-                        image.draw(in: layer.kind == .photo && layer.photoFill != true ? layer.crop.imageRect(source: asset.pixelSize, frame: layer.size) : frame)
+                        image.draw(in: layer.isContentPhoto && layer.photoFill != true ? layer.crop.imageRect(source: asset.pixelSize, frame: layer.size) : frame)
                     }
                 }
             }
@@ -222,10 +279,13 @@ enum DiaryPageRenderer {
     /// 复用正式绘制规则，裁剪、文字、画框、对象背景及笔画与预览保持一致。
     static func drawHitLayer(_ layer: DiaryLayer, document: DiaryDocument,
                              siblings: [DiaryLayer], images: [UUID: UIImage], in context: CGContext) {
-        context.saveGState()
-        context.concatenate(matrix(layer, siblings: siblings).inverted())
-        drawLayers([layer], document: document, images: images, in: context, cacheObjects: false, siblings: siblings)
-        context.restoreGState()
+        var local = layer
+        local.transform = DiaryTransform(position: .zero, pivot: .zero)
+        var localSiblings = siblings
+        if let target = layer.frameTargetID, let index = localSiblings.firstIndex(where: { $0.id == target }) {
+            localSiblings[index].transform = local.transform
+        }
+        drawLayers([local], document: document, images: images, in: context, cacheObjects: false, siblings: localSiblings)
     }
 
     /// 外部摆放不影响局部透明度缓存，内部编辑/撤销/替换图片则必须重新生成。

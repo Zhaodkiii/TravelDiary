@@ -108,7 +108,7 @@ struct MaterialLibraryBrowser: View {
         var result = [("", "全部")] + taxonomy
             .filter { ($0.kind == "background") == (type == "background") }
             .map { ($0.kind, $0.title) }
-        if type == "sticker", session != nil { result.append(("builtin", "内置")) }
+        if type == "sticker", session != nil { result.append(("frames", "相框")); result.append(("builtin", "内置")) }
         return result
     }
     private var filterKey: String { query + "|" + kind + "|" + subcategory }
@@ -142,45 +142,49 @@ struct MaterialLibraryBrowser: View {
                 }.padding(.horizontal, 16)
             }
             ScrollView {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), spacing: 12) {
-                    if isLocal {
-                        ForEach(DiaryStickerCatalog.items.filter {
-                            query.isEmpty || ($0.title + $0.category).localizedCaseInsensitiveContains(query)
-                        }) { item in
-                            Button { addition = Task { await addLocal(item) } } label: {
-                                VStack(spacing: 6) {
-                                    if let image = item.image() {
-                                        Image(uiImage: image).resizable().scaledToFit()
-                                            .frame(height: 84).frame(maxWidth: .infinity)
-                                            .padding(6)
-                                            .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+                if kind == "frames", let session {
+                    DiaryPhotoFrameGrid(session: session, query: query).padding(.horizontal, 16)
+                } else {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), spacing: 12) {
+                        if isLocal {
+                            ForEach(DiaryStickerCatalog.items.filter {
+                                query.isEmpty || ($0.title + $0.category).localizedCaseInsensitiveContains(query)
+                            }) { item in
+                                Button { addition = Task { await addLocal(item) } } label: {
+                                    VStack(spacing: 6) {
+                                        if let image = item.image() {
+                                            Image(uiImage: image).resizable().scaledToFit()
+                                                .frame(height: 84).frame(maxWidth: .infinity)
+                                                .padding(6)
+                                                .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+                                        }
+                                        Text(item.title).font(.caption2).lineLimit(1)
                                     }
-                                    Text(item.title).font(.caption2).lineLimit(1)
-                                }
-                            }.buttonStyle(.plain).disabled(adding)
-                            .contextMenu {
-                                Button(localFavorites.contains(item.id) ? "取消收藏" : "收藏") {
-                                    if localFavorites.contains(item.id) { localFavorites.removeAll { $0 == item.id } }
-                                    else { localFavorites.append(item.id) }
-                                    saveLocalPreferences()
+                                }.buttonStyle(.plain).disabled(adding)
+                                .contextMenu {
+                                    Button(localFavorites.contains(item.id) ? "取消收藏" : "收藏") {
+                                        if localFavorites.contains(item.id) { localFavorites.removeAll { $0 == item.id } }
+                                        else { localFavorites.append(item.id) }
+                                        saveLocalPreferences()
+                                    }
                                 }
                             }
+                        } else {
+                            ForEach(items) { item in
+                                materialCell(item)
+                            }
                         }
-                    } else {
-                        ForEach(items) { item in
-                            materialCell(item)
+                    }.padding(.horizontal, 16)
+                    if !isLocal {
+                        if cursor != nil {
+                            Button("加载更多") { Task { await loadItems(more: true) } }
+                                .disabled(loading).padding(.vertical, 12)
                         }
-                    }
-                }.padding(.horizontal, 16)
-                if !isLocal {
-                    if cursor != nil {
-                        Button("加载更多") { Task { await loadItems(more: true) } }
-                            .disabled(loading).padding(.vertical, 12)
-                    }
-                    if loading { ProgressView().padding() }
-                    if !loading && items.isEmpty {
-                        ContentUnavailableView("暂无素材", systemImage: "square.grid.2x2",
-                            description: Text("试试其他分类或搜索词"))
+                        if loading { ProgressView().padding() }
+                        if !loading && items.isEmpty {
+                            ContentUnavailableView("暂无素材", systemImage: "square.grid.2x2",
+                                description: Text("试试其他分类或搜索词"))
+                        }
                     }
                 }
             }
@@ -273,7 +277,7 @@ struct MaterialLibraryBrowser: View {
         } catch { self.error = error.localizedDescription }
     }
     private func loadItems(more: Bool) async {
-        guard !isLocal else { items = []; cursor = nil; loading = false; return }
+        guard !isLocal && kind != "frames" else { items = []; cursor = nil; loading = false; return }
         let token = UUID(); requestID = token; loading = true
         if !more { items = []; cursor = nil }
         defer { if requestID == token { loading = false } }
@@ -324,10 +328,10 @@ struct MaterialLibraryBrowser: View {
             try Task.checkCancellation()
             guard generation == intent, MaterialCatalogRepository.shared.owner == owner else { throw CancellationError() }
             let imported: Bool
-            if let replacingID {
-                imported = await session.importPhoto(data, replacing: replacingID)
-            } else if type == "background" {
+            if type == "background" {
                 imported = await session.importMaterialBackground(data, name: item.name)
+            } else if let replacingID {
+                imported = await session.importPhoto(data, replacing: replacingID)
             } else {
                 imported = await session.importPhoto(data, asSticker: true, stickerName: item.name, semanticKind: DiaryLayerSemanticKind(rawValue: item.kind))
             }
@@ -362,7 +366,7 @@ actor MaterialThumbnailCache {
     }
 }
 
-private struct MaterialThumbnail: View {
+struct MaterialThumbnail: View {
     let item: CloudMaterial
     @State private var image: UIImage?
     @State private var failed = false

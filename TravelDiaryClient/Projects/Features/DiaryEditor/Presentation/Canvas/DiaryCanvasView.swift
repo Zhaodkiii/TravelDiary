@@ -46,7 +46,11 @@ final class DiaryCanvasSurface: UIView {
     private var renderTask: Task<Void, Never>?
     private var resolutionTask: Task<Void, Never>?
     private var preview: DiaryLayer?
-    private var displayedSelection: DiaryLayer? { preview ?? session?.selected }
+    private var displayedSelection: DiaryLayer? { preview ?? session?.transformDraft?.layer ?? session?.selected }
+    private var lastDraftLayer: DiaryLayer?
+    private var warpHandle: Int?
+    private var warpStart: DiaryLayer?
+    private var warpTouch = CGPoint.zero
     private var activeHandle: Handle?
     private var initialLayer: DiaryLayer?
     private var initialBounds = CGRect.zero
@@ -98,6 +102,9 @@ final class DiaryCanvasSurface: UIView {
     /// 发布保存状态或选择变化时只刷新轻量选框，不访问对象树。
     func refresh(force: Bool = false) {
         guard let session, fit > 0, bounds.height > 0 else { return }
+        if lastDraftLayer != nil && session.transformDraft == nil {
+            preview=nil; warpStart=nil; warpHandle=nil
+        }
         let changed = renderedSessionID != session.id || renderedGeneration != session.renderGeneration
         let resized = renderedSize != bounds.size
         if changed {
@@ -122,10 +129,14 @@ final class DiaryCanvasSurface: UIView {
             session.requestEditorImages(longestEdge: max(session.canvasBounds.width, session.canvasBounds.height) * pixelsPerPoint)
             updateArtwork()
             scheduleRasters()
+        } else if lastDraftLayer != session.transformDraft?.layer {
+            updateArtwork()
+            if artwork.composited { artwork.setNeedsDisplay() }
         } else {
             // 模式切换仅控制独立笔画层是否可见。
             inkLayer.isHidden = session.inkMode || artwork.composited
         }
+        lastDraftLayer = session.transformDraft?.layer
         selectionOverlay.setNeedsDisplay()
     }
 
@@ -148,22 +159,32 @@ final class DiaryCanvasSurface: UIView {
                let background = renderCache.document.objects[child]?.background {
                 layer.backgroundColor = DiaryPageRenderer.color(background).cgColor
             } else { layer.backgroundColor = nil }
-            place(layer, rect: entry.rect, matrix: displayMatrix(entry.source))
+            place(layer, rect: entry.rect, projection: displayTransform(entry.source).projection)
         }
         inkLayer.zPosition = CGFloat(renderCache.ordered.count)
         inkLayer.contents = renderCache.inkImage?.cgImage
         inkLayer.isHidden = session?.inkMode == true || artwork.composited
         place(inkLayer, rect: renderCache.inkRect.isNull ? .zero : renderCache.inkRect, matrix: .identity)
         CATransaction.commit()
-        artwork.preview = preview
+        artwork.preview = preview ?? session?.transformDraft?.layer
         artwork.invalidateContentIfNeeded()
     }
 
     private func place(_ layer: CALayer, rect: CGRect, matrix: CGAffineTransform) {
+        place(layer, rect: rect, projection: DiaryProjection(matrix))
+    }
+    private func place(_ layer: CALayer, rect: CGRect, projection: DiaryProjection) {
         layer.anchorPoint = .zero
         layer.bounds = CGRect(origin: .zero, size: rect.size)
-        layer.position = rect.origin.applying(matrix)
-        layer.setAffineTransform(CGAffineTransform(a: matrix.a, b: matrix.b, c: matrix.c, d: matrix.d, tx: 0, ty: 0))
+        if abs(projection.g) < 1e-12, abs(projection.h) < 1e-12, abs(projection.i) > 1e-12 {
+            layer.position = projection.point(rect.origin)
+            layer.transform = CATransform3DMakeAffineTransform(CGAffineTransform(
+                a:projection.a/projection.i,b:projection.b/projection.i,
+                c:projection.c/projection.i,d:projection.d/projection.i,tx:0,ty:0))
+        } else {
+            layer.position = .zero
+            layer.transform = projection.multiplied(by: DiaryProjection(CGAffineTransform(translationX: rect.minX, y: rect.minY))).layerTransform
+        }
     }
 
     private func scheduleRasters() {
@@ -196,38 +217,39 @@ final class DiaryCanvasSurface: UIView {
         }
     }
 
-    private func displayMatrix(_ source: DiaryLayer) -> CGAffineTransform {
-        if let preview {
-            if source.id == preview.id || source.frameTargetID == preview.id { return preview.transform.matrix }
-        }
-        if let id = source.frameTargetID, let target = renderCache.entries[id] { return target.source.transform.matrix }
-        return source.transform.matrix
+    private func displayTransform(_ source: DiaryLayer) -> DiaryTransform {
+        if let active = preview ?? session?.transformDraft?.layer,
+           source.id == active.id || source.frameTargetID == active.id { return active.transform }
+        if let id = source.frameTargetID, let target = renderCache.entries[id] { return target.source.transform }
+        return source.transform
     }
+    private func displayMatrix(_ source: DiaryLayer) -> CGAffineTransform { displayTransform(source).matrix }
 
     private func showPreview(_ layer: DiaryLayer) {
         preview = layer
         CATransaction.begin(); CATransaction.setDisableActions(true)
         for entry in renderCache.ordered where entry.id == layer.id || entry.source.frameTargetID == layer.id {
-            if let retained = retainedLayers[entry.id] { place(retained, rect: entry.rect, matrix: displayMatrix(entry.source)) }
+            if let retained = retainedLayers[entry.id] { place(retained, rect: entry.rect, projection: displayTransform(entry.source).projection) }
         }
         CATransaction.commit()
-        artwork.preview = preview
+        artwork.preview = preview ?? session?.transformDraft?.layer
         if artwork.composited { artwork.setNeedsDisplay() }
         selectionOverlay.setNeedsDisplay()
     }
 
     func drawSelection(in context: CGContext) {
         guard let session, fit > 0 else { return }
+        if session.transformDraft != nil { drawWarpControls(in: context); return }
         if !session.inkMode, let layer = displayedSelection, layer.visible,
            let entry = renderCache.entries[layer.id] {
             context.saveGState()
             let bounds = entry.rect.insetBy(dx: -3, dy: -3)
-            let matrix = displayMatrix(layer)
+            let projection = displayTransform(layer).projection
             let corners = [CGPoint(x: bounds.minX, y: bounds.minY),
                            CGPoint(x: bounds.maxX, y: bounds.minY),
                            CGPoint(x: bounds.maxX, y: bounds.maxY),
                            CGPoint(x: bounds.minX, y: bounds.maxY)]
-                .map { screenPoint($0.applying(matrix)) }
+                .map { screenPoint(projection.point($0)) }
             context.addLines(between: corners)
             context.closePath()
             context.setStrokeColor(UIColor.white.cgColor)
@@ -245,13 +267,13 @@ final class DiaryCanvasSurface: UIView {
         let parentPoint = pagePoint
         // 从上到下命中；组内编辑时只检查当前组的直接子层。
         for entry in renderCache.ordered.reversed() where entry.source.visible && !entry.source.locked {
-            let local = parentPoint.applying(displayMatrix(entry.source).inverted())
+            let local = displayTransform(entry.source).projection.inverse.point(parentPoint)
             if renderCache.contains(local, entry: entry) { return entry.id }
         }
         return nil
     }
     @objc private func tapped(_ gesture: UITapGestureRecognizer) {
-        guard let session, !session.inkMode, !session.busy else { return }
+        guard let session, !session.inkMode, !session.busy, session.transformDraft == nil else { return }
         if let handle = handleHit(gesture.location(in: self)) {
             switch handle {
             case .delete: session.removeSelected()
@@ -267,6 +289,7 @@ final class DiaryCanvasSurface: UIView {
     }
     @objc private func panned(_ gesture: UIPanGestureRecognizer) {
         guard let session, !session.inkMode, !session.busy, fit > 0 else { return }
+        if session.transformDraft != nil { warpPanned(gesture); return }
         switch gesture.state {
         case .began:
             startPosition = nil
@@ -276,16 +299,16 @@ final class DiaryCanvasSurface: UIView {
             let location = gesture.location(in: self)
             let translation = gesture.translation(in: self)
             let touchOrigin = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
-            guard let layer = session.selected, layer.visible, !layer.locked, layer.kind != .frame else { return }
+            guard let layer = session.selected, layer.visible, !layer.locked, !layer.isPhotoFrame else { return }
             activeHandle = handleHit(touchOrigin)
             if let handle = activeHandle, [.delete, .edit, .duplicate].contains(handle) { return }
             let selectionBounds = renderCache.entries[layer.id]?.rect ?? CGRect(origin: .zero, size: layer.size)
-            let localOrigin = designPoint(touchOrigin).applying(displayMatrix(layer).inverted())
+            let localOrigin = displayTransform(layer).projection.inverse.point(designPoint(touchOrigin))
             guard activeHandle != nil || selectionBounds.insetBy(dx: -3, dy: -3).contains(localOrigin) else { return }
             initialLayer = layer
             initialBounds = selectionBounds
             initialTouch = designPoint(touchOrigin)
-            let center = CGPoint(x: initialBounds.midX, y: initialBounds.midY).applying(layer.transform.matrix)
+            let center = layer.transform.projection.point(CGPoint(x: initialBounds.midX, y: initialBounds.midY))
             rotationLast = atan2(initialTouch.y - center.y, initialTouch.x - center.x)
             rotationTotal = 0
             preview = layer
@@ -320,6 +343,78 @@ final class DiaryCanvasSurface: UIView {
         default: break
         }
     }
+    private func warpPoints(_ layer: DiaryLayer, reference: CGRect) -> [CGPoint] {
+        let corners = reference.diaryCorners
+        return (corners + (0..<4).map { n in
+            CGPoint(x: (corners[n].x+corners[(n+1)%4].x)/2, y: (corners[n].y+corners[(n+1)%4].y)/2)
+        }).map { screenPoint(layer.transform.projection.point($0)) }
+    }
+    private func activeWarpHandles(_ mode: DiaryTransformMode) -> [Int] {
+        switch mode { case .free, .perspective: Array(0..<4); case .skew: Array(4..<8); case .stretch: Array(0..<8) }
+    }
+    private func drawWarpControls(in context: CGContext) {
+        guard let draft=session?.transformDraft else { return }
+        let layer=preview ?? draft.layer, ref=draft.reference
+        let points=warpPoints(layer, reference: ref)
+        let color=UIColor(DiaryLibraryStyle.accent)
+        context.saveGState()
+        context.setStrokeColor(color.cgColor); context.setLineWidth(1.5/viewportZoom)
+        context.addLines(between: Array(points.prefix(4))); context.closePath(); context.strokePath()
+        context.setStrokeColor(color.withAlphaComponent(0.5).cgColor); context.setLineWidth(0.7/viewportZoom)
+        for fraction in [CGFloat(1.0/3), CGFloat(2.0/3)] {
+            let lines = [[CGPoint(x: ref.minX+ref.width*fraction,y: ref.minY), CGPoint(x: ref.minX+ref.width*fraction,y: ref.maxY)],
+                         [CGPoint(x: ref.minX,y: ref.minY+ref.height*fraction), CGPoint(x: ref.maxX,y: ref.minY+ref.height*fraction)]]
+            for line in lines {
+                context.addLines(between: line.map { screenPoint(layer.transform.projection.point($0)) }); context.strokePath()
+            }
+        }
+        for n in activeWarpHandles(draft.mode) {
+            let p=points[n], radius: CGFloat=5/viewportZoom
+            context.setFillColor(color.cgColor)
+            context.fillEllipse(in: CGRect(x:p.x-radius,y:p.y-radius,width:radius*2,height:radius*2))
+        }
+        context.restoreGState()
+    }
+    private func warpPanned(_ gesture: UIPanGestureRecognizer) {
+        updateFreeTransformGesture(state: gesture.state, location: gesture.location(in:self), translation:gesture.translation(in:self))
+    }
+    func updateFreeTransformGesture(state: UIGestureRecognizer.State, location: CGPoint, translation: CGPoint) {
+        guard let session, let draft=session.transformDraft else { return }
+        switch state {
+        case .began:
+            let origin=CGPoint(x:location.x-translation.x,y:location.y-translation.y)
+            let points=warpPoints(draft.layer, reference:draft.reference)
+            warpHandle=activeWarpHandles(draft.mode).map { ($0,hypot(points[$0].x-origin.x,points[$0].y-origin.y)) }
+                .filter { $0.1 <= 22/viewportZoom }.min { $0.1 < $1.1 }?.0
+            let local=draft.layer.transform.projection.inverse.point(designPoint(origin))
+            guard warpHandle != nil || draft.reference.contains(local) else { warpStart=nil; return }
+            warpStart=draft.layer; warpTouch=designPoint(origin)
+        case .changed:
+            guard var layer=warpStart else { return }
+            let current=designPoint(location)
+            if let handle=warpHandle {
+                let inverse=layer.transform.matrix.inverted()
+                let a=warpTouch.applying(inverse), b=current.applying(inverse)
+                let delta=CGPoint(x:(b.x-a.x)/draft.reference.width,y:(b.y-a.y)/draft.reference.height)
+                let warp=layer.transform.warp ?? DiaryQuadWarp(reference:draft.reference)
+                guard let updated=draft.mode.moving(warp, handle:handle, delta:delta) else { return }
+                layer.transform.warp=updated
+            } else {
+                layer.transform.position.x += current.x-warpTouch.x
+                layer.transform.position.y += current.y-warpTouch.y
+            }
+            if session.isValidFreeTransform(layer) { showPreview(layer) }
+        case .ended:
+            if warpStart != nil, let preview { session.previewFreeTransform(preview) }
+            preview=nil; warpStart=nil; warpHandle=nil
+            refresh(force:true)
+        case .cancelled, .failed:
+            preview=nil; warpStart=nil; warpHandle=nil
+            updateArtwork(); selectionOverlay.setNeedsDisplay()
+        default: break
+        }
+    }
+
     // 控制点按屏幕点设置大小，画布放大时仍维持可点击尺寸。
     private var viewportZoom: CGFloat {
         var ancestor = superview
@@ -342,10 +437,9 @@ final class DiaryCanvasSurface: UIView {
         guard let rect = renderCache.entries[layer.id]?.rect else { return [] }
         // 与选框共用外扩边界，角点和边中点始终落在白线上。
         let b = rect.insetBy(dx: -3, dy: -3)
-        let m = displayMatrix(layer)
         var points: [(Handle, CGPoint)] = [(.delete, CGPoint(x:b.minX,y:b.minY)), (.edit, CGPoint(x:b.maxX,y:b.minY)),
             (.duplicate, CGPoint(x:b.minX,y:b.maxY)), (.scale, CGPoint(x:b.maxX,y:b.maxY))]
-        if layer.kind == .frame {
+        if layer.isPhotoFrame {
             points = [(.delete, CGPoint(x:b.minX,y:b.minY))]
         } else {
             points += [(.top, CGPoint(x:b.midX,y:b.minY)), (.bottom, CGPoint(x:b.midX,y:b.maxY)),
@@ -354,7 +448,7 @@ final class DiaryCanvasSurface: UIView {
         }
         if session.layerMode { points.removeAll { $0.0 != .scale && $0.0 != .rotate } }
         if layer.id == session.content.primaryLayerID { points.removeAll { $0.0 == .delete } }
-        return points.map { ($0.0, screenPoint($0.1.applying(m))) }
+        return points.map { ($0.0, screenPoint(displayTransform(layer).projection.point($0.1))) }
     }
     private func handleHit(_ p: CGPoint) -> Handle? {
         // 控制点优先于素材命中；相邻触摸区重叠时选择最近的中心。
@@ -409,24 +503,23 @@ final class DiaryCanvasSurface: UIView {
         }
     }
     private func updateHandle(_ handle: Handle, point: CGPoint) {
-        guard var layer = initialLayer, layer.kind != .frame else { return }
+        guard var layer = initialLayer, !layer.isPhotoFrame else { return }
         let b = initialBounds
-        let oldMatrix = layer.transform.matrix
-        let localStart = initialTouch.applying(oldMatrix.inverted())
-        let local = point.applying(oldMatrix.inverted())
+        let localStart = layer.transform.projection.inverse.point(initialTouch)
+        let local = layer.transform.projection.inverse.point(point)
         if handle == .scale {
             // 左上角固定，以对角线投影决定等比倍率，反向拖过锚点时停止于最小尺寸。
             let diagonal = CGPoint(x:b.width,y:b.height)
             let delta = CGPoint(x:local.x-localStart.x,y:local.y-localStart.y)
             let ratio = max(0.05, 1 + (delta.x*diagonal.x+delta.y*diagonal.y) / max(1,diagonal.x*diagonal.x+diagonal.y*diagonal.y))
             let anchor = CGPoint(x:b.minX,y:b.minY)
-            let fixed = anchor.applying(oldMatrix)
+            let fixed = layer.transform.projection.point(anchor)
             layer.transform.scale = min(20,max(0.05,layer.transform.scale*ratio))
-            let moved = anchor.applying(layer.transform.matrix)
+            let moved = layer.transform.projection.point(anchor)
             layer.transform.position.x += fixed.x-moved.x; layer.transform.position.y += fixed.y-moved.y
         } else if handle == .rotate {
             let center = CGPoint(x:b.midX,y:b.midY)
-            let fixed = center.applying(oldMatrix)
+            let fixed = layer.transform.projection.point(center)
             let angle = atan2(point.y-fixed.y,point.x-fixed.x)
             var step = angle-rotationLast
             if step > .pi { step -= 2 * .pi }; if step < -.pi { step += 2 * .pi }
@@ -437,7 +530,7 @@ final class DiaryCanvasSurface: UIView {
             layer.transform.rotationDegrees = (degrees + 180).truncatingRemainder(dividingBy:360)
             if layer.transform.rotationDegrees < 0 { layer.transform.rotationDegrees += 360 }
             layer.transform.rotationDegrees -= 180
-            let moved = center.applying(layer.transform.matrix)
+            let moved = layer.transform.projection.point(center)
             layer.transform.position.x += fixed.x-moved.x; layer.transform.position.y += fixed.y-moved.y
         } else {
             // 边中点只改变一个轴的比例，不裁剪照片、不重排文字、不改内部图层。

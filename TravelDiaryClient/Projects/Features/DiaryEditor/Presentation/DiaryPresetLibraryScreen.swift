@@ -498,7 +498,7 @@ private struct DiaryPresetDetailScreen: View {
                         var photoCount = 0; var textCount = 0
                         for page in try package.pages {
                             let document = try package.instantiate(page, bookID: UUID(), targetSize: page.size.cg, assetIDs: ids)
-                            photoCount += document.objects.values.flatMap(\.layers).filter { $0.kind == .photo }.count
+                            photoCount += document.objects.values.flatMap(\.layers).filter { $0.isContentPhoto }.count
                             textCount += document.objects.values.flatMap(\.layers).filter { $0.kind == .text }.count
                         }
                         return (photoCount, textCount)
@@ -577,6 +577,8 @@ struct DiaryPresetImportSheet: View {
     @State private var excludedPageIDs: Set<String> = []
     @State private var previewPage: Int? = 0
     @State private var categorySelection = DiaryPresetImportCategorySelection()
+    @State private var categoryGuidanceAttempt = 0
+    @State private var previewValidationMessage: String?
     @State private var temporaryFiles = DiaryPresetPhotoTemporaryFiles()
     private var preparationDirectory: URL { temporaryFiles.directory }
     @Environment(\.dismiss) private var dismiss
@@ -614,8 +616,14 @@ struct DiaryPresetImportSheet: View {
         .onChange(of: downloadObservation.job?.status) { _, _ in
             if let downloadID { readyPackage = downloads.preparedPackage(downloadID) }
         }
-        .onChange(of: selectionIdentity) { _, _ in invalidatePhotos() }
-        .onChange(of: title) { _, _ in operationID = UUID() }
+        .onChange(of: selectionIdentity) { _, _ in
+            invalidatePhotos()
+            previewValidationMessage = nil
+        }
+        .onChange(of: title) { _, _ in
+            operationID = UUID()
+            previewValidationMessage = nil
+        }
         .onChange(of: afterPageID) { _, _ in operationID = UUID() }
         .task { await initialize() }
     }
@@ -668,25 +676,27 @@ struct DiaryPresetImportSheet: View {
                     }
                     Group {
                         if availablePackage != nil {
-                            DiaryPreviewContentPanel(hiddenCategories: $categorySelection.hiddenCategories, affectsImport: true)
-                            if !categorySelection.hasSelection {
+                            DiaryPreviewContentPanel(hiddenCategories: $categorySelection.hiddenCategories,
+                                affectsImport: true, guidanceAttempt: categoryGuidanceAttempt)
+                            if previewValidationMessage == nil && !categorySelection.hasSelection {
                                 Text("当前展示完整模板，请开启至少一类内容后继续。")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         } else { downloadFeedback }
+                    }
+                    if let previewValidationMessage {
+                        Text(previewValidationMessage)
+                            .font(.caption).foregroundStyle(DiaryLibraryStyle.accent)
+                            .accessibilityAddTraits(.updatesFrequently)
                     }
                 }
                 .padding(.horizontal, 16).padding(.top, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 DiaryImportFloatingActions {
-                    Button {
-                        guard categorySelection.hasSelection else { return }
-                        error = nil; advance(to: .photos)
-                    } label: {
+                    Button(action: continueFromPreview) {
                         Text("下一步").frame(maxWidth: .infinity)
                     }
-                    .disabled(!initialized || availablePackage == nil || selectedPageIDs.isEmpty || !categorySelection.hasSelection || (wholeBook && !validName))
                 }
             }
             .background(.regularMaterial)
@@ -698,6 +708,29 @@ struct DiaryPresetImportSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
             }
         }
+    }
+
+    private func continueFromPreview() {
+        guard initialized, availablePackage != nil else {
+            previewValidationMessage = "资源正在准备中，请准备完成后继续。"
+            return
+        }
+        guard categorySelection.hasSelection else {
+            previewValidationMessage = "请至少开启一个图层，点击上方选项开启。"
+            categoryGuidanceAttempt += 1
+            return
+        }
+        guard !selectedPageIDs.isEmpty else {
+            previewValidationMessage = "请至少选择一页后继续。"
+            return
+        }
+        guard !wholeBook || validName else {
+            previewValidationMessage = "请输入手帐名称，且不超过 60 个字。"
+            return
+        }
+        previewValidationMessage = nil
+        error = nil
+        advance(to: .photos)
     }
 
     @ViewBuilder private var downloadFeedback: some View {

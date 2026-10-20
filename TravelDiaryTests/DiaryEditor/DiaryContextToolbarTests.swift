@@ -19,6 +19,31 @@ struct DiaryContextToolbarTests {
                    size: CGSize(width: 100, height: 100), semanticKind: semantic, text: "旅行日记")
     }
 
+    @Test func backgroundPreviewsCommitAsOneUndoAndSupportTransparency() {
+        let session = makeSession([])
+        let original = session.content.background
+        session.previewBackground(.pink)
+        session.previewBackground(.mint)
+        #expect(session.content.background == .mint)
+        #expect(session.undoStack.isEmpty)
+        session.finishInteraction()
+        #expect(session.undoStack.count == 1)
+        session.undo()
+        #expect(session.content.background == original)
+        session.redo()
+        #expect(session.content.background == .mint)
+        session.previewBackground(nil)
+        session.finishInteraction()
+        #expect(session.content.background == nil)
+        session.undo()
+        #expect(session.content.background == .mint)
+        session.redo()
+        #expect(session.content.background == nil)
+        session.previewBackground(.yellow)
+        session.cancelInteraction()
+        #expect(session.content.background == nil)
+    }
+
     @Test func resolvesWrappedContentAndKeepsExactToolOrder() throws {
         let session = makeSession([layer(.photo), layer(.text), layer(.sticker), layer(.sticker, semantic: .paper), layer(.sticker, semantic: .text)])
         #expect(session.contextActions == [.background, .layers])
@@ -31,7 +56,7 @@ struct DiaryContextToolbarTests {
         ]
         for (index, actions) in expected.enumerated() {
             session.select(session.scopeLayers[index].id)
-            #expect(session.contextActions == actions)
+            #expect(session.contextActions == actions + [.transform])
         }
         #expect(session.selectedEditingKind == .textImage)
         let target = try #require(session.selectedEditingLayer)
@@ -42,7 +67,7 @@ struct DiaryContextToolbarTests {
         let session = makeSession([layer(.sticker, semantic: .background), layer(.frame)], wrapped: false)
         let background = session.scopeLayers[0].id
         session.select(background)
-        #expect(session.contextActions == [.replaceBackground, .placement, .opacity, .lock])
+        #expect(session.contextActions == [.replaceBackground, .placement, .opacity, .lock, .transform])
         session.toggleLock(background)
         #expect(session.contextActions == [.unlock, .layers])
         let before = session.document
@@ -63,7 +88,7 @@ struct DiaryContextToolbarTests {
         document.objects[document.rootContentID]?.layers = [group]
         let session = DiaryEditorSession(document: document, images: [:], store: DiaryDocumentStore(ownerID: "group-test"))
         session.select(group.id)
-        #expect(session.contextActions == [.editContent, .replacePhoto, .opacity, .arrange])
+        #expect(session.contextActions == [.editContent, .replacePhoto, .opacity, .arrange, .transform])
         #expect(session.selectedPhotos.map(\.id) == [photo.id])
         #expect(session.editableLayer(locked.id) == nil)
     }
@@ -130,6 +155,31 @@ struct DiaryContextToolbarTests {
         #expect(!(await session.importPhoto(data, replacing: leaf.id)))
     }
 
+    @Test func backgroundPanelVisualVerification() async throws {
+        let session = makeSession([])
+        for width in [375.0, 390.0] {
+            let host = UIHostingController(rootView:
+                DiaryEditorToolPanel(title: "换背景", onBack: {}, onDone: {}) {
+                    DiaryBackgroundToolContent(session: session)
+                }.frame(width: width).ignoresSafeArea())
+            let size = host.sizeThatFits(in: CGSize(width: width, height: 600))
+            let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            host.view.frame = window.bounds
+            host.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(150))
+            let image = UIGraphicsImageRenderer(size: size).image { _ in
+                host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+            }
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent("diary-background-qa-\(Int(width)).png")
+            try #require(image.pngData()).write(to: destination)
+            print("Background visual QA: \(destination.path)")
+            window.isHidden = true
+        }
+    }
+
     @Test func compactToolbarVisualVerification() async throws {
         let photo = makeSession([layer(.photo)])
         let text = makeSession([layer(.text)])
@@ -138,7 +188,7 @@ struct DiaryContextToolbarTests {
         for session in [photo, text, textImage, background] { session.select(session.scopeLayers[0].id) }
         let host = UIHostingController(rootView: VStack(spacing: 20) {
             ForEach(Array([photo, text, textImage, background].enumerated()), id: \.offset) { _, session in
-                DiaryContextToolbar(session: session, onPhotos: {}, onCamera: {}, onDrawing: {}, onLayers: {}, onStickers: {}, onOpenObject: {})
+                DiaryContextToolbar(session: session, onBackground: {}, onPhotos: {}, onCamera: {}, onDrawing: {}, onLayers: {}, onStickers: {}, onOpenObject: {})
             }
         }.frame(width: 390).padding(.vertical).background(Color(uiColor: .systemGroupedBackground)))
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 600))

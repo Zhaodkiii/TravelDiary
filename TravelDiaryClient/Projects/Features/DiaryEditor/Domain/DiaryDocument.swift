@@ -39,6 +39,7 @@ nonisolated struct DiaryTransform: Codable, Equatable, Sendable {
     var rotationDegrees: CGFloat = 0
     /// 四边手柄的单轴拉伸；旧存档没有此字段时，两轴都按 1 显示。
     var stretch: CGSize? = nil
+    var warp: DiaryQuadWarp? = nil
     var flippedHorizontally: Bool? = nil
     var flippedVertically: Bool? = nil
     var stretchX: CGFloat { stretch?.width ?? 1 }
@@ -46,12 +47,12 @@ nonisolated struct DiaryTransform: Codable, Equatable, Sendable {
 
     /// 沿素材自己的坐标轴拉伸，并补偿位置使对边锚点固定；旋转后也成立。
     mutating func stretchAxis(horizontal: Bool, ratio: CGFloat, anchor: CGPoint) {
-        let fixed = anchor.applying(matrix)
+        let fixed = projection.point(anchor)
         var value = CGSize(width: stretchX, height: stretchY)
         if horizontal { value.width = min(20, max(0.05, value.width * ratio)) }
         else { value.height = min(20, max(0.05, value.height * ratio)) }
         stretch = value
-        let moved = anchor.applying(matrix)
+        let moved = projection.point(anchor)
         position.x += fixed.x - moved.x
         position.y += fixed.y - moved.y
     }
@@ -95,15 +96,25 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
     /// 素材语义分类，与绘制类型 Kind 分开保存。
     var semanticKind: DiaryLayerSemanticKind? = nil
     var subcategory: String? = nil
+    var renderType: String? = nil
     var assetID: UUID?
     var contentID: UUID?
     var frameTargetID: UUID?
     var frameColor: DiaryColor?
     var frameWidth: CGFloat?
+    /// Normalized transparent opening of a decorative sticker frame.
+    var frameOpening: CGRect? = nil
+    /// Stable automatic frame choice; its copied image remains the rendering source.
+    var photoFrameCatalogID: String? = nil
+    /// Stored on the photo too, so a manually removed frame is an intentional choice.
+    var photoFrameIsManual: Bool? = nil
+    /// Top-level photo objects from a single insertion share a batch for re-layout.
+    var photoBatchID: UUID? = nil
     /// 手动调整后的可见边界；旧作品缺省为自动计算，不拉伸对象内部素材。
     var displayBounds: CGRect? = nil
     var text = ""
     var fontSize: CGFloat = 36
+    var textAppearance: DiaryTextAppearance? = nil
     var textColor: DiaryColor? = nil
     var textAlignment: DiaryTextAlignment? = nil
     var textLineHeight: Double? = nil
@@ -165,7 +176,12 @@ extension DiaryDocument {
         filteringPresetCategories(hidden, removing: true)
     }
 
-    private nonisolated func filteringPresetCategories(_ hidden: Set<DiaryLayerSemanticKind>, removing: Bool) -> DiaryDocument {
+    nonisolated func removingBackgrounds(in contentID: UUID) -> DiaryDocument {
+        filteringPresetCategories([.background], removing: true, scopeID: contentID)
+    }
+
+    private nonisolated func filteringPresetCategories(_ hidden: Set<DiaryLayerSemanticKind>, removing: Bool,
+                                                       scopeID: UUID? = nil) -> DiaryDocument {
         guard !hidden.isEmpty else { return self }
         var copy = self
         var visited = Set<UUID>()
@@ -199,8 +215,8 @@ extension DiaryDocument {
                 layers.append(layer)
             }
             if removing {
-                let photoIDs = Set(layers.filter { $0.kind == .photo }.map(\.id))
-                layers.removeAll { $0.kind == .frame && $0.frameTargetID.map { !photoIDs.contains($0) } != false }
+                let photoIDs = Set(layers.filter { $0.isContentPhoto }.map(\.id))
+                layers.removeAll { ($0.kind == .frame || $0.frameTargetID != nil) && $0.frameTargetID.map { !photoIDs.contains($0) } != false }
                 if let primary = content.primaryLayerID, !layers.contains(where: { $0.id == primary }) {
                     content.primaryLayerID = nil; content.role = .canvas
                 }
@@ -209,15 +225,14 @@ extension DiaryDocument {
             copy.objects[id] = content
             return !layers.isEmpty || content.background != nil || !content.drawing.isEmpty
         }
-        visit(rootContentID, inherited: nil)
+        visit(scopeID ?? rootContentID, inherited: nil)
         if removing {
             var reachable = Set<UUID>()
             var assets = Set<UUID>()
             func collect(_ id: UUID) {
                 guard reachable.insert(id).inserted, let content = copy.objects[id] else { return }
                 for layer in content.layers {
-                    if let asset = layer.assetID { assets.insert(asset) }
-                    if let original = layer.photoCrop?.originalAssetID { assets.insert(original) }
+                    assets.formUnion(layer.referencedAssetIDs)
                     if let child = layer.contentID { collect(child) }
                 }
             }
@@ -259,6 +274,8 @@ nonisolated struct DiaryPhotoCrop: Codable, Equatable, Sendable {
 }
 
 extension DiaryLayer {
+    nonisolated var isPhotoFrame: Bool { kind == .frame || (kind == .photo && subcategory == "frame") }
+    nonisolated var isContentPhoto: Bool { kind == .photo && !isPhotoFrame }
     nonisolated var referencedAssetIDs: [UUID] { [assetID, photoCrop?.originalAssetID, photoSlot?.maskAssetID].compactMap { $0 } }
 }
 
@@ -272,7 +289,7 @@ extension DiaryDocument {
         func visit(_ id: UUID) {
             guard visited.insert(id).inserted, let content = objects[id] else { return }
             for layer in content.layers where layer.visible && !layer.locked {
-                if layer.kind == .photo { result.append(layer) }
+                if layer.isContentPhoto { result.append(layer) }
                 else if let child = layer.contentID { visit(child) }
             }
         }

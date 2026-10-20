@@ -24,11 +24,13 @@ nonisolated struct DiaryObjectContent: Codable, Equatable, Identifiable, Sendabl
     var referenceSize: CGSize
     var background: DiaryColor?
     var layers: [DiaryLayer]
+    /// Optional template-authored photo area in this object's local canvas coordinates.
+    var photoLayoutRegion: CGRect? = nil
     /// 运行时绘画字节；正式存档单独写 .drawing，不把二进制塞进内容 JSON。
     var drawing = Data()
 
     private enum CodingKeys: String, CodingKey {
-        case id, revision, role, primaryLayerID, referenceSize, background, layers
+        case id, revision, role, primaryLayerID, referenceSize, background, layers, photoLayoutRegion
     }
 }
 

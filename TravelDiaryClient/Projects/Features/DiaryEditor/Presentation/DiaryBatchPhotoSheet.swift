@@ -18,9 +18,13 @@ struct DiaryBatchPhotoSheet: View {
     @State private var documents: [DiaryDocument] = []
     @State private var expectedBook: DiaryBook?
     @State private var slots: [Slot] = []
+    @State private var recommendedAdditionCount = 0
+
+    private var addsPhotos: Bool { creationFlow && slots.isEmpty }
+    private var photoLimit: Int { addsPhotos ? recommendedAdditionCount : slots.count }
     @State private var selection: [PhotosPickerItem] = []
     @State private var thumbnails: [UIImage?] = []
-    @State private var fill: DiaryPhotoSlot.Fill = .cover
+    private let fill: DiaryPhotoSlot.Fill = .cover
     @State private var busy = false
     @State private var ready = false
     @State private var message: String?
@@ -42,59 +46,103 @@ struct DiaryBatchPhotoSheet: View {
         }
     }
     private var creationContent: some View {
-        VStack(spacing: 20) {
-            Text("这本手帐可一键替换 \(slots.count) 张照片")
+        VStack(spacing: 12) {
+            Text(addsPhotos
+                 ? "已选 \(documents.count) 页，建议添加 \(photoLimit) 张照片"
+                 : "这本手帐可一键替换 \(slots.count) 张照片")
+                .font(.subheadline)
                 .foregroundStyle(.secondary).multilineTextAlignment(.center)
-            Picker("照片填充", selection: $fill) {
-                Text("等比例填充").tag(DiaryPhotoSlot.Fill.cover)
-                Text("整图拉伸").tag(DiaryPhotoSlot.Fill.stretch)
-            }.pickerStyle(.segmented)
-            ScrollView {
-                if selection.isEmpty {
-                    photoPicker {
-                        VStack(spacing: 20) {
-                            Image(systemName: "plus").font(.system(size: 40, weight: .light))
-                            Text(slots.isEmpty ? "保留预设照片，直接创建" : "还是空的，点这里加照片吧")
+            if !slots.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("项目中已有的照片").font(.subheadline.weight(.semibold))
+                    ScrollView {
+                        LazyVGrid(columns: photoColumns, spacing: 10) {
+                            ForEach(Array(slots.enumerated()), id: \.element.id) { index, slot in
+                                VStack(spacing: 4) {
+                                    Group {
+                                        if let preview = slot.preview {
+                                            Image(uiImage: preview).resizable().scaledToFit()
+                                        } else { Image(systemName: "photo").foregroundStyle(.secondary) }
+                                    }
+                                    .frame(maxWidth: .infinity).frame(height: 72)
+                                    .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 10))
+                                    Text("\(index + 1) · 第 \(slot.pageNumber) 页")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
                         }
-                        .foregroundStyle(DiaryLibraryStyle.accent.opacity(0.55))
-                        .frame(maxWidth: .infinity).frame(minHeight: 230)
-                        .background(RoundedRectangle(cornerRadius: 20)
-                            .strokeBorder(DiaryLibraryStyle.line, style: StrokeStyle(lineWidth: 2, dash: [7])))
+                        .padding(.vertical, 4)
                     }
-                } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 85), spacing: 12)], spacing: 12) {
+                    .frame(maxHeight: .infinity)
+                }
+                .frame(maxHeight: .infinity)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text(addsPhotos ? "添加照片" : "选择替换照片")
+                    .font(.subheadline.weight(.semibold))
+                if addsPhotos {
+                    Text(photoLimit > 0 ? "根据页面空间建议数量，选好后自动配相框并排入手帐。" : "当前页面空间不足，请返回增加页面或调整内容。")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                ScrollView {
+                    if selection.isEmpty {
                         photoPicker {
-                            Image(systemName: "plus").font(.largeTitle)
-                                .frame(maxWidth: .infinity).frame(height: 100)
-                                .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 14))
+                            VStack(spacing: 8) {
+                                Image(systemName: "plus").font(.system(size: 26, weight: .light))
+                                Text(addsPhotos ? "点这里添加照片，自动配框排版" : "点这里选择照片进行替换")
+                                    .font(.caption)
+                            }
+                            .foregroundStyle(DiaryLibraryStyle.accent.opacity(0.55))
+                            .frame(maxWidth: .infinity).frame(height: 100)
+                            .background(RoundedRectangle(cornerRadius: 14)
+                                .strokeBorder(DiaryLibraryStyle.line, style: StrokeStyle(lineWidth: 1.5, dash: [6])))
                         }
-                        ForEach(selection.indices, id: \.self) { index in
-                            Color.clear.aspectRatio(1, contentMode: .fit)
-                                .overlay {
-                                    if thumbnails.indices.contains(index), let image = thumbnails[index] {
-                                        Image(uiImage: image).resizable().scaledToFill()
-                                    } else { ProgressView() }
-                                }
-                                .clipShape(RoundedRectangle(cornerRadius: 14))
-                                .overlay(alignment: .topTrailing) {
-                                    Button { selection.remove(at: index) } label: {
-                                        Image(systemName: "xmark.circle.fill").font(.title2)
-                                            .symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.6))
-                                    }.padding(4).accessibilityLabel("删除第 \(index + 1) 张照片")
-                                }
+                    } else {
+                        LazyVGrid(columns: photoColumns, spacing: 10) {
+                            photoPicker {
+                                Image(systemName: "plus").font(.title2)
+                                    .frame(maxWidth: .infinity).frame(height: 72)
+                                    .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 10))
+                            }
+                            ForEach(selection.indices, id: \.self) { index in
+                                Color.clear.frame(height: 72)
+                                    .overlay {
+                                        if thumbnails.indices.contains(index), let image = thumbnails[index] {
+                                            Image(uiImage: image).resizable().scaledToFill()
+                                        } else { ProgressView() }
+                                    }
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                    .overlay(alignment: .bottomLeading) {
+                                        Text("\(index + 1)").font(.caption2.weight(.semibold))
+                                            .padding(.horizontal, 5).padding(.vertical, 2)
+                                            .foregroundStyle(.white).background(.black.opacity(0.5), in: Capsule())
+                                            .padding(3)
+                                    }
+                                    .overlay(alignment: .topTrailing) {
+                                        Button { selection.remove(at: index) } label: {
+                                            Image(systemName: "xmark.circle.fill").font(.system(size: 18))
+                                                .symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.6))
+                                                .frame(width: 32, height: 32)
+                                        }.accessibilityLabel("删除第 \(index + 1) 张照片")
+                                    }
+                            }
                         }
                     }
                 }
+                .frame(maxHeight: .infinity)
             }
+            .frame(maxHeight: .infinity)
             if let message {
-                Text(message).font(.caption).foregroundStyle(.red)
+                Text(message).font(.caption2).foregroundStyle(.red)
                 if !ready { Button("重试") { Task { await prepare() } } }
             }
-            Text("已选 \(selection.count) / \(slots.count)").foregroundStyle(.secondary)
-            Text("按选择顺序替换，未选择的位置保留预设照片。创建后仍可编辑。")
-                .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Text("已选 \(selection.count) / \(photoLimit)")
+                .font(.footnote).foregroundStyle(.secondary)
+            Text(addsPhotos ? "按选择顺序分配到页面，自动添加相框并排版。创建后仍可编辑。" : "按选择顺序替换，未选择的位置保留预设照片。创建后仍可编辑。")
+                .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
-        .padding()
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(DiaryLibraryStyle.background)
         .navigationTitle("第 3 步 · 添加照片")
         .navigationBarTitleDisplayMode(.inline)
@@ -113,10 +161,14 @@ struct DiaryBatchPhotoSheet: View {
         .task(id: selection) { await loadThumbnails() }
     }
 
+    private var photoColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 64, maximum: 76), spacing: 10)]
+    }
+
     private func photoPicker<Label: View>(@ViewBuilder label: () -> Label) -> some View {
-        PhotosPicker(selection: $selection, maxSelectionCount: max(1, slots.count),
+        PhotosPicker(selection: $selection, maxSelectionCount: max(1, photoLimit),
                      selectionBehavior: .ordered, matching: .images, label: label)
-            .disabled(!ready || slots.isEmpty)
+            .disabled(!ready || photoLimit == 0)
     }
 
     private var content: some View {
@@ -125,10 +177,6 @@ struct DiaryBatchPhotoSheet: View {
                     Text(preset != nil ? "已选 \(presetPageIDs.count) 页，共 \(slots.count) 张可替换照片" : session == nil ? "当前手帐共 \(slots.count) 张可替换照片" : "当前页共 \(slots.count) 张可替换照片")
                     Text("按页序、组内图层从底到顶替换。隐藏及锁定图层跳过。照片保留原框的角度与轮廓，比例不同时默认等比例填充。")
                         .font(.caption).foregroundStyle(.secondary)
-                    Picker("照片填充", selection: $fill) {
-                        Text("等比例填充").tag(DiaryPhotoSlot.Fill.cover)
-                        Text("整图拉伸").tag(DiaryPhotoSlot.Fill.stretch)
-                    }
                     Text("替换后可选中照片，使用“裁剪”调整取景。")
                         .font(.caption).foregroundStyle(.secondary)
                     if ready && !slots.isEmpty {
@@ -259,7 +307,13 @@ struct DiaryBatchPhotoSheet: View {
                 }
                 guard try await store.loadBook().catalogRevision == book.catalogRevision else { throw DiaryEditorError.pageConflict }
             }
-            documents = prepared; slots = targets; ready = true
+            documents = prepared; slots = targets
+            if creationFlow && targets.isEmpty {
+                recommendedAdditionCount = prepared.reduce(0) { count, document in
+                    count + DiaryEditorSession(document: document, images: [:], store: store).recommendedPhotoCount
+                }
+            }
+            ready = true
         } catch { message = error.localizedDescription }
     }
 
@@ -284,7 +338,7 @@ struct DiaryBatchPhotoSheet: View {
     @MainActor private func replace() async {
         guard !busy, ready else { return }
         if creationFlow {
-            guard onPrepared != nil, preparationDirectory != nil, selection.count <= slots.count else { return }
+            guard onPrepared != nil, preparationDirectory != nil, selection.count <= photoLimit else { return }
         } else {
             guard selection.count == slots.count, !slots.isEmpty else { return }
         }

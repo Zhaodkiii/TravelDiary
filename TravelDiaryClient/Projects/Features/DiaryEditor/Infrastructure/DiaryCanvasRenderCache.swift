@@ -148,7 +148,9 @@ final class DiaryCanvasRenderCache {
         var total: CGFloat = 0
         for entry in ordered where entry.source.visible {
             let transform = entry.source.transform
-            let magnification = max(abs(transform.scale * transform.stretchX), abs(transform.scale * transform.stretchY))
+            let projected = transform.projection.bounds(entry.rect)
+            let magnification = max(max(abs(transform.scale * transform.stretchX), abs(transform.scale * transform.stretchY)),
+                                    max(projected.width/max(1,entry.rect.width), projected.height/max(1,entry.rect.height)))
             let edge = max(1, max(entry.rect.width, entry.rect.height))
             entry.requestedScale = max(1 / edge, min(1800 / edge, pointsToPixels * magnification))
             total += entry.rect.width * entry.rect.height * entry.requestedScale * entry.requestedScale
@@ -173,6 +175,10 @@ final class DiaryCanvasRenderCache {
         let image = UIGraphicsImageRenderer(size: entry.rect.size, format: format).image { renderer in
             renderer.cgContext.translateBy(x: -entry.rect.minX, y: -entry.rect.minY)
             if local.kind == .object, let child = local.contentID {
+                if local.displayBounds != nil, let background = document.objects[child]?.background {
+                    renderer.cgContext.setFillColor(DiaryPageRenderer.color(background).cgColor)
+                    renderer.cgContext.fill(entry.rect)
+                }
                 DiaryPageRenderer.draw(document, contentID: child, images: images, in: renderer.cgContext,
                                        viewport: entry.rect, cacheObjects: false)
             } else {

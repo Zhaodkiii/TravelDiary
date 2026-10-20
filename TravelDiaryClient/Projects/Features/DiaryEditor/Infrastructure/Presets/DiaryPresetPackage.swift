@@ -14,6 +14,13 @@ nonisolated struct PresetPoint: Codable, Sendable {
     let y: Double
     var cg: CGPoint { CGPoint(x: x, y: y) }
 }
+nonisolated struct PresetRect: Decodable, Sendable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+    var cg: CGRect { CGRect(x: x, y: y, width: width, height: height) }
+}
 nonisolated struct PresetTransform: Decodable, Sendable {
     let position: PresetPoint
     let pivot: PresetPoint
@@ -97,6 +104,8 @@ nonisolated struct PresetContent: Decodable, Sendable {
     let background: DiaryColor?
     let layers: [PresetNode]
     let drawingPath: String?
+    /// Optional rectangle in the template's local coordinates; older packages omit it.
+    let photoLayoutRegion: PresetRect?
 }
 nonisolated struct PresetPage: Decodable, Identifiable, Sendable {
     let id: String
@@ -298,6 +307,7 @@ nonisolated struct DiaryPresetPackage: Identifiable, Sendable {
             let source = try read(PresetContent.self, path)
             guard source.id == id else { throw DiaryEditorError.invalidDocument.logged() }
             var content = DiaryObjectContent(role: source.role, referenceSize: source.referenceSize.cg, background: source.background, layers: [])
+            content.photoLayoutRegion = source.photoLayoutRegion?.cg
             guard Set(source.layers.map(\.id)).count == source.layers.count else { throw DiaryEditorError.invalidDocument.logged() }
             let ids = Dictionary(uniqueKeysWithValues: source.layers.map { ($0.id, UUID()) })
             content.primaryLayerID = source.primaryLayerID.flatMap { ids[$0] }
@@ -355,6 +365,8 @@ nonisolated struct DiaryPresetPackage: Identifiable, Sendable {
             // 子对象保持自己的原始坐标、尺寸和分层，仍能独立打开编辑。
             var root = document.objects[sourceRoot]!
             root.referenceSize = targetSize
+            root.photoLayoutRegion = root.photoLayoutRegion?.applying(
+                CGAffineTransform(a: scale, b: 0, c: 0, d: scale, tx: position.x, ty: position.y))
             for index in root.layers.indices {
                 let original = root.layers[index].transform
                 root.layers[index].transform.position = CGPoint(

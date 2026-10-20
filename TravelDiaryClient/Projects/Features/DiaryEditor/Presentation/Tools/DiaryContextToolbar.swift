@@ -4,13 +4,16 @@ import PhotosUI
 /// The add entry remains anchored while object tools scroll horizontally.
 struct DiaryContextToolbar: View {
     @ObservedObject var session: DiaryEditorSession
+    let onBackground: () -> Void
     let onPhotos: () -> Void
     let onCamera: () -> Void
     let onDrawing: () -> Void
     let onLayers: () -> Void
     let onStickers: () -> Void
     let onOpenObject: () -> Void
+    var onTransform: () -> Void = {}
     @State private var panel: Panel?
+    @State private var textPanel: Panel?
     @State private var target: DiaryLayer?
     @State private var cropTarget: DiaryLayer?
     @State private var replacementID: UUID?
@@ -19,7 +22,7 @@ struct DiaryContextToolbar: View {
     @State private var importing = false
 
     private enum Panel: String, Identifiable {
-        case background, replacement, backgroundReplacement, photos
+        case replacement, photos
         case opacity, arrange, placement, frame, editText, font, fontSize, textColor, typography
         var id: Self { self }
     }
@@ -41,9 +44,9 @@ struct DiaryContextToolbar: View {
                     Button(action: onPhotos) { Label("照片（可多选）", systemImage: "photo.on.rectangle") }
                     Button(action: onCamera) { Label("相机", systemImage: "camera") }
                         .accessibilityIdentifier("diary.add.camera")
-                    Button { target = nil; panel = .editText } label: { Label("文字", systemImage: "textformat") }
+                    Button { target = nil; textPanel = .editText } label: { Label("文字", systemImage: "textformat") }
                     Button(action: onStickers) { Label("贴纸", systemImage: "face.smiling") }
-                    Button { panel = .background } label: { Label("背景", systemImage: "photo.fill") }
+                    Button(action: onBackground) { Label("背景", systemImage: "photo.fill") }
                     Button(action: onDrawing) { Label("画笔", systemImage: "pencil.tip") }
                 } label: {
                     VStack(spacing: 5) {
@@ -69,6 +72,9 @@ struct DiaryContextToolbar: View {
         }
         .padding(.vertical, 8).foregroundStyle(DiaryLibraryStyle.ink).background(DiaryLibraryStyle.background)
         .disabled(session.busy || importing)
+        .fullScreenCover(item: $textPanel) { value in
+            DiaryTextEditorSheet(session: session, layer: target, initialTab: textTab(value))
+        }
         .sheet(item: $panel) { panel in panelContent(panel) }
         .fullScreenCover(item: $cropTarget) { layer in DiaryCropSheet(session: session, layer: layer) }
         .photosPicker(isPresented: Binding(get: { panel != .photos && showPhotoPicker }, set: { showPhotoPicker = $0 }), selection: $photoItem, matching: .images)
@@ -92,7 +98,8 @@ struct DiaryContextToolbar: View {
         session.finishInteraction()
         target = session.selectedEditingLayer
         switch action {
-        case .background: panel = .background
+        case .transform: onTransform()
+        case .background: onBackground()
         case .layers: onLayers()
         case .replacePhoto:
             let photos = session.selectedPhotos
@@ -100,21 +107,16 @@ struct DiaryContextToolbar: View {
             else if !photos.isEmpty { panel = .photos }
         case .crop: cropTarget = target
         case .frame:
-            if let photo = target,
-               let owner = session.document.objects.values.first(where: { $0.layers.contains(where: { $0.id == photo.id }) }) {
-                session.addFrame()
-                target = session.document.objects[owner.id]?.layers.first { $0.frameTargetID == photo.id }
-                if target != nil { panel = .frame }
-            }
+            if target?.kind == .photo || target?.isPhotoFrame == true { panel = .frame }
         case .opacity: target = session.selected; panel = .opacity
         case .arrange: target = session.selected; panel = .arrange
-        case .editText: panel = .editText
-        case .font: panel = .font
-        case .fontSize: panel = .fontSize
-        case .textColor: panel = .textColor
-        case .typography: panel = .typography
+        case .editText: textPanel = .editText
+        case .font: textPanel = .font
+        case .fontSize: textPanel = .fontSize
+        case .textColor: textPanel = .textColor
+        case .typography: textPanel = .typography
         case .replaceMaterial: target = session.selectedMaterialLayer; if target != nil { panel = .replacement }
-        case .replaceBackground: target = session.selectedMaterialLayer; if target != nil { panel = .backgroundReplacement }
+        case .replaceBackground: onBackground()
         case .placement: target = session.selected; panel = .placement
         case .lock, .unlock:
             if let id = session.selectedID { session.toggleLock(id) }
@@ -126,10 +128,7 @@ struct DiaryContextToolbar: View {
 
     @ViewBuilder private func panelContent(_ panel: Panel) -> some View {
         switch panel {
-        case .background:
-            DiaryBackgroundPanel(session: session)
         case .replacement: MaterialLibraryBrowser(session: session, replacingID: target?.id)
-        case .backgroundReplacement: MaterialLibraryBrowser(session: session, replacingID: target?.id, type: "background")
         case .photos:
             NavigationStack {
                 List(session.selectedPhotos) { photo in
@@ -150,7 +149,12 @@ struct DiaryContextToolbar: View {
                 .interactiveDismissDisabled(importing)
         case .editText, .font, .fontSize, .textColor, .typography:
             DiaryTextEditorSheet(session: session, layer: target, initialTab: textTab(panel))
-        case .opacity, .placement, .frame:
+        case .frame:
+            if let target, target.isContentPhoto { DiaryPhotoFramePicker(session: session, photoID: target.id) }
+            else if let target, target.assetID != nil, let photoID = target.frameTargetID {
+                DiaryPhotoFramePicker(session: session, photoID: photoID)
+            } else if let target { DiaryLayerPropertyPanel(session: session, layer: target, mode: .frame) }
+        case .opacity, .placement:
             if let target { DiaryLayerPropertyPanel(session: session, layer: target,
                 mode: panel == .opacity ? .opacity : panel == .placement ? .placement : .frame) }
         case .arrange:
@@ -166,31 +170,6 @@ struct DiaryContextToolbar: View {
         case .typography: .layout
         default: .content
         }
-    }
-}
-
-struct DiaryBackgroundPanel: View {
-    @ObservedObject var session: DiaryEditorSession
-    @Environment(\.dismiss) private var dismiss
-    @State private var color: Color
-    init(session: DiaryEditorSession) {
-        self.session = session
-        _color = State(initialValue: Color(uiColor: DiaryPageRenderer.color(session.content.background ?? .white)))
-    }
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("背景颜色") {
-                    ColorPicker("背景颜色", selection: $color, supportsOpacity: false)
-                    Button("应用颜色") { session.setBackground(DiaryColor(color)); dismiss() }
-                    Button("透明背景") { session.setBackground(nil); dismiss() }
-                }
-                Section { NavigationLink {
-                    MaterialLibraryBrowser(session: session, type: "background")
-                } label: { Label("背景图片", systemImage: "photo") } }
-            }.navigationTitle("背景")
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("关闭") { dismiss() } } }
-        }.presentationDetents([.medium])
     }
 }
 

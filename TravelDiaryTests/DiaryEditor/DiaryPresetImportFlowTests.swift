@@ -154,6 +154,52 @@ struct DiaryPresetImportFlowTests {
         #expect(try await library.listBooks().isEmpty)
     }
 
+    @Test func emptyPresetAddsAllSelectedPhotosWithFramesAcrossPages() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let package = try fixture(in: base, empty: true)
+        let photos = try (0..<5).map { index in
+            try imageFile(in: base, name: "new-\(index)", size: CGSize(width: 80 + index * 10, height: 120), color: .blue)
+        }
+        let library = DiaryDocumentStore(ownerID: "new-photos", baseDirectory: base)
+        let operation = UUID()
+        let book = try await library.importPreset(package, pageIDs: ["page-3", "page-1"], title: "自动配框",
+            operationID: operation, replacementPhotos: photos)
+        let local = DiaryDocumentStore(ownerID: "new-photos", baseDirectory: base, bookID: book.id)
+        var counts: [Int] = []
+        var sizes: [CGSize] = []
+        for page in book.pages {
+            let loaded = try await local.load(page.id)
+            try DiaryDocumentStore.validate(loaded.document)
+            let photos = loaded.document.replaceablePhotos()
+            counts.append(photos.count)
+            sizes += photos.compactMap { $0.assetID.flatMap { loaded.document.assets[$0]?.pixelSize } }
+            let frames = loaded.document.objects.values.flatMap(\.layers).filter(\.isPhotoFrame)
+            #expect(frames.count == photos.count)
+            #expect(frames.allSatisfy { $0.assetID.flatMap { loaded.images[$0] } != nil })
+            #expect(loaded.document.root.layers.allSatisfy { $0.photoBatchID != nil })
+        }
+        #expect(counts == [3, 2])
+        #expect(sizes.map(\.width) == [80, 90, 100, 110, 120])
+        for photo in photos { try FileManager.default.removeItem(at: photo) }
+        let retry = try await library.importPreset(package, pageIDs: ["page-3", "page-1"], title: "自动配框",
+            operationID: operation, replacementPhotos: photos)
+        #expect(retry.id == book.id)
+    }
+
+    @Test func tooManyNewPhotosPublishNothing() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let package = try fixture(in: base, empty: true)
+        let photo = try imageFile(in: base, name: "new", size: CGSize(width: 80, height: 120), color: .blue)
+        let library = DiaryDocumentStore(ownerID: "overflow", baseDirectory: base)
+        await #expect(throws: (any Error).self) {
+            try await library.importPreset(package, pageIDs: ["page-1"], title: "放不下",
+                operationID: UUID(), replacementPhotos: Array(repeating: photo, count: 4))
+        }
+        #expect(try await library.listBooks().isEmpty)
+    }
+
     @Test func mixedPrimaryGroupsRemainValidAndLegacyKindsAreFiltered() throws {
         var document = DiaryDocument()
         let asset = DiaryAsset(id: UUID(), path: "test.image", pixelSize: CGSize(width: 100, height: 100))
@@ -197,12 +243,12 @@ struct DiaryPresetImportFlowTests {
         return file
     }
 
-    private func fixture(in base: URL) throws -> DiaryPresetPackage {
+    private func fixture(in base: URL, empty: Bool = false) throws -> DiaryPresetPackage {
         let root = base.appendingPathComponent("fixture.diarypreset")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let image = try imageFile(in: root, name: "asset", size: CGSize(width: 20, height: 20), color: .brown)
         let imageData = try Data(contentsOf: image)
-        let size: [String: Any] = ["width": 100, "height": 140]
+        let size: [String: Any] = ["width": empty ? 1000 : 100, "height": empty ? 1400 : 140]
         var files: [[String: Any]] = [["path": "asset.png", "byteCount": imageData.count, "sha256": DiaryPresetPackage.hash(imageData)]]
         func write(_ path: String, _ value: [String: Any]) throws {
             let bytes = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
@@ -225,7 +271,7 @@ struct DiaryPresetImportFlowTests {
         frame["frameTargetID"] = "photo"; frame["frameWidth"] = 2
         try write("root.json", ["id": "root", "role": "canvas", "referenceSize": size,
             "background": ["red": 1, "green": 1, "blue": 1, "alpha": 1],
-            "layers": [group, node("photo", "photo", "slot"), frame, node("paper", "paper", "note"),
+            "layers": empty ? [] : [group, node("photo", "photo", "slot"), frame, node("paper", "paper", "note"),
                 node("text", "text", "title", render: "native_text"), node("decoration", "illustration", "tape"), node("brand", "branding", "logo")]])
         var pages: [[String: Any]] = []
         for index in 1...3 {

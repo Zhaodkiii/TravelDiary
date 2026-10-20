@@ -15,22 +15,25 @@ nonisolated enum DiaryEditorImageSizing {
             }
         }
         var visited = Set<UUID>()
-        func visit(_ id: UUID, parent: CGAffineTransform) {
+        func visit(_ id: UUID, parent: CGAffineTransform, warpScale: CGFloat = 1) {
             guard visited.insert(id).inserted, let object = document.objects[id] else { return }
             for layer in object.layers where layer.visible {
                 let matrix = layer.transform.matrix.concatenating(parent)
-                if let child = layer.contentID { visit(child, parent: matrix) }
+                let reference = layer.transform.warp?.reference ?? CGRect(origin: .zero, size: layer.size)
+                let warped = layer.transform.warp?.projection.bounds(reference) ?? reference
+                let magnification = warpScale * max(1, max(warped.width/max(1,reference.width), warped.height/max(1,reference.height)))
+                if let child = layer.contentID { visit(child, parent: matrix, warpScale: magnification) }
                 guard let assetID = layer.assetID, let asset = document.assets[assetID] else { continue }
                 var size = layer.size
                 if layer.photoSlot != nil, layer.photoFill == true {
                     size = layer.displayBounds?.size ?? layer.size
-                } else if layer.kind == .photo && layer.photoFill != true {
+                } else if layer.isContentPhoto && layer.photoFill != true {
                     size = layer.crop.imageRect(source: asset.pixelSize, frame: layer.size).size
                 } else if let placement = layer.photoPlacement, layer.photoFill == true {
                     let frame = layer.displayBounds?.size ?? layer.size
                     size = CGSize(width: frame.width * placement.size.width, height: frame.height * placement.size.height)
                 }
-                let pixels = max(size.width * hypot(matrix.a, matrix.b), size.height * hypot(matrix.c, matrix.d)) * viewportScale
+                let pixels = max(size.width * hypot(matrix.a, matrix.b), size.height * hypot(matrix.c, matrix.d)) * viewportScale * magnification
                 requested[assetID] = max(requested[assetID] ?? 96, min(maximumDimension, pixels))
                 if let mask = layer.photoSlot?.maskAssetID {
                     requested[mask] = max(requested[mask] ?? 96, min(maximumDimension, pixels))

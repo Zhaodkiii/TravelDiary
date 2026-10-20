@@ -4,6 +4,8 @@ import SwiftUI
 struct DiaryPreviewContentPanel: View {
     @Binding var hiddenCategories: Set<DiaryLayerSemanticKind>
     var affectsImport = false
+    var guidanceAttempt = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let categories = DiaryLayerSemanticKind.selectablePresetCategories
 
     var body: some View {
@@ -64,6 +66,22 @@ struct DiaryPreviewContentPanel: View {
                         in: RoundedRectangle(cornerRadius: 11))
             .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(
                 visible ? DiaryLibraryStyle.accent.opacity(0.12) : DiaryLibraryStyle.line.opacity(0.6), lineWidth: 0.5))
+            .keyframeAnimator(initialValue: 0.0, trigger: guidanceAttempt) { content, emphasis in
+                content.overlay {
+                    RoundedRectangle(cornerRadius: 11)
+                        .strokeBorder(DiaryLibraryStyle.accent, lineWidth: 2)
+                        .opacity(emphasis)
+                        .allowsHitTesting(false)
+                }
+                .scaleEffect(reduceMotion ? 1 : 1 + emphasis * 0.035)
+            } keyframes: { _ in
+                LinearKeyframe(1, duration: 0.18)
+                LinearKeyframe(0.15, duration: 0.22)
+                LinearKeyframe(1, duration: 0.22)
+                LinearKeyframe(0.15, duration: 0.22)
+                LinearKeyframe(1, duration: 0.22)
+                LinearKeyframe(0, duration: 0.3)
+            }
             .contentShape(RoundedRectangle(cornerRadius: 11))
         }
         .buttonStyle(.plain)

@@ -403,6 +403,13 @@ nonisolated final class DiaryDocumentStore: Sendable {
                   [content.referenceSize.width, content.referenceSize.height].allSatisfy({ $0.isFinite && $0 > 0 && $0 <= 10000 }) else {
                 throw DiaryEditorError.invalidDocument.logged()
             }
+            if let region = content.photoLayoutRegion {
+                guard [region.origin.x, region.origin.y, region.size.width, region.size.height].allSatisfy(\.isFinite),
+                      region.width > 0, region.height > 0,
+                      CGRect(origin: .zero, size: content.referenceSize).contains(region) else {
+                    throw DiaryEditorError.invalidDocument.logged()
+                }
+            }
             try validateColor(content.background)
             if let primaryID = content.primaryLayerID {
                 guard content.layers.contains(where: { $0.id == primaryID && $0.kind == content.role }) else { throw DiaryEditorError.invalidDocument.logged() }
@@ -417,6 +424,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
                 guard [node.transform.stretchX, node.transform.stretchY].allSatisfy({ $0.isFinite && (0.05...20).contains($0) }) else {
                     throw DiaryEditorError.invalidDocument.logged()
                 }
+                if let warp = node.transform.warp, !warp.isValid { throw DiaryEditorError.invalidDocument.logged() }
                 if let slot = node.photoSlot {
                     guard slot.isValid, slot.maskAssetID.map({ document.assets[$0] != nil }) ?? true else {
                         throw DiaryEditorError.invalidDocument.logged()
@@ -431,6 +439,12 @@ nonisolated final class DiaryDocumentStore: Sendable {
                     guard [rect.minX, rect.minY, rect.width, rect.height].allSatisfy(\.isFinite),
                           rect.width > 0, rect.height > 0 else { throw DiaryEditorError.invalidDocument.logged() }
                 }
+                if let appearance = node.textAppearance {
+                    guard appearance.isValid else { throw DiaryEditorError.invalidDocument.logged() }
+                    try validateColor(appearance.background)
+                    try validateColor(appearance.strokeColor)
+                    try validateColor(appearance.shadowColor)
+                }
                 if let font = node.font {
                     guard !font.id.isEmpty, font.id.count <= 200, !font.version.isEmpty,
                           font.version.count <= 100 else { throw DiaryEditorError.invalidDocument }
@@ -443,6 +457,30 @@ nonisolated final class DiaryDocumentStore: Sendable {
                            crop.originalCrop.offset.x, crop.originalCrop.offset.y].allSatisfy(\.isFinite),
                           (1...10).contains(crop.originalCrop.zoom) else { throw DiaryEditorError.invalidDocument.logged() }
                 }
+                if node.kind == .frame || node.frameTargetID != nil || node.frameOpening != nil {
+                    guard let target = node.frameTargetID,
+                          content.layers.contains(where: { $0.id == target && $0.isContentPhoto }) else {
+                        throw DiaryEditorError.invalidDocument.logged()
+                    }
+                    if node.assetID != nil || node.frameOpening != nil {
+                        // Sticker frames use an image and a normalized opening, not a stroke width.
+                        guard let opening = node.frameOpening,
+                              [opening.origin.x, opening.origin.y, opening.size.width, opening.size.height].allSatisfy(\.isFinite),
+                              opening.size.width > 0, opening.size.height > 0,
+                              CGRect(x: 0, y: 0, width: 1, height: 1).contains(opening) else {
+                            throw DiaryEditorError.invalidDocument.logged()
+                        }
+                        guard let assetID = node.assetID, let asset = document.assets[assetID],
+                              [asset.pixelSize.width, asset.pixelSize.height].allSatisfy({ $0.isFinite && $0 > 0 }) else {
+                            throw DiaryEditorError.missingResource.logged()
+                        }
+                    } else {
+                        guard let width = node.frameWidth, width.isFinite, (1...100).contains(width) else {
+                            throw DiaryEditorError.invalidDocument.logged()
+                        }
+                    }
+                    try validateColor(node.frameColor)
+                }
                 switch node.kind {
                 case .object:
                     guard let child = node.contentID else { throw DiaryEditorError.invalidDocument.logged() }
@@ -450,10 +488,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
                 case .photo, .sticker:
                     guard let assetID = node.assetID, let asset = document.assets[assetID],
                           [asset.pixelSize.width, asset.pixelSize.height].allSatisfy({ $0.isFinite && $0 > 0 }) else { throw DiaryEditorError.missingResource.logged() }
-                case .frame:
-                    guard let target = node.frameTargetID, content.layers.contains(where: { $0.id == target && $0.kind == .photo }),
-                          let width = node.frameWidth, width.isFinite, (1...100).contains(width) else { throw DiaryEditorError.invalidDocument.logged() }
-                    try validateColor(node.frameColor)
+                case .frame: break
                 case .text: break
                 case .canvas: throw DiaryEditorError.invalidDocument.logged()
                 }
@@ -701,13 +736,86 @@ extension DiaryDocumentStore {
 }
 
 extension DiaryDocumentStore {
+    /// Prepare new framed photos on the main actor using the editor's exact layout rules.
+    /// Resources remain private until the normal atomic preset publication succeeds.
+    @MainActor private func preparePresetPhotoAdditions(_ package: DiaryPresetPackage, pageIDs: [String],
+        photos: [URL], hiddenCategories: Set<DiaryLayerSemanticKind>, assetIDs: [String: UUID],
+        targetSize: CGSize, destinationID: UUID, cancellation: DiaryPresetCancellation?) async throws
+        -> (documents: [String: DiaryDocument], assets: [UUID: Data]) {
+        guard !photos.isEmpty else { return ([:], [:]) }
+        try package.validate()
+        let pages = try pageIDs.map { id -> PresetPage in
+            guard let reference = package.manifest.pages.first(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument }
+            return try package.read(PresetPage.self, reference.path)
+        }
+        let documents = try pages.map {
+            try package.instantiate($0, bookID: destinationID, targetSize: targetSize, assetIDs: assetIDs)
+                .excludingPresetCategories(hiddenCategories)
+        }
+        guard documents.allSatisfy({ $0.replaceablePhotos().isEmpty }) else { return ([:], [:]) }
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("diary-photo-layout-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let staging = DiaryDocumentStore(ownerID: "preset-photo-layout", baseDirectory: temporary, bookID: destinationID)
+        var prepared: [String: DiaryDocument] = [:]
+        var bytesByID: [UUID: Data] = [:]
+        var imported: [DiaryAsset] = []
+        for url in photos {
+            try cancellation?.check()
+            let bytes = try Data(contentsOf: url)
+            let (asset, _) = try await staging.importImage(bytes, documentID: destinationID)
+            imported.append(asset); bytesByID[asset.id] = bytes
+        }
+        let capacities = documents.map { DiaryEditorSession(document: $0, images: [:], store: staging).recommendedPhotoCount }
+        var offset = 0
+        for (index, document) in documents.enumerated() {
+            try cancellation?.check()
+            guard offset < imported.count else { prepared[pages[index].id] = document; continue }
+            let session = DiaryEditorSession(document: document, images: [:], store: staging)
+            let remainingPages = max(1, capacities[index...].filter { $0 > 0 }.count)
+            let minimumHere = imported.count - offset - capacities.dropFirst(index + 1).reduce(0, +)
+            let desired = min(3, max(minimumHere, (imported.count - offset + remainingPages - 1) / remainingPages))
+            var result: DiaryDocument?
+            for count in stride(from: min(desired, imported.count - offset), through: 1, by: -1) {
+                let batch = Array(imported[offset..<(offset + count)])
+                let frames = DiaryPhotoFrameCatalog.select(for: batch.map(\.pixelSize))
+                var frameAssets: [String: DiaryAsset] = [:]
+                for frame in frames where frameAssets[frame.id] == nil {
+                    guard let bytes = frame.image?.pngData() else { throw DiaryEditorError.invalidImage }
+                    let (asset, _) = try await staging.importImage(bytes, documentID: document.id)
+                    frameAssets[frame.id] = asset; bytesByID[asset.id] = bytes
+                }
+                if let (planned, _) = session.plannedPhotoBatch(photos: batch, frames: frames, frameAssets: frameAssets) {
+                    result = planned; offset += count; break
+                }
+            }
+            prepared[pages[index].id] = result ?? document
+        }
+        guard offset == imported.count else {
+            throw NSError(domain: "DiaryPresetPhotos", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                "所选照片无法全部放入当前页面，请减少照片数量或增加页面后重试。"])
+        }
+        return (prepared, bytesByID)
+    }
+
     /// 完整准备页面后一次发布目录。新本以目录移动发布，旧本以 book.json 原子写发布。
     /// operationID 由一次用户意图产生，错误重试沿用；已发布操作直接返回原结果。
     func importPreset(_ package: DiaryPresetPackage, pageIDs: [String], title: String,
                       operationID: UUID, replacementPhotos: [URL] = [], replacementFill: DiaryPhotoSlot.Fill = .cover, hiddenCategories: Set<DiaryLayerSemanticKind> = [], afterPageID: UUID? = nil, expectedRevision: UUID? = nil,
                       progress: @escaping @Sendable (String) -> Void = { _ in },
                       cancellation: DiaryPresetCancellation? = nil) async throws -> DiaryBook {
-        try await run {
+        let preparationLease = StorageActivity.shared.acquire(package.root)
+        defer { withExtendedLifetime(preparationLease) {} }
+        if !replacementPhotos.isEmpty,
+           let existing = try await run({ try? self.readBook(self.bookID ?? operationID) }),
+           existing.presetImports?[operationID.uuidString] != nil { return existing }
+        let assetIDs = Dictionary(uniqueKeysWithValues: package.manifest.assetTable.keys.map { ($0, UUID()) })
+        let targetSize: CGSize
+        if bookID != nil { targetSize = try await loadBook().defaultPageSize }
+        else { targetSize = package.manifest.pageSize.cg }
+        let additions = try await preparePresetPhotoAdditions(package, pageIDs: pageIDs,
+            photos: replacementPhotos, hiddenCategories: hiddenCategories, assetIDs: assetIDs,
+            targetSize: targetSize, destinationID: bookID ?? operationID, cancellation: cancellation)
+        return try await run {
             let packageLease = StorageActivity.shared.acquire(package.root)
             defer { withExtendedLifetime(packageLease) {} }
             let destinationID = self.bookID ?? operationID
@@ -760,14 +868,18 @@ extension DiaryDocumentStore {
             try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: staging) }
             let target = DiaryDocumentStore(ownerID: "preset-staging", baseDirectory: staging, bookID: destinationID)
-            let assetIDs = Dictionary(uniqueKeysWithValues: package.manifest.assetTable.keys.map { ($0, UUID()) })
             var copied = Set<UUID>(); var entries: [DiaryPageEntry] = []
-            var photoIndex = 0
+            var photoIndex = additions.documents.isEmpty ? 0 : replacementPhotos.count
             for (index, page) in selected.enumerated() {
                 try cancellation?.check()
                 progress("正在准备第 \(index + 1) / \(selected.count) 页…")
-                var document = try package.instantiate(page, bookID: destinationID, targetSize: book.defaultPageSize, assetIDs: assetIDs)
+                var document = try additions.documents[page.id] ?? package.instantiate(page, bookID: destinationID, targetSize: book.defaultPageSize, assetIDs: assetIDs)
                     .excludingPresetCategories(hiddenCategories)
+                for (id, bytes) in additions.assets where document.assets[id] != nil && copied.insert(id).inserted {
+                    let url = target.root.appendingPathComponent("assets/\(id.uuidString).image")
+                    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try bytes.write(to: url, options: .atomic)
+                }
                 for (key, source) in package.manifest.assetTable {
                     guard let id = assetIDs[key], document.assets[id] != nil, copied.insert(id).inserted else { continue }
                     let data = try Data(contentsOf: package.url(source.path))
@@ -781,7 +893,7 @@ extension DiaryDocumentStore {
                     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try data.write(to: url, options: .atomic)
                 }
-                for layer in document.replaceablePhotos() where photoIndex < replacementPhotos.count {
+                for layer in document.replaceablePhotos() where additions.documents.isEmpty && photoIndex < replacementPhotos.count {
                     let data = try Data(contentsOf: replacementPhotos[photoIndex])
                     var slot = try target.readPhotoSlot(for: layer, document: document)
                     slot.fill = replacementFill

@@ -45,7 +45,7 @@ struct DiaryEditorScreen: View {
                     showCamera = false
                 }, onClose: { showCamera = false })
             }
-            .sheet(isPresented: $showText) { DiaryTextEditorSheet(session: session, layer: textLayer) }
+            .fullScreenCover(isPresented: $showText) { DiaryTextEditorSheet(session: session, layer: textLayer) }
             .sheet(isPresented: $showStickers, onDismiss: { session.finishInteraction() }) {
                 MaterialLibraryBrowser(session: session, keepsOpenAfterAdding: true)
             }
@@ -56,7 +56,8 @@ struct DiaryEditorScreen: View {
             .sheet(isPresented: $showDrawing, onDismiss: { session.inkMode = false }) {
                 DiaryDrawingSheet(session: session)
                     .presentationDetents([.large])
-                    .interactiveDismissDisabled()
+                    .onDisappear { session.finishFreeTransform(commit: false) }
+            .interactiveDismissDisabled()
             }
             .alert("手帐", isPresented: Binding(get: { session.errorMessage != nil }, set: { if !$0 { session.errorMessage = nil } })) {
                 Button("确定") { session.errorMessage = nil }
@@ -115,7 +116,7 @@ struct DiaryEditorScreen: View {
                             guard let layer = session.selected else { return }
                             if layer.kind == .object { childEditor = session.openObject() }
                             else if layer.kind == .text { openText() }
-                            else if layer.kind == .photo { showCrop = true }
+                            else if layer.isContentPhoto { showCrop = true }
                             else if layer.kind == .sticker { childEditor = session.openSelectedStickerObject() }
                         })
                             .frame(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)
@@ -131,9 +132,12 @@ struct DiaryEditorScreen: View {
                     // viewport fits the artwork above it and keeps the canvas at the top.
                     Color.clear.frame(height: MaterialLibraryBrowser.compactHeight).accessibilityHidden(true)
                 } else if let activeTool {
-                    DiaryEditorToolPanel(title: activeTool.title, onBack: closeTool, onDone: closeTool) {
+                    DiaryEditorToolPanel(title: activeTool.title, onBack: { closeTool(commit: false) }, onDone: { closeTool(commit: true) },
+                                         backAccessibilityLabel: activeTool == .transform ? "取消变形" : "返回") {
                         switch activeTool {
                         case .layers: DiaryLayerToolContent(session: session)
+                        case .background: DiaryBackgroundToolContent(session: session)
+                        case .transform: DiaryTransformToolContent(session: session)
                         }
                     }
                     .disabled(session.busy)
@@ -144,12 +148,14 @@ struct DiaryEditorScreen: View {
 
     private var controls: some View {
         DiaryContextToolbar(session: session,
+            onBackground: { session.finishInteraction(); session.select(nil); activeTool = .background },
             onPhotos: { session.finishInteraction(); showPhotos = true },
             onCamera: { session.finishInteraction(); capturedPhotos = []; showCamera = true },
             onDrawing: { session.finishInteraction(); session.select(nil); session.inkMode = true; showDrawing = true },
             onLayers: { session.finishInteraction(); session.layerMode = true; activeTool = .layers },
             onStickers: { session.finishInteraction(); showStickers = true },
-            onOpenObject: { childEditor = session.openObject() })
+            onOpenObject: { childEditor = session.openObject() },
+            onTransform: { session.beginFreeTransform(); if session.transformDraft != nil { activeTool = .transform } })
     }
     private func importCapturedPhotos() {
         guard !capturedPhotos.isEmpty else { return }
@@ -158,20 +164,19 @@ struct DiaryEditorScreen: View {
         importingCameraPhotos = true
         Task { @MainActor in
             defer { importingCameraPhotos = false }
-            for image in images {
-                guard let data = image.jpegData(compressionQuality: 0.95) else {
-                    session.errorMessage = "无法读取拍摄照片，请重试。"
-                    return
-                }
-                guard await session.importPhoto(data) else { return }
+            let data = images.compactMap { $0.jpegData(compressionQuality: 0.95) }
+            guard data.count == images.count else {
+                session.errorMessage = "无法读取拍摄照片，请重试。"; return
             }
+            await session.importPhotos(data)
         }
     }
     private func openText() {
         textLayer = session.selected?.kind == .text ? session.selected : nil
         showText = true
     }
-    private func closeTool() {
+    private func closeTool(commit: Bool) {
+        if activeTool == .transform { session.finishFreeTransform(commit: commit) }
         session.finishInteraction()
         session.layerMode = false
         activeTool = nil

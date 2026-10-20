@@ -6,6 +6,7 @@ struct DiaryEditorToolPanel<Content: View>: View {
     let title: String
     let onBack: () -> Void
     let onDone: () -> Void
+    var backAccessibilityLabel = "返回"
     @ViewBuilder let content: () -> Content
     @State private var expanded = true
 
@@ -21,7 +22,7 @@ struct DiaryEditorToolPanel<Content: View>: View {
             }
             .accessibilityLabel(expanded ? "收起操作面板" : "展开操作面板")
             if expanded { content().padding(.bottom, 8) }
-            DiaryEditorToolFooter(title: title, onBack: onBack, onDone: onDone)
+            DiaryEditorToolFooter(title: title, onBack: onBack, onDone: onDone, backAccessibilityLabel: backAccessibilityLabel)
         }
         .foregroundStyle(DiaryLibraryStyle.ink)
         .background(DiaryLibraryStyle.background)
@@ -35,9 +36,11 @@ struct DiaryEditorToolFooter: View {
     let onBack: () -> Void
     let onDone: () -> Void
 
+    var backAccessibilityLabel = "返回"
+
     var body: some View {
         HStack {
-            footerButton("返回", symbol: "chevron.left", action: onBack)
+            footerButton(backAccessibilityLabel, symbol: "chevron.left", action: onBack)
             Spacer()
             Text(title).font(.headline)
             Spacer()
@@ -59,7 +62,7 @@ struct DiaryEditorToolFooter: View {
 
 /// Add future tools here; their UI stays inside the same panel shell.
 enum DiaryEditorTool: String, Identifiable {
-    case layers
+    case layers, background, transform
     var id: Self { self }
-    var title: String { "图层" }
+    var title: String { switch self { case .layers: "图层"; case .background: "换背景"; case .transform: "自由变形" } }
 }

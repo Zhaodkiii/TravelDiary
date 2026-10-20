@@ -55,7 +55,39 @@ struct MaterialLibraryTests {
         #expect(session.content.layers.count == 2)
         #expect(session.content.layers[0].id != session.content.layers[1].id)
     }
-    @Test func backgroundInsertionIsEditableFitsCanvasAndPreservesExistingLayers() async throws {
+    @Test func solidBackgroundRemovesNestedBackgroundsAndUndoRestoresThem() throws {
+        var document = DiaryDocument()
+        let background = DiaryLayer(name: "原背景", kind: .sticker,
+            transform: DiaryTransform(position: .zero, pivot: .zero), size: CGSize(width: 100, height: 100),
+            semanticKind: .background)
+        let decoration = DiaryLayer(name: "装饰", kind: .sticker,
+            transform: background.transform, size: background.size, semanticKind: .illustration)
+        let child = DiaryObjectContent(role: .object, referenceSize: background.size, layers: [background, decoration])
+        document.objects[child.id] = child
+        let group = DiaryLayer(name: "组合", kind: .object, transform: background.transform,
+            size: background.size, contentID: child.id)
+        document.objects[document.rootContentID]?.layers = [group]
+        document.objects[document.rootContentID]?.background = .mint
+        let session = DiaryEditorSession(document: document, images: [:],
+            store: DiaryDocumentStore(ownerID: "background-replacement-tests",
+                baseDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)))
+        session.previewBackground(.mint)
+        #expect(session.document.layer(background.id) == nil)
+        #expect(session.document.layer(decoration.id) == decoration)
+        #expect(session.content.background == .mint)
+        session.finishInteraction()
+        #expect(session.undoStack.count == 1)
+        session.undo()
+        #expect(session.content.layers == document.root.layers)
+        #expect(session.content.background == document.root.background)
+        #expect(session.document.objects[child.id] == child)
+        #expect(session.document.assets == document.assets)
+        session.redo()
+        #expect(session.document.layer(background.id) == nil)
+        #expect(session.document.layer(decoration.id) == decoration)
+    }
+
+    @Test func backgroundReplacementIsEditableFitsCanvasAndPreservesOtherLayers() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = DiaryDocumentStore(ownerID: "materials-test", baseDirectory: root)
@@ -64,8 +96,8 @@ struct MaterialLibraryTests {
         #expect(await session.importMaterialBackground(try png(.blue)))
         let before = session.document
         #expect(await session.importMaterialBackground(try png(.green), name: "新背景"))
-        #expect(session.content.layers.filter { $0.isLibraryBackground == true }.count == 2)
-        #expect(session.content.layers.count == 3)
+        #expect(session.content.layers.filter { $0.isLibraryBackground == true }.count == 1)
+        #expect(session.content.layers.count == 2)
         let layer = try #require(session.content.layers.first)
         #expect(layer.locked == false)
         #expect(layer.name == "新背景")
@@ -73,8 +105,8 @@ struct MaterialLibraryTests {
         #expect(layer.size.width <= session.content.referenceSize.width)
         #expect(layer.size.height <= session.content.referenceSize.height)
         #expect(abs(layer.size.width / layer.size.height - 40.0 / 60.0) < 0.001)
-        #expect(Array(session.content.layers.dropFirst()) == before.root.layers)
-        #expect(session.content.background == before.root.background)
+        #expect(Array(session.content.layers.dropFirst()) == Array(before.root.layers.dropFirst()))
+        #expect(session.content.background == nil)
         session.undo()
         #expect(session.content.layers == before.root.layers)
         #expect(session.document.assets == before.assets)

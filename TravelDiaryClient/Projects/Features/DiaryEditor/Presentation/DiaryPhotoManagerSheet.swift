@@ -7,6 +7,7 @@ struct DiaryPhotoManagerSheet: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var replacementID: UUID?
     @State private var showPicker = false
+    @State private var framePhoto: DiaryEditorSession.ManagedPhoto?
     @State private var importing = false
     @State private var errorMessage: String?
 
@@ -28,6 +29,22 @@ struct DiaryPhotoManagerSheet: View {
                         }
                     }
                 }
+                if !session.photoBatches.isEmpty {
+                    Section("照片自动排版") {
+                        ForEach(Array(session.photoBatches.enumerated()), id: \.element.id) { index, batch in
+                            Button {
+                                if !session.rearrangePhotoBatch(batch.id) {
+                                    errorMessage = session.errorMessage
+                                    session.errorMessage = nil
+                                }
+                            } label: {
+                                Label("第 \(index + 1) 组重新排版（\(batch.count) 张）", systemImage: "rectangle.3.group")
+                            }.disabled(batch.locked)
+                        }
+                        Text("仅调整本组照片的位置和大小，保留已选相框；避让现有内容。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 Section("当前页面照片（\(session.managedPhotos.count)）") {
                     if session.managedPhotos.isEmpty {
                         ContentUnavailableView("还没有照片", systemImage: "photo.on.rectangle", description: Text("点击上方“添加新照片”将照片加入画布。"))
@@ -41,6 +58,7 @@ struct DiaryPhotoManagerSheet: View {
                                 if !photo.visible { Label("已隐藏", systemImage: "eye.slash").font(.caption).foregroundStyle(.secondary) }
                             }
                             Spacer(minLength: 4)
+                            Button("相框") { framePhoto = photo }.disabled(photo.locked)
                             Button("替换") {
                                 replacementID = photo.id
                                 showPicker = true
@@ -65,6 +83,7 @@ struct DiaryPhotoManagerSheet: View {
                     ProgressView("正在处理照片…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
             }
+            .sheet(item: $framePhoto) { photo in DiaryPhotoFramePicker(session: session, photoID: photo.id) }
             .photosPicker(isPresented: $showPicker, selection: $photoItems,
                           maxSelectionCount: replacementID == nil ? 30 : 1, matching: .images)
             .onChange(of: photoItems) { _, items in
@@ -74,17 +93,21 @@ struct DiaryPhotoManagerSheet: View {
                 Task { @MainActor in
                     defer { photoItems = []; importing = false }
                     do {
+                        var data: [Data] = []
                         for item in items {
-                            guard let data = try await item.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage }
-                            if let target {
-                                guard let photo = session.managedPhotos.first(where: { $0.id == target }), !photo.locked else {
-                                    errorMessage = "照片已变化，请重新选择。"; return
-                                }
+                            guard let bytes = try await item.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage }
+                            data.append(bytes)
+                        }
+                        let imported: Bool
+                        if let target {
+                            guard let photo = session.managedPhotos.first(where: { $0.id == target }), !photo.locked else {
+                                errorMessage = "照片已变化，请重新选择。"; return
                             }
-                            if !(await session.importPhoto(data, replacing: target)) {
-                                errorMessage = session.errorMessage ?? "照片处理失败，请重试。"
-                                session.errorMessage = nil; return
-                            }
+                            imported = await session.importPhoto(data[0], replacing: target)
+                        } else { imported = await session.importPhotos(data) }
+                        if !imported {
+                            errorMessage = session.errorMessage ?? "照片处理失败，请重试。"
+                            session.errorMessage = nil
                         }
                     } catch { errorMessage = error.localizedDescription }
                 }

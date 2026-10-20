@@ -10,9 +10,11 @@ extension DiaryEditorSession {
         guard var layer = selected else { return nil }
         var visited = Set<UUID>()
         while let id = layer.contentID, visited.insert(id).inserted,
-              let object = document.objects[id], object.layers.count == 1,
+              let object = document.objects[id],
               object.drawing.isEmpty, object.background == nil,
-              let primary = object.layers.first, primary.kind != .frame {
+              let primary = object.layers.first(where: { $0.id == object.primaryLayerID }) ?? object.layers.first,
+              !primary.isPhotoFrame,
+              object.layers.allSatisfy({ $0.id == primary.id || ($0.isPhotoFrame && $0.frameTargetID == primary.id) }) {
             layer = primary
         }
         return layer
@@ -22,7 +24,7 @@ extension DiaryEditorSession {
         guard let outer = selected, let layer = selectedEditingLayer else { return nil }
         if outer.semanticKind == .background || outer.isLibraryBackground == true || layer.semanticKind == .background { return .background }
         if layer.contentID != nil { return .group }
-        if layer.kind == .frame { return .frame }
+        if layer.isPhotoFrame { return .frame }
         if layer.kind == .text { return .text }
         if layer.category == .textImage || layer.semanticKind == .text || outer.category == .textImage || outer.semanticKind == .text { return .textImage }
         if layer.semanticKind == .paper || outer.semanticKind == .paper { return .paper }
@@ -68,7 +70,7 @@ extension DiaryEditorSession {
         var visited = Set<UUID>()
         func collect(_ layer: DiaryLayer) {
             guard !layer.locked else { return }
-            if layer.kind == .photo { result.append(layer) }
+            if layer.isContentPhoto { result.append(layer) }
             if let id = layer.contentID, visited.insert(id).inserted, let object = document.objects[id] {
                 object.layers.forEach(collect)
             }
@@ -80,12 +82,13 @@ extension DiaryEditorSession {
 
 /// Stable tool ordering shared by the toolbar and capability tests.
 nonisolated enum DiaryContextAction: String, Identifiable {
-    case background, layers, replacePhoto, crop, frame, opacity, arrange
+    case transform, background, layers, replacePhoto, crop, frame, opacity, arrange
     case editText, font, fontSize, textColor, typography, replaceMaterial, flip
     case replaceBackground, placement, lock, unlock, frameColor, frameWidth, editContent
     var id: Self { self }
     var title: String {
         switch self {
+        case .transform: "自由变形"
         case .background: "背景"
         case .layers: "图层"
         case .replacePhoto, .replaceMaterial: "替换"
@@ -110,6 +113,7 @@ nonisolated enum DiaryContextAction: String, Identifiable {
     }
     var symbol: String {
         switch self {
+        case .transform: "viewfinder"
         case .background, .replaceBackground: "photo.fill"
         case .layers, .arrange: "square.3.layers.3d"
         case .replacePhoto, .replaceMaterial: "arrow.triangle.2.circlepath"
@@ -134,15 +138,17 @@ extension DiaryEditorSession {
     var contextActions: [DiaryContextAction] {
         guard let selected else { return [.background, .layers] }
         guard !selected.locked else { return [.unlock, .layers] }
+        let actions: [DiaryContextAction]
         switch selectedEditingKind {
-        case .photo: return [.replacePhoto, .crop, .frame, .opacity, .arrange]
-        case .text: return [.editText, .font, .fontSize, .textColor, .typography]
-        case .textImage, .paper: return [.replaceMaterial, .opacity, .arrange]
-        case .sticker: return [.replaceMaterial, .flip, .opacity, .arrange]
-        case .background: return [.replaceBackground, .placement, .opacity, .lock]
-        case .frame: return [.frameColor, .frameWidth, .opacity]
-        case .group: return [.editContent] + (selectedPhotos.isEmpty ? [] : [.replacePhoto]) + [.opacity, .arrange]
-        case nil: return [.background, .layers]
+        case .photo: actions = [.replacePhoto, .crop, .frame, .opacity, .arrange]
+        case .text: actions = [.editText, .font, .fontSize, .textColor, .typography]
+        case .textImage, .paper: actions = [.replaceMaterial, .opacity, .arrange]
+        case .sticker: actions = [.replaceMaterial, .flip, .opacity, .arrange]
+        case .background: actions = [.replaceBackground, .placement, .opacity, .lock]
+        case .frame: actions = selected.assetID != nil ? [.frame, .opacity] : [.frameColor, .frameWidth, .opacity]
+        case .group: actions = [.editContent] + (selectedPhotos.isEmpty ? [] : [.replacePhoto]) + [.opacity, .arrange]
+        case nil: actions = [.background, .layers]
         }
+        return canTransformSelection ? actions + [.transform] : actions
     }
 }

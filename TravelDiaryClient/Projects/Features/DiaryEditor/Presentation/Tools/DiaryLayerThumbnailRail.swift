@@ -105,7 +105,7 @@ struct DiaryLayerThumbnailRail: UIViewRepresentable {
             session.select(layers[indexPath.item].id)
         }
         func collectionView(_ collectionView: UICollectionView, canMoveItemAt indexPath: IndexPath) -> Bool {
-            !layers[indexPath.item].locked && layers[indexPath.item].kind != .frame
+            !layers[indexPath.item].locked && !layers[indexPath.item].isPhotoFrame
         }
         func collectionView(_ collectionView: UICollectionView, moveItemAt sourceIndexPath: IndexPath, to destinationIndexPath: IndexPath) {
             let layer = layers.remove(at: sourceIndexPath.item)

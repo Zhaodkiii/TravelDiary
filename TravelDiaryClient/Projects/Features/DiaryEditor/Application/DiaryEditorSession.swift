@@ -41,6 +41,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     @Published var selectedID: UUID?
     @Published var inkMode = false
     @Published var layerMode = false
+    @Published var transformDraft: DiaryTransformDraft?
     @Published var eraser = false
     @Published var errorMessage: String?
     @Published private(set) var saveStatus = "已保存"
@@ -195,7 +196,21 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             parent.scheduleSave()
         }
     }
-    func setBackground(_ color: DiaryColor?) { edit { document.objects[contentID]?.background = color } }
+    /// Keep repeated swatch previews in one undoable interaction.
+    func previewBackground(_ color: DiaryColor?) {
+        let cleared = document.removingBackgrounds(in: contentID)
+        guard document != cleared || content.background != color else { return }
+        beginInteraction()
+        document = cleared
+        document.objects[contentID]?.background = color
+        if document.layer(selectedID) == nil { selectedID = nil }
+    }
+
+    func setBackground(_ color: DiaryColor?) {
+        finishInteraction()
+        previewBackground(color)
+        finishInteraction()
+    }
     func addFrame() {
         guard let layer = selectedEditingLayer, layer.kind == .photo, editableLayer(layer.id) != nil,
               let owner = document.objects.values.first(where: { $0.layers.contains(where: { $0.id == layer.id }) }) else { return }
@@ -211,6 +226,53 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         }
     }
 
+    /// The photo and its decorative frame live in the same smart object.
+    func applyPhotoFrame(_ item: DiaryPhotoFrameCatalog.Item?, to photoID: UUID) async -> Bool {
+        guard !busy, let photo = managedPhotos.first(where: { $0.id == photoID }), !photo.locked else { return false }
+        busy = true
+        defer { busy = false }
+        do {
+            var imported: DiaryAsset?
+            if let item {
+                guard let data = item.image?.pngData() else { throw DiaryEditorError.invalidImage }
+                let (asset, image) = try await store.importImage(data, documentID: document.id)
+                imported = asset; images[asset.id] = image
+            }
+            edit {
+                document.objects[photo.ownerID]?.layers.removeAll { $0.frameTargetID == photoID }
+                if let item, let asset = imported {
+                    document.assets[asset.id] = asset
+                    if document.objects[photo.ownerID]?.role == .photo,
+                       document.objects[photo.ownerID]?.primaryLayerID == photoID {
+                        document.objects[photo.ownerID]?.layers.append(Self.photoFrame(item, asset: asset, photo: photo.layer, manual: true))
+                    } else if let index = document.objects[photo.ownerID]?.layers.firstIndex(where: { $0.id == photoID }) {
+                        var primary = photo.layer
+                        primary.transform = DiaryTransform(position: primary.transform.pivot, pivot: primary.transform.pivot)
+                        primary.visible = true; primary.locked = false; primary.opacity = nil
+                        let object = DiaryObjectContent(role: .photo, primaryLayerID: primary.id,
+                            referenceSize: primary.size, layers: [primary, Self.photoFrame(item, asset: asset, photo: primary, manual: true)])
+                        let wrapper = DiaryLayer(name: photo.layer.name, kind: .object, transform: photo.layer.transform,
+                            size: photo.layer.size, contentID: object.id, visible: photo.layer.visible, opacity: photo.layer.opacity)
+                        document.objects[object.id] = object
+                        document.objects[photo.ownerID]?.layers[index] = wrapper
+                        if selectedID == photoID { selectedID = wrapper.id }
+                    }
+                }
+                document.update(photoID) { $0.photoFrameIsManual = true }
+            }
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    static func photoFrame(_ item: DiaryPhotoFrameCatalog.Item, asset: DiaryAsset, photo: DiaryLayer, manual: Bool = false) -> DiaryLayer {
+        let opening = item.opening
+        let width = photo.size.width / opening.width, height = photo.size.height / opening.height
+        return DiaryLayer(name: item.title, kind: .photo, transform: photo.transform,
+            size: CGSize(width: width, height: height), subcategory: "frame", renderType: "image",
+            assetID: asset.id, frameTargetID: photo.id,
+            frameOpening: opening, photoFrameCatalogID: item.id, photoFrameIsManual: manual)
+    }
+
     func updateFrame(_ id: UUID, color: DiaryColor, width: CGFloat) {
         guard editableLayer(id)?.kind == .frame, width.isFinite, (0...100).contains(width) else { return }
         edit { document.update(id) { $0.frameColor = color; $0.frameWidth = width } }
@@ -222,7 +284,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     }
 
     func flipSelected(horizontal: Bool) {
-        guard let layer = selected, !layer.locked, layer.kind != .frame else { return }
+        guard let layer = selected, !layer.locked, !layer.isPhotoFrame else { return }
         edit {
             document.update(layer.id) {
                 if horizontal { $0.transform.flippedHorizontally = !($0.transform.flippedHorizontally ?? false) }
@@ -233,7 +295,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
 
     /// A draft panel commits one operation against the captured target.
     func updatePlacement(_ id: UUID, position: CGPoint, scale: CGFloat, angle: CGFloat) {
-        guard let layer = editableLayer(id), layer.kind != .frame,
+        guard let layer = editableLayer(id), !layer.isPhotoFrame,
               position.x.isFinite, position.y.isFinite, scale.isFinite, angle.isFinite,
               (0.05...20).contains(scale) else { return }
         edit { document.update(id) { $0.transform.position = position; $0.transform.scale = scale; $0.transform.rotationDegrees = angle } }
@@ -342,7 +404,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     }
 
     func canMoveSelected(forward: Bool) -> Bool {
-        guard let layer = selected, !layer.locked, layer.kind != .frame,
+        guard let layer = selected, !layer.locked, !layer.isPhotoFrame,
               let index = scopeLayers.firstIndex(where: { $0.id == layer.id }) else { return false }
         return scopeLayers.indices.contains(index + (forward ? 1 : -1))
     }
@@ -350,7 +412,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     /// Interactive rail movement previews the stack, but records history only on release.
     func previewLayerOrder(_ id: UUID, to destination: Int) {
         guard let index = scopeLayers.firstIndex(where: { $0.id == id }),
-              !scopeLayers[index].locked, scopeLayers[index].kind != .frame,
+              !scopeLayers[index].locked, !scopeLayers[index].isPhotoFrame,
               scopeLayers.indices.contains(destination), index != destination else { return }
         beginInteraction()
         let layer = document.objects[contentID]!.layers.remove(at: index)
@@ -360,7 +422,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     /// Destination is in the current object's bottom-to-top ordering.
     func moveLayer(_ id: UUID, to destination: Int) {
         guard let index = scopeLayers.firstIndex(where: { $0.id == id }),
-              !scopeLayers[index].locked, scopeLayers[index].kind != .frame,
+              !scopeLayers[index].locked, !scopeLayers[index].isPhotoFrame,
               scopeLayers.indices.contains(destination), index != destination else { return }
         edit {
             let layer = document.objects[contentID]!.layers.remove(at: index)
@@ -370,15 +432,15 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     }
 
     func previewPosition(_ point: CGPoint) {
-        guard let id = selectedID, selected?.locked == false, selected?.kind != .frame else { return }
+        guard let id = selectedID, selected?.locked == false, selected?.isPhotoFrame != true else { return }
         document.update(id) { $0.transform.position = point }
     }
     func previewScale(_ value: CGFloat) {
-        guard let id = selectedID, selected?.locked == false, selected?.kind != .frame else { return }
+        guard let id = selectedID, selected?.locked == false, selected?.isPhotoFrame != true else { return }
         document.update(id) { $0.transform.scale = value }
     }
     func previewAngle(_ value: CGFloat) {
-        guard let id = selectedID, selected?.locked == false, selected?.kind != .frame else { return }
+        guard let id = selectedID, selected?.locked == false, selected?.isPhotoFrame != true else { return }
         document.update(id) { $0.transform.rotationDegrees = value }
     }
     /// 只替换选定照片的素材；原图与参数随文档保存，整次提交进入一条撤销记录。
@@ -424,9 +486,39 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     }
 
     func applyCrop(_ crop: DiaryCrop) {
-        guard let id = selectedID, selected?.locked == false, selected?.kind != .frame else { return }
+        guard let id = selectedID, selected?.locked == false, selected?.isPhotoFrame != true else { return }
         edit { document.update(id) { $0.crop = crop } }
     }
+    /// Only the isolated text preview session uses this; no history or disk writes.
+    func previewTextDraft(_ layer: DiaryLayer, targetID: UUID?) {
+        if let targetID { document.update(targetID) { $0 = layer } }
+        else if let index = document.objects[contentID]?.layers.firstIndex(where: { $0.id == layer.id }) {
+            document.objects[contentID]?.layers[index] = layer
+        } else {
+            document.objects[contentID]?.layers.append(layer)
+            selectedID = layer.id
+        }
+    }
+
+    @discardableResult
+    func commitTextDraft(_ draft: DiaryLayer, targetID: UUID?) -> Bool {
+        guard !busy, draft.kind == .text, !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              draft.fontSize.isFinite, (1...300).contains(draft.fontSize),
+              draft.textAppearance?.isValid != false else { return false }
+        if let targetID {
+            guard let current = editableLayer(targetID), current.kind == .text else {
+                errorMessage = "文字图层已不可编辑"; return false
+            }
+            var updated = draft
+            updated.id = current.id; updated.transform = current.transform
+            updated.opacity = current.opacity; updated.visible = current.visible; updated.locked = current.locked
+            edit { document.update(targetID) { $0 = updated } }
+        } else {
+            edit { selectedID = document.appendObject(containing: draft, to: contentID) }
+        }
+        return true
+    }
+
     /// 目标 ID 在打开弹窗时固定，避免提交时修改其他选中层。
     func applyTextEdit(targetID: UUID?, text: String, fontSize: CGFloat, font: DiaryFontReference?, color: DiaryColor? = nil,
                        alignment: DiaryTextAlignment? = nil, lineHeight: Double? = nil, letterSpacing: Double? = nil) -> Bool {
@@ -466,7 +558,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     var scopeCenter: CGPoint { CGPoint(x: content.referenceSize.width / 2, y: content.referenceSize.height / 2) }
 
     @discardableResult
-    /// Insert an editable image at the bottom without changing canvas background or existing layers.
+    /// Replace the previous background while preserving photos, text and decorations.
     func importMaterialBackground(_ data: Data, name: String = "背景") async -> Bool {
         guard !busy else { return false }
         busy = true
@@ -482,6 +574,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             layer.semanticKind = .background; layer.isLibraryBackground = true
             images[asset.id] = image
             edit {
+                document = document.removingBackgrounds(in: contentID)
                 document.assets[asset.id] = asset
                 document.objects[contentID]?.layers.insert(layer, at: 0)
                 selectedID = layer.id
@@ -490,7 +583,211 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         } catch { errorMessage = error.localizedDescription; return false }
     }
 
+    /// One transaction for a picker/camera batch. File imports may be staged, but the canvas changes only after layout succeeds.
+    @discardableResult
+    func importPhotos(_ data: [Data]) async -> Bool {
+        guard !busy, !closing, !childOpen, !data.isEmpty else { return false }
+        guard data.count <= 30, scopeLayers.count + data.count <= 200 else {
+            errorMessage = "本次照片过多，请分批添加或放到其他页面。"; return false
+        }
+        busy = true
+        defer { busy = false }
+        let expected = document
+        do {
+            var photos: [(DiaryAsset, UIImage)] = []
+            for bytes in data {
+                try Task.checkCancellation()
+                photos.append(try await store.importImage(bytes, documentID: document.id))
+            }
+            let frames = DiaryPhotoFrameCatalog.select(for: photos.map { $0.0.pixelSize })
+            guard frames.count == photos.count else { throw DiaryEditorError.invalidImage }
+            var frameAssets: [String: (DiaryAsset, UIImage)] = [:]
+            for item in frames where frameAssets[item.id] == nil {
+                try Task.checkCancellation()
+                guard let bytes = item.image?.pngData() else { throw DiaryEditorError.invalidImage }
+                frameAssets[item.id] = try await store.importImage(bytes, documentID: document.id)
+            }
+            try Task.checkCancellation()
+            guard document == expected else {
+                errorMessage = "页面已变化，请重新添加照片。"; return false
+            }
+            guard let (planned, ids) = plannedPhotoBatch(photos: photos.map { $0.0 }, frames: frames,
+                frameAssets: frameAssets.mapValues { $0.0 }) else {
+                errorMessage = "当前页面空间不足，无法在不遮挡现有内容的情况下排入这些照片。请减少照片数量或添加到其他页面。"
+                return false
+            }
+            // Validate before committing, including copied sticker resources and template layout metadata.
+            _ = try DiaryDocumentStore.validate(planned)
+            edit {
+                document = planned
+                for (asset, image) in photos { images[asset.id] = image }
+                for (asset, image) in frameAssets.values { images[asset.id] = image }
+                selectedID = ids.last
+            }
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    /// Shared by editor imports and preset creation; planning never mutates the session or schedules saves.
+    func plannedPhotoBatch(photos: [DiaryAsset], frames: [DiaryPhotoFrameCatalog.Item],
+                           frameAssets: [String: DiaryAsset]) -> (DiaryDocument, [UUID])? {
+        guard !photos.isEmpty, photos.count == frames.count,
+              scopeLayers.count + photos.count <= 200 else { return nil }
+        let batchID = UUID()
+        var planned = document
+        var ids: [UUID] = []
+        var inputs: [DiaryPhotoBatchLayout.Input] = []
+        for (index, asset) in photos.enumerated() {
+            let item = frames[index]
+            guard let frameAsset = frameAssets[item.id] else { return nil }
+            planned.assets[asset.id] = asset; planned.assets[frameAsset.id] = frameAsset
+            let photo = DiaryLayer.photo(asset: asset, center: scopeCenter)
+            planned.appendObject(containing: photo, to: contentID)
+            let objectID = planned.objects[contentID]!.layers.last!.contentID!
+            let primary = planned.objects[objectID]!.layers[0]
+            planned.objects[objectID]?.layers.append(Self.photoFrame(item, asset: frameAsset, photo: primary))
+            planned.update(photo.id) { $0.photoBatchID = batchID }
+            ids.append(photo.id)
+            inputs.append(DiaryPhotoBatchLayout.Input(photoSize: photo.size,
+                bounds: DiaryPageRenderer.objectBounds(planned.objects[objectID]!, document: planned)))
+        }
+        guard let placements = DiaryPhotoBatchLayout.plan(inputs, canvas: CGRect(origin: .zero, size: content.referenceSize),
+            region: batchPhotoRegion, obstacles: batchPhotoObstacles(excluding: []), foreground: batchPhotoForeground) else {
+            return nil
+        }
+        for (index, id) in ids.enumerated() { planned.update(id) { $0.transform = placements[index].transform } }
+        // Existing small labels/accents remain in front; scenery stays beneath the new photos.
+        let foregroundIDs = batchForegroundIDs
+        if let layers = planned.objects[contentID]?.layers {
+            planned.objects[contentID]?.layers = layers.filter { !foregroundIDs.contains($0.id) }
+                + layers.filter { foregroundIDs.contains($0.id) }
+        }
+        return (planned, ids)
+    }
+
+    /// Conservative recommendation: up to three framed photos per page, respecting existing content.
+    var recommendedPhotoCount: Int {
+        for count in stride(from: 3, through: 1, by: -1) {
+            let photos = (0..<count).map { _ in DiaryAsset(id: UUID(), path: "preview.image", pixelSize: CGSize(width: 800, height: 1000)) }
+            let frames = DiaryPhotoFrameCatalog.select(for: photos.map(\.pixelSize))
+            var assets: [String: DiaryAsset] = [:]
+            for frame in frames { assets[frame.id] = DiaryAsset(id: UUID(), path: "preview.image", pixelSize: CGSize(width: 800, height: 1000)) }
+            if plannedPhotoBatch(photos: photos, frames: frames, frameAssets: assets) != nil { return count }
+        }
+        return 0
+    }
+
+    struct PhotoBatch: Identifiable {
+        let id: UUID
+        let count: Int
+        let locked: Bool
+    }
+    var photoBatches: [PhotoBatch] {
+        var seen = Set<UUID>()
+        return scopeLayers.compactMap { layer in
+            guard let id = layer.photoBatchID, seen.insert(id).inserted else { return nil }
+            let members = scopeLayers.filter { $0.photoBatchID == id }
+            return PhotoBatch(id: id, count: members.count, locked: members.contains { $0.locked })
+        }
+    }
+
+    /// Moves only this batch's outer objects. Frame choices (including manual removal), crops and internal edits stay intact.
+    @discardableResult
+    func rearrangePhotoBatch(_ batchID: UUID) -> Bool {
+        guard !busy, !closing, !childOpen else { return false }
+        let members = scopeLayers.filter { $0.photoBatchID == batchID }
+        guard !members.isEmpty, members.allSatisfy({ !$0.locked }) else {
+            errorMessage = "这组照片包含锁定对象，请先解锁再重新排版。"; return false
+        }
+        let inputs = members.map { layer in
+            let object = layer.contentID.flatMap { document.objects[$0] }
+            let primary = object?.layers.first { $0.id == object?.primaryLayerID }
+            return DiaryPhotoBatchLayout.Input(photoSize: primary?.size ?? layer.size,
+                bounds: DiaryPageRenderer.bounds(layer, document: document, siblings: scopeLayers),
+                flippedHorizontally: layer.transform.flippedHorizontally,
+                flippedVertically: layer.transform.flippedVertically)
+        }
+        guard let placements = DiaryPhotoBatchLayout.plan(inputs, canvas: CGRect(origin: .zero, size: content.referenceSize),
+            region: batchPhotoRegion, obstacles: batchPhotoObstacles(excluding: Set(members.map(\.id))), foreground: batchPhotoForeground) else {
+            errorMessage = "当前页面空间不足，请减少照片数量或将部分内容移到其他页面。"; return false
+        }
+        let foregroundIDs = batchForegroundIDs
+        edit {
+            for (index, layer) in members.enumerated() {
+                document.update(layer.id) {
+                    let old = $0.transform
+                    $0.transform = placements[index].transform
+                    // Preserve user flips while replacing layout position/size/angle.
+                    $0.transform.flippedHorizontally = old.flippedHorizontally
+                    $0.transform.flippedVertically = old.flippedVertically
+                }
+            }
+            if let layers = document.objects[contentID]?.layers {
+                document.objects[contentID]?.layers = layers.filter { !foregroundIDs.contains($0.id) }
+                    + layers.filter { foregroundIDs.contains($0.id) }
+            }
+        }
+        return true
+    }
+
+    private var batchPhotoRegion: CGRect? { content.photoLayoutRegion }
+
+    /// Only small independent accents/labels can be lifted above photos. Never lift a mixed photo group.
+    private var batchForegroundIDs: Set<UUID> {
+        let canvas = content.referenceSize
+        func overlayOnly(_ layer: DiaryLayer, visited: Set<UUID>) -> Bool {
+            guard layer.semanticKind != .background, layer.isLibraryBackground != true,
+                  !layer.isContentPhoto, !layer.isPhotoFrame else { return false }
+            if let child = layer.contentID, let object = document.objects[child] {
+                guard !visited.contains(child), object.drawing.isEmpty else { return false }
+                return object.layers.allSatisfy { overlayOnly($0, visited: visited.union([child])) }
+            }
+            return true
+        }
+        return Set(scopeLayers.filter { layer in
+            guard layer.visible, overlayOnly(layer, visited: []) else { return false }
+            let rect = DiaryPageRenderer.effectiveTransform(layer, siblings: scopeLayers).projection.bounds(
+                DiaryPageRenderer.bounds(layer, document: document, siblings: scopeLayers))
+            return rect.width * rect.height <= canvas.width * canvas.height * 0.06
+                && rect.width <= canvas.width * 0.45 && rect.height <= canvas.height * 0.25
+        }.map(\.id))
+    }
+
+    private var batchPhotoForeground: [CGRect] {
+        let ids = batchForegroundIDs
+        return scopeLayers.filter { ids.contains($0.id) }.map {
+            DiaryPageRenderer.effectiveTransform($0, siblings: scopeLayers).projection.bounds(
+                DiaryPageRenderer.bounds($0, document: document, siblings: scopeLayers))
+        }
+    }
+
+    private func batchPhotoObstacles(excluding ids: Set<UUID>) -> [CGRect] {
+        var bounds: [CGRect] = []
+        var visited = Set<UUID>()
+        let foregroundIDs = batchForegroundIDs
+        func visit(_ id: UUID, matrix: DiaryProjection) {
+            guard visited.insert(id).inserted, let object = document.objects[id] else { return }
+            if let drawing = try? PKDrawing(data: object.drawing), !drawing.strokes.isEmpty {
+                bounds.append(matrix.bounds(drawing.bounds))
+            }
+            for layer in object.layers where layer.visible && !ids.contains(layer.id) && !foregroundIDs.contains(layer.id) {
+                guard layer.semanticKind != .background, layer.isLibraryBackground != true else { continue }
+                let transform = matrix.multiplied(by: DiaryPageRenderer.effectiveTransform(layer, siblings: object.layers).projection)
+                let text = layer.kind == .text || layer.semanticKind == .text || layer.category == .textImage
+                if let child = layer.contentID { visit(child, matrix: transform) }
+                else if text || layer.isContentPhoto || layer.isPhotoFrame || layer.semanticKind == .branding {
+                    // Protect actual text leaves, not the large mixed group containing them.
+                    bounds.append(transform.bounds(DiaryPageRenderer.bounds(layer, document: document, siblings: object.layers)))
+                }
+                // Decorative paper, plants, street scenes and stickers may be covered by new photos.
+            }
+        }
+        visit(contentID, matrix: DiaryProjection())
+        return bounds
+    }
+
     func importPhoto(_ data: Data, replacing: UUID? = nil, asSticker: Bool = false, stickerName: String = "贴纸", semanticKind: DiaryLayerSemanticKind? = nil) async -> Bool {
+        if replacing == nil && !asSticker { return await importPhotos([data]) }
         guard !busy else { return false }
         busy = true
         defer { busy = false }
@@ -501,7 +798,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                       target.kind == .photo || target.kind == .sticker else { return false }
             }
             let slot: DiaryPhotoSlot?
-            if let replacing, let layer = editableLayer(replacing), layer.kind == .photo {
+            if let replacing, let layer = editableLayer(replacing), layer.isContentPhoto {
                 slot = try await store.photoSlot(for: layer, document: document)
             } else { slot = nil }
             images[asset.id] = image
@@ -525,9 +822,6 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                     sticker.semanticKind = semanticKind
                     if semanticKind == .text { sticker.category = .textImage }
                     document.appendObject(containing: sticker, to: contentID); selectedID = sticker.id
-                } else {
-                    let photo = DiaryLayer.photo(asset: asset, center: scopeCenter)
-                    document.appendObject(containing: photo, to: contentID); selectedID = photo.id
                 }
             }
             return true
@@ -566,7 +860,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     /// 手势预览留在画布；结束时只提交一次，取消不产生历史或保存。
     func commitTransform(_ value: DiaryLayer) {
         guard let current = selected, current.id == value.id, !current.locked,
-              current.kind != .frame, current.transform != value.transform else { return }
+              !current.isPhotoFrame, current.transform != value.transform else { return }
         edit {
             guard let index = document.objects[contentID]?.layers.firstIndex(where: { $0.id == value.id }) else { return }
             document.objects[contentID]!.layers[index].transform = value.transform
@@ -575,7 +869,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
 
     /// 复制对象时递归复制内容和内部 ID；图片字节可共享，编辑内容彼此独立。
     func duplicateSelected() {
-        guard let source = selected, !source.locked, source.kind != .frame else { return }
+        guard let source = selected, !source.locked, !source.isPhotoFrame else { return }
         let linkedFrames = content.layers.filter { $0.frameTargetID == source.id }
         guard content.layers.count + 1 + linkedFrames.count <= 200 else {
             errorMessage = "当前对象的图层数量已达上限。"; return
@@ -633,7 +927,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             for layer in object.layers {
                 let protected = locked || layer.locked
                 let shown = visible && layer.visible
-                if layer.kind == .photo {
+                if layer.isContentPhoto {
                     result.append(ManagedPhoto(layer: layer, ownerID: id, locked: protected, visible: shown))
                 } else if let child = layer.contentID {
                     visit(child, locked: protected, visible: shown)
@@ -666,7 +960,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         }
     }
     func reorderSelected(forward: Bool) {
-        guard let id = selectedID, selected?.locked == false, selected?.kind != .frame else { return }
+        guard let id = selectedID, selected?.locked == false, selected?.isPhotoFrame != true else { return }
         edit {
             func reorder(_ nodes: inout [DiaryLayer]) {
                 guard let index = nodes.firstIndex(where: { $0.id == id }) else { return }
