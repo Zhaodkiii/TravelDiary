@@ -31,38 +31,54 @@ import UIKit
             return true
         }
         guard success else { return nil }
-        let cx = min(w-1, max(0, Int(opening.midX*CGFloat(w))))
-        let cy = min(h-1, max(0, Int(opening.midY*CGFloat(h))))
-        // 内孔中心若恰好有一小块装饰，仍可在中心附近找到透明种子。
-        var seed: Int?
-        let radius = max(2, Int(min(opening.width*CGFloat(w), opening.height*CGFloat(h))*0.12))
-        for r in 0...radius {
-            for y in max(0,cy-r)...min(h-1,cy+r) {
-                for x in max(0,cx-r)...min(w-1,cx+r) where max(abs(x-cx), abs(y-cy)) == r {
-                    if bytes[(y*w+x)*4+3] < 128 { seed = y*w+x; break }
+        let fullCanvas = opening == CGRect(x: 0, y: 0, width: 1, height: 1)
+        var seen = [UInt8](repeating: 0, count: w*h)
+        func component(_ seed: Int) -> (pixels: [Int], touchesEdge: Bool) {
+            var queue = [seed], cursor = 0, touchesEdge = false
+            seen[seed] = 1
+            while cursor < queue.count {
+                let index = queue[cursor]; cursor += 1
+                let x = index%w, y = index/w
+                if x == 0 || y == 0 || x == w-1 || y == h-1 { touchesEdge = true }
+                for next in [x > 0 ? index-1 : -1, x+1 < w ? index+1 : -1,
+                             y > 0 ? index-w : -1, y+1 < h ? index+w : -1] where next >= 0 {
+                    if seen[next] == 0 && bytes[next*4+3] < 128 {
+                        seen[next] = 1; queue.append(next)
+                    }
+                }
+            }
+            return (queue, touchesEdge)
+        }
+        var queue: [Int] = []
+        if fullCanvas {
+            // 预设空框通常没有开口元数据；选最大封闭内孔，排除外部透明背景和装饰间隙。
+            for seed in 0..<(w*h) where seen[seed] == 0 && bytes[seed*4+3] < 128 {
+                let region = component(seed)
+                if !region.touchesEdge && region.pixels.count > queue.count { queue = region.pixels }
+            }
+        } else {
+            let cx = min(w-1, max(0, Int(opening.midX*CGFloat(w))))
+            let cy = min(h-1, max(0, Int(opening.midY*CGFloat(h))))
+            let radius = max(2, Int(min(opening.width*CGFloat(w), opening.height*CGFloat(h))*0.12))
+            var seed: Int?
+            for r in 0...radius {
+                for y in max(0,cy-r)...min(h-1,cy+r) {
+                    for x in max(0,cx-r)...min(w-1,cx+r) where max(abs(x-cx), abs(y-cy)) == r {
+                        if bytes[(y*w+x)*4+3] < 128 { seed = y*w+x; break }
+                    }
+                    if seed != nil { break }
                 }
                 if seed != nil { break }
             }
-            if seed != nil { break }
-        }
-        guard let seed else { return nil }
-        var inside = [UInt8](repeating: 0, count: w*h)
-        var queue = [seed], cursor = 0
-        inside[seed] = 255
-        var touchesEdge = false
-        while cursor < queue.count {
-            let index = queue[cursor]; cursor += 1
-            let x = index%w, y = index/w
-            if x == 0 || y == 0 || x == w-1 || y == h-1 { touchesEdge = true }
-            for next in [x > 0 ? index-1 : -1, x+1 < w ? index+1 : -1,
-                         y > 0 ? index-w : -1, y+1 < h ? index+w : -1] where next >= 0 {
-                if inside[next] == 0 && bytes[next*4+3] < 128 {
-                    inside[next] = 255; queue.append(next)
-                }
-            }
+            guard let seed else { return nil }
+            let region = component(seed)
+            guard !region.touchesEdge else { return nil }
+            queue = region.pixels
         }
         let expected = opening.width*CGFloat(w)*opening.height*CGFloat(h)
-        guard !touchesEdge, CGFloat(queue.count) > expected*0.40 else { return nil }
+        guard CGFloat(queue.count) > expected*(fullCanvas ? 0.10 : 0.40) else { return nil }
+        var inside = [UInt8](repeating: 0, count: w*h)
+        for index in queue { inside[index] = 255 }
         // 向不透明框边下方压入两个像素，避免抗锯齿和缩略图采样在接缝处露底。
         var maskBytes = [UInt8](repeating: 0, count: w*h*4)
         for index in queue {

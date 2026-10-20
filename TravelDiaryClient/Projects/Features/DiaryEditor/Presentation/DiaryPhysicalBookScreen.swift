@@ -148,6 +148,7 @@ struct DiaryPhysicalBookScreen: View {
                 Button("确定") { errorMessage = nil }
             } message: { Text(errorMessage ?? "") }
             .task { await refreshAfterEditing() }
+            .task(id: "\(book.catalogRevision)-\(spread)-\(opened)") { await preloadNeighboringSpreads() }
             .background {
                 (isImmersive ? Color.black : Color(uiColor: .systemGroupedBackground))
                     .ignoresSafeArea()
@@ -291,6 +292,27 @@ struct DiaryPhysicalBookScreen: View {
                 editor = DiaryEditorSession(document: loaded.document, images: loaded.images, store: store)
             } catch { errorMessage = error.localizedDescription }
         }
+    }
+
+    private func preloadNeighboringSpreads() async {
+        guard opened else { return }
+        // 当前跨页先完成，避免预取抢在可见页面之前排入素材读取队列。
+        let pages = innerPages
+        let current = [spread * 2 - 1, spread * 2]
+        let neighbors = [spread * 2 + 1, spread * 2 + 2, spread * 2 - 3, spread * 2 - 2]
+        do {
+            for index in current where pages.indices.contains(index) {
+                try Task.checkCancellation()
+                _ = try? await DiaryPreviewService.image(page: pages[index], store: store, large: true)
+            }
+            // 快速连翻时不立即预取；已开始的共享请求仍可被后续页面复用。
+            try await Task.sleep(for: .milliseconds(200))
+            for index in neighbors where pages.indices.contains(index) {
+                try Task.checkCancellation()
+                _ = try? await DiaryPreviewService.image(page: pages[index], store: store, large: true)
+            }
+        } catch is CancellationError { }
+        catch { /* 预取失败由实际打开页面时的重试入口处理。 */ }
     }
 
     private func refreshAfterEditing() async {

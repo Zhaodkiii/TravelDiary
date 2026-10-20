@@ -95,7 +95,7 @@ struct DiaryPresetBookReader<Detail: View>: View {
                 }
                 .frame(height: max(200, min(available.size.width * 0.78, available.size.height - 380)))
                 .clipped()
-                addCurrentPageMenu
+                addCurrentPageButton
                     .frame(minHeight: 44)
                 if supportsCategoryControls && opened { categoryControls }
                 HStack {
@@ -210,15 +210,11 @@ struct DiaryPresetBookReader<Detail: View>: View {
         let index = spread * 2
         return opened && content.indices.contains(index) ? content[index] : nil
     }
-    private var addCurrentPageMenu: some View {
-        Menu {
-            Button("左页") { if let leftPage { onAdd([leftPage.id], false) } }
-                .disabled(leftPage == nil)
-            Button("右页") { if let rightPage { onAdd([rightPage.id], false) } }
-                .disabled(rightPage == nil)
-            Button("双页") {
-                if let leftPage, let rightPage { onAdd([leftPage.id, rightPage.id], false) }
-            }.disabled(leftPage == nil || rightPage == nil)
+    private var addCurrentPageButton: some View {
+        Button {
+            let pageIDs = [leftPage, rightPage].compactMap { $0?.id }
+            guard !pageIDs.isEmpty else { return }
+            onAdd(pageIDs, false)
         } label: {
             Label("添加当前页", systemImage: "plus")
                 .font(.subheadline.weight(.medium)).padding(.horizontal, 12)

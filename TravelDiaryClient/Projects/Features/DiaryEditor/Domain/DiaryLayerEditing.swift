@@ -82,12 +82,14 @@ extension DiaryEditorSession {
 
 /// Stable tool ordering shared by the toolbar and capability tests.
 nonisolated enum DiaryContextAction: String, Identifiable {
+    case addPhotoToFrame
     case transform, background, layers, replacePhoto, crop, frame, opacity, arrange
     case editText, font, fontSize, textColor, typography, replaceMaterial, flip
     case replaceBackground, placement, lock, unlock, frameColor, frameWidth, editContent
     var id: Self { self }
     var title: String {
         switch self {
+        case .addPhotoToFrame: "添加照片"
         case .transform: "自由变形"
         case .background: "背景"
         case .layers: "图层"
@@ -113,6 +115,7 @@ nonisolated enum DiaryContextAction: String, Identifiable {
     }
     var symbol: String {
         switch self {
+        case .addPhotoToFrame: "photo.badge.plus"
         case .transform: "viewfinder"
         case .background, .replaceBackground: "photo.fill"
         case .layers, .arrange: "square.3.layers.3d"
@@ -138,6 +141,10 @@ extension DiaryEditorSession {
     var contextActions: [DiaryContextAction] {
         guard let selected else { return [.background, .layers] }
         guard !selected.locked else { return [.unlock, .layers] }
+        if selectedEmptyPhotoFrameTarget != nil {
+            let actions: [DiaryContextAction] = [.addPhotoToFrame, .flip, .opacity, .arrange]
+            return canTransformSelection ? actions + [.transform] : actions
+        }
         let actions: [DiaryContextAction]
         switch selectedEditingKind {
         case .photo: actions = [.replacePhoto, .crop, .frame, .opacity, .arrange]

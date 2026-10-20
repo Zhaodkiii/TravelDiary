@@ -16,6 +16,7 @@ struct DiaryContextToolbar: View {
     @State private var textPanel: Panel?
     @State private var target: DiaryLayer?
     @State private var cropTarget: DiaryLayer?
+    @State private var emptyFrameTarget: DiaryEmptyPhotoFrameTarget?
     @State private var replacementID: UUID?
     @State private var photoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
@@ -79,29 +80,37 @@ struct DiaryContextToolbar: View {
         .fullScreenCover(item: $cropTarget) { layer in DiaryCropSheet(session: session, layer: layer) }
         .photosPicker(isPresented: Binding(get: { panel != .photos && showPhotoPicker }, set: { showPhotoPicker = $0 }), selection: $photoItem, matching: .images)
         .onChange(of: photoItem) { _, item in
-            guard let item, let id = replacementID else { return }
+            guard let item, replacementID != nil || emptyFrameTarget != nil else { return }
+            let frameTarget = emptyFrameTarget, id = replacementID
             importing = true
             Task { @MainActor in
-                defer { photoItem = nil; importing = false }
+                defer { photoItem = nil; importing = false; emptyFrameTarget = nil; replacementID = nil }
                 do {
                     guard let data = try await item.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage }
-                    if !(await session.importPhoto(data, replacing: id)), session.errorMessage == nil {
+                    if let frameTarget {
+                        _ = await session.addPhotoToEmptyFrame(data, target: frameTarget)
+                    } else if let id, !(await session.importPhoto(data, replacing: id)), session.errorMessage == nil {
                         session.errorMessage = "照片已变化，请重新选择。"
                     }
                 } catch { session.errorMessage = error.localizedDescription }
             }
         }
-        .overlay { if importing { ProgressView("正在替换照片…").padding().background(.regularMaterial, in: Capsule()) } }
+        .overlay { if importing { ProgressView(emptyFrameTarget == nil ? "正在替换照片…" : "正在添加照片…").padding().background(.regularMaterial, in: Capsule()) } }
     }
 
     private func perform(_ action: DiaryContextAction) {
         session.finishInteraction()
         target = session.selectedEditingLayer
         switch action {
+        case .addPhotoToFrame:
+            emptyFrameTarget = session.selectedEmptyPhotoFrameTarget
+            replacementID = nil
+            if emptyFrameTarget != nil { showPhotoPicker = true }
         case .transform: onTransform()
         case .background: onBackground()
         case .layers: onLayers()
         case .replacePhoto:
+            emptyFrameTarget = nil
             let photos = session.selectedPhotos
             if photos.count == 1 { replacementID = photos[0].id; showPhotoPicker = true }
             else if !photos.isEmpty { panel = .photos }

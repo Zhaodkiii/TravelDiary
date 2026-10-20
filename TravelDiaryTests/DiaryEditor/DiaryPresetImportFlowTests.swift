@@ -4,6 +4,37 @@ import UIKit
 
 @MainActor
 struct DiaryPresetImportFlowTests {
+    @Test func previewRequestsShareImageAndCancelledWaiterDoesNotInvalidateCache() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let package = try fixture(in: base)
+        let book = try await DiaryDocumentStore(ownerID: "preview-sharing", baseDirectory: base)
+            .importPreset(package, pageIDs: ["page-1"], title: "预览", operationID: UUID())
+        let page = try #require(book.pages.first)
+        let store = DiaryDocumentStore(ownerID: "preview-sharing", baseDirectory: base, bookID: book.id)
+        let first = Task { try await DiaryPreviewService.image(page: page, store: store, large: true) }
+        let second = Task { try await DiaryPreviewService.image(page: page, store: store, large: true) }
+        let firstImage = try await first.value
+        let secondImage = try await second.value
+        #expect(firstImage === secondImage)
+
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await DiaryPreviewService.image(page: page, store: store, large: true)
+        }
+        await #expect(throws: CancellationError.self) { try await cancelled.value }
+        let cached = try await DiaryPreviewService.image(page: page, store: store, large: true)
+        #expect(cached === firstImage)
+        // 后台持久化最终完成；读取结果不需要等待它。
+        var persisted: Data?
+        for _ in 0..<100 {
+            persisted = try await store.cachedPreview(page, large: true)
+            if persisted != nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(persisted.flatMap { UIImage(data: $0) } != nil)
+    }
+
     @Test func categoryPreviewReusesPreparedPagesAcrossScrollingAndSwitchChanges() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: base) }

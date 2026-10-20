@@ -449,6 +449,9 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     func commitPhotoCrop(layerID: UUID, image: UIImage, parameters: ImageCropParameters) async -> Bool {
         guard !busy, let layer = editableLayer(layerID),
               let sourceID = layer.assetID, parameters.isValid else { return false }
+        let hasLinkedFrame = document.objects.values.contains { content in
+            content.layers.contains { $0.isPhotoFrame && $0.frameTargetID == layerID }
+        }
         busy = true
         defer { busy = false }
         do {
@@ -462,8 +465,8 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                 document.assets[asset.id] = asset
                 document.update(layerID) {
                     $0.assetID = asset.id; $0.photoCrop = state; $0.crop = DiaryCrop()
-                    if $0.photoSlot != nil {
-                        $0.photoFill = true
+                    if $0.photoSlot != nil || hasLinkedFrame {
+                        $0.photoFill = $0.photoSlot != nil ? true : nil
                         return
                     }
                     $0.photoFill = nil
@@ -998,5 +1001,72 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             let exportImages = try await store.exportImages(for: state.document)
             return try DiaryPageRenderer.export(state.document, images: exportImages)
         } catch { errorMessage = error.localizedDescription; return nil }
+    }
+}
+
+
+extension DiaryEditorSession {
+    /// 固定选图前的目标，所有识别和资源导入成功后以一次撤销命令提交。
+    func addPhotoToEmptyFrame(_ data: Data, target: DiaryEmptyPhotoFrameTarget) async -> Bool {
+        guard !busy, emptyPhotoFrameTarget(for: target.selectionID) == target,
+              let original = document.layer(target.frameID), let frameAssetID = original.assetID,
+              let frameAsset = document.assets[frameAssetID] else {
+            errorMessage = "相框已变化或已有照片，请重新选择。"; return false
+        }
+        finishInteraction()
+        let expected = document
+        busy = true
+        defer { busy = false }
+        do {
+            let frameImage = try await store.loadOriginalImage(frameAsset, documentID: document.id)
+            let opening = original.frameOpening ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+            guard DiaryPhotoFrameAperture.detect(frameImage, opening: opening) != nil else {
+                errorMessage = "未能识别这个相框的透明内孔，请选择其他相框。"; return false
+            }
+            let (asset, image) = try await store.importImage(data, documentID: document.id)
+            guard document == expected, emptyPhotoFrameTarget(for: target.selectionID) == target else {
+                errorMessage = "相框已变化，请重新添加照片。"; return false
+            }
+            var updated = document
+            updated.assets[asset.id] = asset
+            var photo = DiaryLayer(name: "照片", kind: .photo, transform: original.transform,
+                size: original.size, semanticKind: .photo, subcategory: "slot", renderType: "image", assetID: asset.id)
+            photo.photoFrameIsManual = true
+            var frame = original
+            frame.kind = .photo; frame.semanticKind = .photo; frame.subcategory = "frame"; frame.renderType = "image"
+            frame.frameTargetID = photo.id; frame.frameOpening = opening
+            frame.photoFrameIsManual = true
+            var selection = selectedID
+            if target.ownerID == document.rootContentID && target.selectionID == target.frameID {
+                // 独立相框也包装为一个智能对象，外部矩阵原样保留。
+                photo.transform = DiaryTransform(position: .zero, pivot: .zero)
+                frame.id = UUID(); frame.transform = photo.transform
+                frame.visible = true; frame.locked = false; frame.opacity = nil
+                let object = DiaryObjectContent(role: .photo, primaryLayerID: photo.id,
+                    referenceSize: original.size, layers: [photo, frame])
+                updated.objects[object.id] = object
+                var wrapper = original
+                wrapper.kind = .object; wrapper.assetID = nil; wrapper.contentID = object.id
+                wrapper.semanticKind = .photo; wrapper.subcategory = "slot"; wrapper.renderType = "group"
+                wrapper.frameTargetID = nil; wrapper.frameOpening = nil
+                updated.update(original.id) { $0 = wrapper }
+            } else {
+                guard var owner = updated.objects[target.ownerID],
+                      let index = owner.layers.firstIndex(where: { $0.id == original.id }) else { throw DiaryEditorError.invalidDocument }
+                owner.layers[index] = frame
+                owner.layers.insert(photo, at: index)
+                if owner.primaryLayerID == original.id {
+                    owner.role = .photo; owner.primaryLayerID = photo.id
+                }
+                updated.objects[owner.id] = owner
+                if target.selectionID == target.frameID && owner.id == contentID { selection = photo.id }
+            }
+            _ = try DiaryDocumentStore.validate(updated)
+            edit {
+                document = updated; images[asset.id] = image; images[frameAssetID] = frameImage
+                selectedID = selection
+            }
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
     }
 }
