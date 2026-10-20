@@ -19,6 +19,7 @@ struct DiaryPhysicalBookScreen: View {
     @State private var turningCover = false
     @State private var editor: DiaryEditorSession?
     @State private var loadingEditor = false
+    @State private var editingReaderPhotos = false
     @State private var errorMessage: String?
     @State private var pickingPhoto = false
     @State private var photo: PhotosPickerItem?
@@ -117,7 +118,8 @@ struct DiaryPhysicalBookScreen: View {
             .toolbar(isImmersive ? .hidden : .automatic, for: .tabBar)
             .statusBarHidden(isImmersive)
             .persistentSystemOverlays(isImmersive ? .hidden : .automatic)
-            .disabled(loadingEditor)
+            .disabled(loadingEditor || editingReaderPhotos)
+            .overlay { if editingReaderPhotos { ProgressView("正在处理照片…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
             .overlay { if loadingEditor { ProgressView("正在打开页面…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
             .photosPicker(isPresented: $pickingPhoto, selection: $photo, matching: .images)
             .onChange(of: photo) { _, item in
@@ -189,14 +191,39 @@ struct DiaryPhysicalBookScreen: View {
                         }
                     }
             } else {
-                DiaryBookZoomViewport(contentSize: geometry.size,
+                let stageViewport = CGSize(width: geometry.size.width, height: max(1, geometry.size.height - 80))
+                DiaryBookZoomViewport(contentSize: stageViewport,
                                       resetToken: opened ? spread + 1 : 0) {
-                    bookStage(viewport: geometry.size)
+                    bookStage(viewport: stageViewport)
                         .simultaneousGesture(TapGesture().onEnded { if !opened { openBook() } })
                 }
+                .frame(width: stageViewport.width, height: stageViewport.height)
                 .allowsHitTesting(!turningCover)
+                .overlay(alignment: .top) {
+                    if opened && !turningCover {
+                        let size = DiaryBookStageLayout.openSize(viewport: stageViewport, paperRatio: paperRatio)
+                        HStack(alignment: .top, spacing: 16) {
+                            readerPhotos(at: spread * 2 - 1, title: "左页照片")
+                            readerPhotos(at: spread * 2, title: "右页照片")
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(width: size.width)
+                        .offset(y: (stageViewport.height + size.height) / 2 + 8)
+                    }
+                }
             }
         }.clipped()
+    }
+
+    @ViewBuilder private func readerPhotos(at index: Int, title: String) -> some View {
+        if innerPages.indices.contains(index) {
+            let page = innerPages[index]
+            DiaryReaderPhotoStrip(page: page, store: store, title: title, readerBusy: $editingReaderPhotos,
+                                  onSaved: { await refreshAfterEditing() })
+                .id(page.id)
+        } else {
+            Color.clear.frame(maxWidth: .infinity).frame(height: 68).allowsHitTesting(false)
+        }
     }
 
     private func bookStage(viewport: CGSize) -> some View {

@@ -20,7 +20,14 @@ struct DiaryBatchPhotoSheet: View {
     @State private var slots: [Slot] = []
     @State private var recommendedAdditionCount = 0
 
-    private var addsPhotos: Bool { creationFlow && slots.isEmpty }
+    /// Homepage creation and every preset import use the same photo preparation page.
+    private var preparesPresetPhotos: Bool { creationFlow || (preset != nil && onPrepared != nil) }
+    private var addsPhotos: Bool { preparesPresetPhotos && slots.isEmpty }
+    private var preparationActionTitle: String {
+        if creationFlow { return selection.isEmpty ? "跳过并创建" : "创建" }
+        if finishesImport { return selection.isEmpty ? "跳过并完成添加" : "完成添加" }
+        return selection.isEmpty ? "跳过，下一步" : "下一步"
+    }
     private var photoLimit: Int { addsPhotos ? recommendedAdditionCount : slots.count }
     @State private var selection: [PhotosPickerItem] = []
     @State private var thumbnails: [UIImage?] = []
@@ -41,7 +48,7 @@ struct DiaryBatchPhotoSheet: View {
 
     var body: some View {
         Group {
-            if creationFlow { creationContent }
+            if preparesPresetPhotos { creationContent }
             else if embedded { content } else { NavigationStack { content } }
         }
     }
@@ -144,13 +151,13 @@ struct DiaryBatchPhotoSheet: View {
         .padding(.horizontal, 16).padding(.vertical, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(DiaryLibraryStyle.background)
-        .navigationTitle("第 3 步 · 添加照片")
+        .navigationTitle(creationFlow ? "第 3 步 · 添加照片" : "第 2 步 · 选择照片")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(busy)
         .safeAreaInset(edge: .bottom) {
             DiaryImportFloatingActions {
                 Button { Task { await replace() } } label: {
-                    Text(selection.isEmpty ? "跳过并创建" : "创建").frame(maxWidth: .infinity)
+                    Text(preparationActionTitle).frame(maxWidth: .infinity)
                 }.disabled(!ready)
             }
         }
@@ -308,7 +315,7 @@ struct DiaryBatchPhotoSheet: View {
                 guard try await store.loadBook().catalogRevision == book.catalogRevision else { throw DiaryEditorError.pageConflict }
             }
             documents = prepared; slots = targets
-            if creationFlow && targets.isEmpty {
+            if preparesPresetPhotos && targets.isEmpty {
                 recommendedAdditionCount = prepared.reduce(0) { count, document in
                     count + DiaryEditorSession(document: document, images: [:], store: store).recommendedPhotoCount
                 }
@@ -337,7 +344,7 @@ struct DiaryBatchPhotoSheet: View {
 
     @MainActor private func replace() async {
         guard !busy, ready else { return }
-        if creationFlow {
+        if preparesPresetPhotos {
             guard onPrepared != nil, preparationDirectory != nil, selection.count <= photoLimit else { return }
         } else {
             guard selection.count == slots.count, !slots.isEmpty else { return }

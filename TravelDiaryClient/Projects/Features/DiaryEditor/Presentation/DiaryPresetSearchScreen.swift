@@ -105,7 +105,7 @@ struct DiaryPresetSearchScreen: View {
                 onImported: { importedBook = $0 }, unitID: entry.unit_id)
         }
         .navigationDestination(isPresented: Binding(get: { importedBook != nil }, set: { if !$0 { importedBook = nil } })) {
-            if let importedBook { DiaryBookScreen(ownerID: ownerID, book: importedBook).toolbar(.hidden, for: .tabBar) }
+            if let importedBook { DiaryBookDestination(ownerID: ownerID, bookID: importedBook.id).toolbar(.hidden, for: .tabBar) }
         }
         .task(id: queryKey) { await loadFirst() }
         .task(id: ownerID) {

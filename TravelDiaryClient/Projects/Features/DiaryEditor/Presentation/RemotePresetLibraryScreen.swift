@@ -374,7 +374,7 @@ struct PresetDownloadCenter: View {
         }.navigationTitle("下载管理")
         .task { manager.activate(owner: ownerID) }
         .navigationDestination(isPresented: Binding(get: { opened != nil }, set: { if !$0 { opened = nil } })) {
-            if let opened { DiaryBookScreen(ownerID: ownerID, book: opened) }
+            if let opened { DiaryBookDestination(ownerID: ownerID, bookID: opened.id) }
         }
     }
     private func clearDownloads(_ ids: Set<UUID>) {

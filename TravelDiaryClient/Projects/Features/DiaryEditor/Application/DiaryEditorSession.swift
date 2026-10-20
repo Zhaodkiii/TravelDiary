@@ -948,6 +948,16 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             document.objects[photo.ownerID]?.layers.removeAll { $0.id == id || $0.frameTargetID == id }
             if document.objects[photo.ownerID]?.primaryLayerID == id {
                 document.objects[photo.ownerID]?.primaryLayerID = nil
+                document.objects[photo.ownerID]?.role = .canvas
+            }
+            if photo.ownerID != contentID,
+               let owner = document.objects[photo.ownerID], owner.layers.isEmpty,
+               owner.drawing.isEmpty, owner.background == nil {
+                // Drop the empty photo wrapper, while retaining objects that contain user decoration/ink.
+                for parentID in Array(document.objects.keys) {
+                    document.objects[parentID]?.layers.removeAll { $0.contentID == photo.ownerID }
+                }
+                document.objects.removeValue(forKey: photo.ownerID)
             }
             if photo.ownerID != contentID { document.objects[photo.ownerID]?.revision += 1 }
             if selectedID == id { selectedID = nil }

@@ -109,7 +109,7 @@ struct DiaryPresetLibraryScreen: View {
             }
         }
         .navigationDestination(isPresented: Binding(get: { recovered != nil }, set: { if !$0 { recovered = nil } })) {
-            if let recovered { DiaryBookScreen(ownerID: ownerID, book: recovered).toolbar(.hidden, for: .tabBar) }
+            if let recovered { DiaryBookDestination(ownerID: ownerID, bookID: recovered.id).toolbar(.hidden, for: .tabBar) }
         }
         .task(id: reload) {
             downloads.activate(owner: ownerID)

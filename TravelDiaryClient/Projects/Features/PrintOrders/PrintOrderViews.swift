@@ -655,8 +655,18 @@ struct PrintOrderDetailScreen: View {
                     }
                     if order.allowed_actions.contains("pay") { Button("微信支付 · \(PrintText.money(order.total_fen))") { Task { await pay() } } }
                     Button("刷新订单与付款结果") { Task { await load(payment: order.payment_state == "unpaid" || order.payment_state == "refund_pending") } }
-                    if order.allowed_actions.contains("cancel") { Button("取消订单", role: .destructive) { confirmingCancel = true } }
-                    if order.allowed_actions.contains("receive") { Button("确认收货") { confirmingReceive = true } }
+                    if order.allowed_actions.contains("cancel") {
+                        Button("取消订单", role: .destructive) { confirmingCancel = true }
+                            .confirmationDialog("取消此印制订单？已付款订单将申请原路退款。", isPresented: $confirmingCancel, titleVisibility: .visible) {
+                                Button("确认取消", role: .destructive) { Task { await act("cancel") } }
+                            }
+                    }
+                    if order.allowed_actions.contains("receive") {
+                        Button("确认收货") { confirmingReceive = true }
+                            .confirmationDialog("确认已收到并检查此订单的全部成品？", isPresented: $confirmingReceive, titleVisibility: .visible) {
+                                Button("确认收货") { Task { await act("receive") } }
+                            }
+                    }
                 }.disabled(busy)
                 if order.allowed_actions.contains("after_sale") {
                     Section("售后申请") { TextField("请描述遇到的问题", text: $message, axis: .vertical); Button("提交售后申请") { Task { await act("after_sale") } }.disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy) }
@@ -679,12 +689,6 @@ struct PrintOrderDetailScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .printPaymentReturned)) { _ in Task { await load(payment: true) } }
         .sheet(item: $revisionContext, onDismiss: { Task { await load() } }) { context in
             PrintCheckoutScreen(book: context.book, store: context.store, revisionOrder: context.order)
-        }
-        .confirmationDialog("确认已收到并检查此订单的全部成品？", isPresented: $confirmingReceive, titleVisibility: .visible) {
-            Button("确认收货") { Task { await act("receive") } }
-        }
-        .confirmationDialog("取消此印制订单？已付款订单将申请原路退款。", isPresented: $confirmingCancel, titleVisibility: .visible) {
-            Button("确认取消", role: .destructive) { Task { await act("cancel") } }
         }
     }
     private func openRevision(_ order: PrintOrder) async {
