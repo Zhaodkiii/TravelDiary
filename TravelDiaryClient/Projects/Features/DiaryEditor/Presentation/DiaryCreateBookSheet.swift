@@ -11,6 +11,10 @@ struct DiaryCreateBookSheet: View {
     @State private var fullHeight = false
     @State private var items: [PresetLibraryItem] = []
     @State private var selectedID: String?
+    @State private var compactPosition: Int? = 0
+    @State private var expandedCatalog = false
+    @State private var search = ""
+    @State private var series: [RemotePresetCatalog.Series] = []
     @State private var loaded = false
     @State private var error: String?
     private let downloads = PresetDownloadManager.shared
@@ -28,8 +32,10 @@ struct DiaryCreateBookSheet: View {
                         Text(error ?? "暂无可用预设").font(.footnote).foregroundStyle(.secondary)
                         Button("重新加载") { Task { await loadCatalog() } }
                         Spacer()
+                    } else if expandedCatalog {
+                        expandedPresets
                     } else {
-                        DiaryPresetTemplateCarousel(count: items.count) { index in
+                        DiaryPresetTemplateCarousel(count: items.count, position: $compactPosition) { index in
                             let item = items[index]
                             Button { selectedID = item.id } label: {
                                 DiaryPresetTemplateCard(item: item, ownerID: ownerID,
@@ -50,7 +56,11 @@ struct DiaryCreateBookSheet: View {
             .background {
                 DiaryNavigationAppearanceObserver {
                     // 原生 pop（包含右滑）完成后，才恢复选择页高度。
-                    withAnimation { fullHeight = false; detent = .fraction(0.48) }
+                    withAnimation {
+                        expandedCatalog = false
+                        fullHeight = false
+                        detent = .fraction(0.48)
+                    }
                 }
             }
             .navigationTitle("新建手帐本")
@@ -61,10 +71,12 @@ struct DiaryCreateBookSheet: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                DiaryImportFloatingActions {
-                    NavigationLink(value: selectedID.map { Route.preview($0) }) {
-                        Text("下一步").frame(maxWidth: .infinity)
-                    }.disabled(selectedID == nil)
+                if detent != .large {
+                    DiaryImportFloatingActions {
+                        NavigationLink(value: selectedID.map { Route.preview($0) }) {
+                            Text("下一步").frame(maxWidth: .infinity)
+                        }.disabled(selectedID == nil)
+                    }
                 }
             }
             .navigationDestination(for: Route.self) { route in
@@ -85,7 +97,66 @@ struct DiaryCreateBookSheet: View {
         .tint(DiaryLibraryStyle.accent)
         .presentationDetents(fullHeight ? [.large] : [.fraction(0.48), .large], selection: $detent)
         .presentationDragIndicator(.visible)
+        .task(id: detent == .large && path.isEmpty) {
+            guard detent == .large, path.isEmpty else {
+                if detent != .large { expandedCatalog = false }
+                return
+            }
+            do {
+                try await Task.sleep(for: .seconds(1))
+                try Task.checkCancellation()
+                withAnimation(.easeInOut(duration: 0.2)) { expandedCatalog = true }
+            } catch is CancellationError { }
+            catch { }
+        }
         .task { await loadCatalog() }
+    }
+
+    private var expandedPresets: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 24) {
+                DiaryLibrarySearch(text: $search, prompt: "搜索模板名称")
+                if !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let matches = items.filter {
+                        $0.matches(search: search, series: "", styles: [], usages: [])
+                    }
+                    if matches.isEmpty {
+                        ContentUnavailableView("暂无匹配的模板", systemImage: "books.vertical",
+                            description: Text("试试其他关键词。"))
+                    }
+                    ForEach(matches) { item in
+                        expandedTemplateLink(item, expanded: true)
+                    }
+                } else {
+                    ForEach(PresetLibrarySection.group(items, series: series)) { section in
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text(section.title).font(.title3.weight(.semibold))
+                                Spacer()
+                                Text("\(section.items.count) 本").font(.caption)
+                                    .foregroundStyle(DiaryLibraryStyle.secondary)
+                            }.frame(minHeight: 44)
+                            DiaryPresetTemplateCarousel(count: section.items.count) { index in
+                                expandedTemplateLink(section.items[index])
+                            }.id(section.items.map(\.id))
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: 1200)
+            .padding(.vertical, 20)
+            .frame(maxWidth: .infinity)
+        }
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    private func expandedTemplateLink(_ item: PresetLibraryItem, expanded: Bool = false) -> some View {
+        NavigationLink(value: Route.preview(item.id)) {
+            DiaryPresetTemplateCard(item: item, ownerID: ownerID,
+                downloadedCount: item.remote.map {
+                    availability.downloadedPageIDs(bookID: $0.id, version: $0.version).count
+                } ?? 0, expanded: expanded)
+        }.buttonStyle(.plain)
     }
 
     private func loadCatalog() async {
@@ -102,6 +173,7 @@ struct DiaryCreateBookSheet: View {
     }
 
     private func update(_ catalog: RemotePresetCatalog) {
+        series = catalog.series
         items = PresetLibraryItem.merge(local: catalog.books.compactMap { downloads.completeCachedPackage(for: $0) }, remote: catalog.books)
         if !items.contains(where: { $0.id == selectedID }) { selectedID = nil }
     }

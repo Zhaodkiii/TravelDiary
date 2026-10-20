@@ -95,6 +95,11 @@ struct SupportMainCoordinatorView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: SupportRootTab = .diaryEditor
     @State private var path = NavigationPath()
+    @State private var templateSearch = ""
+    @State private var templatePath = NavigationPath()
+    @State private var customizationPath = NavigationPath()
+    @State private var settingsPath = NavigationPath()
+    @State private var searchPath = NavigationPath()
 
     init(session: UserSession, dependencies: AppCoordinatorDependencies) {
         self.session = session
@@ -105,86 +110,47 @@ struct SupportMainCoordinatorView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            TabView(selection: $selectedTab) {
-//                HomeDashboardView(
-//                    session: session,
-//                    authRepository: dependencies.authRepository
-//                )
-//                .tabItem {
-//                    Label(L10n.tr("home.title", fallback: "首页"), systemImage: "house")
-//                }
-//                .tag(SupportRootTab.healthHome)
-//
-//                PhotoEditorHomeView()
-//                    .tabItem {
-//                        Label("照片编辑", systemImage: "photo.badge.pencil")
-//                    }
-//                    .tag(SupportRootTab.photoEditor)
-
-                DiaryEditorHomeView(ownerID: String(session.accountID), path: $path, creating: $showsCreateDiaryBookForm, onBrowseTemplates: { selectedTab = .diaryPresets })
-                    .id(session.accountID)
-                    .tabItem {
-                        Label("手帐", systemImage: "book.pages")
-                    }
-                    .tag(SupportRootTab.diaryEditor)
-
-                DiaryPresetLibraryScreen(ownerID: String(session.accountID))
-                    .id(session.accountID)
-                .tabItem {
-                    Label("模板", systemImage: "books.vertical")
+        TabView(selection: $selectedTab) {
+            Tab("手帐", systemImage: "book.pages", value: SupportRootTab.diaryEditor) {
+                rootNavigation(path: $path) {
+                    DiaryEditorHomeView(ownerID: String(session.accountID), path: $path, creating: $showsCreateDiaryBookForm,
+                        onBrowseTemplates: { selectedTab = .diaryPresets })
+                        .id(session.accountID)
                 }
-                .tag(SupportRootTab.diaryPresets)
-
-//                SecondCameraHomeView()
-//                    .tabItem {
-//                        Label(SecondCameraEditorL10n.Home.tabTitle, systemImage: "camera.fill")
-//                    }
-//                    .tag(SupportRootTab.secondCamera)
-
-                CustomizationHomeView(owner: String(session.accountID))
-                    .id(session.accountID)
-                    .tabItem { Label("定制", systemImage: "sparkles") }
-                    .badge(customizations.unread)
-                    .tag(SupportRootTab.customization)
-
-                SettingsView(
-                    accountManagementViewModel: accountViewModel,
-                    aiSettingsViewModel: aiSettingsViewModel,
-                    session: session,
-                    onAccountEntryTap: handleAccountEntryTap
-                )
-                .tabItem {
-                    Label(L10n.tr("tab.settings", fallback: "设置"), systemImage: "gearshape.fill")
+            }
+            Tab("模板", systemImage: "books.vertical", value: SupportRootTab.diaryPresets) {
+                rootNavigation(path: $templatePath) {
+                    DiaryPresetLibraryScreen(ownerID: String(session.accountID), showsInlineSearch: false)
+                        .id(session.accountID)
                 }
-                .tag(SupportRootTab.settings)
             }
-            .navigationBarTitleDisplayMode(.inline)
-            // Keep the root toolbar installed while a destination is pushed. The
-            // navigation stack scopes each screen's toolbar; removing these items
-            // during a push can leave the root navigation bar empty after a pop.
-            .toolbar { tabToolbar }
-            // 路由在 TabView 外注册，所有标签中的链接都能由根导航栈解析。
-            .navigationDestination(for: DiaryBookRoute.self) { route in
-                DiaryBookDestination(ownerID: String(session.accountID), bookID: route.bookID, managePages: route.managePages)
-                    .id(route.bookID)
+            Tab("定制", systemImage: "sparkles", value: SupportRootTab.customization) {
+                rootNavigation(path: $customizationPath) {
+                    CustomizationHomeView(owner: String(session.accountID)).id(session.accountID)
+                }
+            }.badge(customizations.unread)
+            Tab(L10n.tr("tab.settings", fallback: "设置"), systemImage: "gearshape", value: SupportRootTab.settings) {
+                rootNavigation(path: $settingsPath) {
+                    SettingsView(accountManagementViewModel: accountViewModel,
+                        aiSettingsViewModel: aiSettingsViewModel, session: session,
+                        onAccountEntryTap: handleAccountEntryTap)
+                }
             }
-            .navigationDestination(for: CustomizationRoute.self) { route in
-                CustomizationDetailView(id: route.id, owner: String(session.accountID))
-                    .id("\(session.accountID):\(route.id)")
-                    .id("\(session.accountID)-\(route.id)")
-            }
-            .navigationDestination(for: AccountRoute.self) { _ in
-                AccountManagementView(viewModel: accountViewModel, session: session)
+            Tab(value: SupportRootTab.templateSearch, role: .search) {
+                rootNavigation(path: $searchPath) {
+                    DiaryPresetSearchScreen(ownerID: String(session.accountID), searchText: $templateSearch)
+                        .id(session.accountID)
+                }
             }
         }
+        .tabViewSearchActivation(.searchTabSelection)
         .task(id: customizations.routeID) {
             guard let id = customizations.routeID else { return }
             do {
                 _ = try await customizations.detail(id, owner: String(session.accountID))
                 customizations.routeError = nil
                 selectedTab = .customization
-                path = NavigationPath(); path.append(CustomizationRoute(id: id))
+                customizationPath = NavigationPath(); customizationPath.append(CustomizationRoute(id: id))
             } catch { selectedTab = .customization; customizations.routeError = "此内容在当前账号下不可用，或已被移除。" }
             customizations.routeID = nil; PushAdapter.shared.routeConsumed()
         }
@@ -201,12 +167,34 @@ struct SupportMainCoordinatorView: View {
         }
     }
 
+    /// 搜索由 TabView 管理；每个 Tab 持有自己的导航栈，系统才能展示底部原生搜索框。
+    private func rootNavigation<Content: View>(path: Binding<NavigationPath>, @ViewBuilder content: () -> Content) -> some View {
+        NavigationStack(path: path) {
+            content()
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { tabToolbar }
+                .navigationDestination(for: DiaryBookRoute.self) { route in
+                    DiaryBookDestination(ownerID: String(session.accountID), bookID: route.bookID, managePages: route.managePages)
+                        .id(route.bookID).toolbar(.hidden, for: .tabBar)
+                }
+                .navigationDestination(for: CustomizationRoute.self) { route in
+                    CustomizationDetailView(id: route.id, owner: String(session.accountID))
+                        .id("\(session.accountID):\(route.id)").toolbar(.hidden, for: .tabBar)
+                }
+                .navigationDestination(for: AccountRoute.self) { _ in
+                    AccountManagementView(viewModel: accountViewModel, session: session)
+                        .toolbar(.hidden, for: .tabBar)
+                }
+        }
+    }
+
     private var currentTabTitle: String {
         switch selectedTab {
         case .healthHome: return L10n.tr("home.title", fallback: "首页")
         case .photoEditor: return "照片编辑"
         case .diaryEditor: return "我的手帐"
         case .diaryPresets: return "旅行模板"
+        case .templateSearch: return "搜索模板"
         case .customization: return "专属定制"
         case .secondCamera: return ""
         case .settings: return L10n.text("settings.title", fallback: "设置")
@@ -214,7 +202,7 @@ struct SupportMainCoordinatorView: View {
     }
     @ToolbarContentBuilder
     private var tabToolbar: some ToolbarContent {
-        if selectedTab != .secondCamera {
+        if selectedTab != .secondCamera && selectedTab != .templateSearch {
             ToolbarItem(placement: .principal) { tabTitle(currentTabTitle) }
         }
         if selectedTab == .diaryEditor {
@@ -235,7 +223,7 @@ struct SupportMainCoordinatorView: View {
         if session.isDeviceAccount {
             showsDeviceAccountUpgradeSheet = true
         } else {
-            path.append(AccountRoute.management)
+            settingsPath.append(AccountRoute.management)
         }
     }
 }
@@ -245,6 +233,7 @@ private enum SupportRootTab: Hashable {
     case photoEditor
     case diaryEditor
     case diaryPresets
+    case templateSearch
     case customization
     case secondCamera
     case settings

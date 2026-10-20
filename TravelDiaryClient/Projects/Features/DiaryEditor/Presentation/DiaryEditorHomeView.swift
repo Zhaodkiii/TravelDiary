@@ -13,7 +13,6 @@ struct DiaryEditorHomeView: View {
     @State private var deletingBook: DiaryBook?
     @State private var renamingBook: DiaryBook?
     @State private var newTitle = ""
-    @State private var search = ""
     @State private var sort: DiaryShelfSort = .updated
     @State private var recent: DiaryBookAccessStore.Record?
     @State private var editor: DiaryEditorSession?
@@ -26,13 +25,12 @@ struct DiaryEditorHomeView: View {
     @State private var fallbackPage: UUID?
     private var access: DiaryBookAccessStore { DiaryBookAccessStore(ownerID: ownerID) }
     private var sortKey: String { "DiaryShelfSort." + Data(ownerID.utf8).base64EncodedString() }
-    private var results: [DiaryBook] { sort.apply(to: books, search: search) }
+    private var results: [DiaryBook] { sort.apply(to: books, search: "") }
     private var recentBook: DiaryBook? { books.first { $0.id == recent?.bookID } }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                if !books.isEmpty { DiaryLibrarySearch(text: $search, prompt: "搜索手帐名称") }
                 if let loadError {
                     DiaryLibraryNotice(message: loadError) { Task { await reload() } }
                 }
@@ -44,23 +42,16 @@ struct DiaryEditorHomeView: View {
                 if !loaded && books.isEmpty { ProgressView("正在整理书架…").frame(maxWidth: .infinity).padding(.vertical, 64) }
                 else if books.isEmpty && unreadable.isEmpty && loadError == nil { emptyShelf }
                 else {
-                    if search.isEmpty, let book = recentBook { continueCard(book) }
+                    if let book = recentBook { continueCard(book) }
                     shelfHeader
-                    if results.isEmpty {
-                        ContentUnavailableView {
-                            Label("没有找到这本手帐", systemImage: "magnifyingglass")
-                        } actions: { Button("清除搜索") { search = "" } }
-                    } else {
-                        LazyVGrid(columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 150), spacing: 16)], alignment: .leading, spacing: 28) {
-                            ForEach(results) { book in bookCard(book) }
-                        }
+                    LazyVGrid(columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 150), spacing: 16)], alignment: .leading, spacing: 28) {
+                        ForEach(results) { book in bookCard(book) }
                     }
                 }
             }.frame(maxWidth: 1200).padding(20).frame(maxWidth: .infinity)
         }
         .background(DiaryLibraryStyle.background).foregroundStyle(DiaryLibraryStyle.ink)
         .tint(DiaryLibraryStyle.accent)
-        .scrollDismissesKeyboard(.interactively)
         .refreshable { await reload() }
         .task {
             sort = DiaryShelfSort(rawValue: UserDefaults.standard.string(forKey: sortKey) ?? "") ?? .updated
@@ -143,7 +134,7 @@ struct DiaryEditorHomeView: View {
             VStack(alignment: .leading) { shelfTitle; sortMenu }
         }
     }
-    private var shelfTitle: some View { Text("\(search.isEmpty ? "全部手帐" : "搜索结果") · \(results.count) 本").font(.headline) }
+    private var shelfTitle: some View { Text("全部手帐 · \(results.count) 本").font(.headline) }
     private var sortMenu: some View {
         Menu {
             Picker("排序", selection: $sort) { ForEach(DiaryShelfSort.allCases) { Text($0.label).tag($0) } }

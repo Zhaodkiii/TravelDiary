@@ -8,6 +8,7 @@ struct DiaryPresetLibraryScreen: View {
     var targetAfterPageID: UUID? = nil
     var singlePageOnly = false
     var onPageAdded: ((DiaryBook) -> Void)? = nil
+    var showsInlineSearch = true
     var fixedSeriesID: String? = nil
     var initialCatalog: RemotePresetCatalog? = nil
     var catalogLoader: @MainActor () async throws -> RemotePresetCatalog = { try await PresetDownloadManager.shared.catalog() }
@@ -48,7 +49,9 @@ struct DiaryPresetLibraryScreen: View {
                 if singlePageOnly {
                     Text("为「\(targetBook?.title ?? "当前手帐")」挑选一页").font(.subheadline)
                 }
-                DiaryLibrarySearch(text: $search, prompt: fixedSeriesID == nil ? "搜索模板名称" : "搜索这个系列")
+                if showsInlineSearch {
+                    DiaryLibrarySearch(text: $search, prompt: fixedSeriesID == nil ? "搜索模板名称" : "搜索这个系列")
+                }
                 if let pending, !singlePageOnly {
                     DiaryLibraryNotice(message: "有未完成的模板导入", actionTitle: "继续导入") { resuming = pending }
                 }
@@ -66,7 +69,7 @@ struct DiaryPresetLibraryScreen: View {
                 } else if results.isEmpty {
                     ContentUnavailableView("暂无匹配的模板", systemImage: "books.vertical",
                         description: Text(hasFilters ? "试试其他关键词，或清空筛选条件。" : "这个系列还没有可用模板。"))
-                } else if fixedSeriesID != nil {
+                } else if fixedSeriesID != nil || hasFilters {
                     if !hasFilters {
                         Text("\(results.count) 本模板")
                             .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
@@ -120,7 +123,7 @@ struct DiaryPresetLibraryScreen: View {
             }
         }
         .navigationDestination(isPresented: Binding(get: { recovered != nil }, set: { if !$0 { recovered = nil } })) {
-            if let recovered { DiaryBookScreen(ownerID: ownerID, book: recovered) }
+            if let recovered { DiaryBookScreen(ownerID: ownerID, book: recovered).toolbar(.hidden, for: .tabBar) }
         }
         .task(id: reload) {
             downloads.activate(owner: ownerID)
@@ -136,7 +139,7 @@ struct DiaryPresetLibraryScreen: View {
     }
 
     private func templateLink(_ item: PresetLibraryItem, expanded: Bool = false) -> some View {
-        NavigationLink { destination(item) } label: {
+        NavigationLink { destination(item).toolbar(.hidden, for: .tabBar) } label: {
             DiaryPresetTemplateCard(item: item, ownerID: ownerID,
                 downloadedCount: item.remote.map { availability.downloadedPageIDs(bookID: $0.id, version: $0.version).count } ?? 0,
                 expanded: expanded, seriesTitle: remote?.series.first { $0.slug == item.series }?.title)
@@ -149,6 +152,7 @@ struct DiaryPresetLibraryScreen: View {
                 DiaryPresetLibraryScreen(ownerID: ownerID, targetBook: targetBook, targetAfterPageID: targetAfterPageID,
                     singlePageOnly: singlePageOnly, onPageAdded: onPageAdded, fixedSeriesID: section.id,
                     initialCatalog: remote, catalogLoader: catalogLoader)
+                    .toolbar(.hidden, for: .tabBar)
             } label: {
                 HStack(spacing: 7) {
                     Text(section.title).font(.title3.weight(.semibold))
@@ -304,7 +308,7 @@ struct DiaryPresetImage: View {
 }
 private struct PresetSelection: Identifiable, Hashable { let id = UUID(); let pageIDs: [String]; var wholeBook = false }
 /// Keep both the reader type and its sheet state alive while availability changes.
-private struct DiaryStablePresetDestination: View {
+struct DiaryStablePresetDestination: View {
     @StateObject private var presentation: PresetReaderPresentation
     let ownerID: String
     let seriesTitle: String
