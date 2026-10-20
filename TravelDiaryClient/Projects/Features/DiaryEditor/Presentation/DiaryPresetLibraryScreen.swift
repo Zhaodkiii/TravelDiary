@@ -576,7 +576,7 @@ struct DiaryPresetImportSheet: View {
     @State private var replacementFill: DiaryPhotoSlot.Fill = .cover
     @State private var excludedPageIDs: Set<String> = []
     @State private var previewPage: Int? = 0
-    @State private var hiddenCategories: Set<DiaryLayerSemanticKind> = []
+    @State private var categorySelection = DiaryPresetImportCategorySelection()
     @State private var temporaryFiles = DiaryPresetPhotoTemporaryFiles()
     private var preparationDirectory: URL { temporaryFiles.directory }
     @Environment(\.dismiss) private var dismiss
@@ -591,6 +591,7 @@ struct DiaryPresetImportSheet: View {
     @State private var cancellation = DiaryPresetCancellation()
 
     private var selectedPageIDs: [String] { pageIDs.filter { !excludedPageIDs.contains($0) } }
+    private var hiddenCategories: Set<DiaryLayerSemanticKind> { categorySelection.hiddenCategories }
     private var availablePackage: DiaryPresetPackage? { remoteBook == nil ? package : readyPackage }
     private var target: DiaryBook? { books.first { $0.id == targetID } }
     private var finishesAtPhotos: Bool { wholeBook || fixedTarget }
@@ -643,7 +644,7 @@ struct DiaryPresetImportSheet: View {
                     Text("第 \(creationFlow ? 2 : 1) 步 / \(creationFlow ? 3 : finishesAtPhotos ? 2 : 3) · 预览并选择页面")
                         .font(.subheadline).foregroundStyle(.secondary)
                     DiaryPresetImportPreview(package: availablePackage, pageIDs: pageIDs,
-                        excludedPageIDs: $excludedPageIDs, hiddenCategories: hiddenCategories,
+                        excludedPageIDs: $excludedPageIDs, hiddenCategories: categorySelection.previewHiddenCategories,
                         scrollPage: $previewPage, loadingPages: loadingPages, loadingSize: loadingPreviewSize)
                         .frame(height: max(280, min(560, geometry.size.height - 70)))
                     if selectedPageIDs.isEmpty {
@@ -667,7 +668,11 @@ struct DiaryPresetImportSheet: View {
                     }
                     Group {
                         if availablePackage != nil {
-                            DiaryPreviewContentPanel(hiddenCategories: $hiddenCategories, affectsImport: true)
+                            DiaryPreviewContentPanel(hiddenCategories: $categorySelection.hiddenCategories, affectsImport: true)
+                            if !categorySelection.hasSelection {
+                                Text("当前展示完整模板，请开启至少一类内容后继续。")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                         } else { downloadFeedback }
                     }
                 }
@@ -675,10 +680,13 @@ struct DiaryPresetImportSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 DiaryImportFloatingActions {
-                    Button { error = nil; advance(to: .photos) } label: {
+                    Button {
+                        guard categorySelection.hasSelection else { return }
+                        error = nil; advance(to: .photos)
+                    } label: {
                         Text("下一步").frame(maxWidth: .infinity)
                     }
-                    .disabled(!initialized || availablePackage == nil || selectedPageIDs.isEmpty || (wholeBook && !validName))
+                    .disabled(!initialized || availablePackage == nil || selectedPageIDs.isEmpty || !categorySelection.hasSelection || (wholeBook && !validName))
                 }
             }
             .background(.regularMaterial)
@@ -746,7 +754,7 @@ struct DiaryPresetImportSheet: View {
                 Button { Task { await runImport() } } label: {
                     Text("添加").frame(maxWidth: .infinity)
                 }
-                .disabled(busy || selectedPageIDs.isEmpty || (targetID == nil && !validName))
+                .disabled(busy || selectedPageIDs.isEmpty || !categorySelection.hasSelection || (targetID == nil && !validName))
             }
         }
     }
@@ -787,7 +795,7 @@ struct DiaryPresetImportSheet: View {
     private func initialize() async {
         guard !initialized else { return }
         title = resume?.title ?? package.manifest.title
-        hiddenCategories = resume?.hiddenCategories ?? []
+        categorySelection = DiaryPresetImportCategorySelection(resuming: resume)
         do {
             books = try await DiaryDocumentStore(ownerID: ownerID).listBooks()
             if let resume {
@@ -830,7 +838,7 @@ struct DiaryPresetImportSheet: View {
         } catch { self.error = error.localizedDescription }
     }
     private func runImport() async {
-        guard !busy, !selectedPageIDs.isEmpty, availablePackage != nil else { return }
+        guard !busy, !selectedPageIDs.isEmpty, categorySelection.hasSelection, availablePackage != nil else { return }
         if fixedTarget && (defaultTarget == nil || targetID != defaultTarget?.id) {
             error = "目标帐本暂不可用，请重新打开添加页面。"; return
         }

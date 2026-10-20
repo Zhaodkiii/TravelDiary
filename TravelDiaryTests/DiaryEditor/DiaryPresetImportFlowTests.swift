@@ -4,6 +4,63 @@ import UIKit
 
 @MainActor
 struct DiaryPresetImportFlowTests {
+    @Test func categorySelectionRequiresExplicitOptInAndRestoresFullPreviewWhenCleared() {
+        var selection = DiaryPresetImportCategorySelection()
+        #expect(selection.hiddenCategories == Set(DiaryLayerSemanticKind.selectablePresetCategories))
+        #expect(!selection.hiddenCategories.contains(.branding))
+        #expect(!selection.hasSelection)
+        #expect(selection.previewHiddenCategories.isEmpty)
+
+        selection.hiddenCategories.remove(.text)
+        #expect(selection.hasSelection)
+        #expect(selection.previewHiddenCategories == [.background, .photo, .paper, .illustration])
+        selection.hiddenCategories.remove(.photo)
+        #expect(selection.previewHiddenCategories == [.background, .paper, .illustration])
+
+        selection.hiddenCategories.insert(.text)
+        selection.hiddenCategories.insert(.photo)
+        #expect(!selection.hasSelection)
+        #expect(selection.previewHiddenCategories.isEmpty)
+    }
+
+    @Test func resumedCategorySelectionPreservesSavedAndLegacyChoices() {
+        var intent = DiaryPresetImportIntent(id: UUID(), templateID: "test", version: 1,
+            pageIDs: ["page-1"], wholeBook: false, targetID: nil, afterPageID: nil, title: "恢复")
+        let legacy = DiaryPresetImportCategorySelection(resuming: intent)
+        #expect(legacy.hasSelection)
+        #expect(legacy.hiddenCategories.isEmpty)
+
+        intent.hiddenCategories = [.photo, .text]
+        let restored = DiaryPresetImportCategorySelection(resuming: intent)
+        #expect(restored.hasSelection)
+        #expect(restored.previewHiddenCategories == [.photo, .text])
+
+        intent.hiddenCategories = Set(DiaryLayerSemanticKind.selectablePresetCategories)
+        #expect(!DiaryPresetImportCategorySelection(resuming: intent).hasSelection)
+    }
+
+    @Test func textOnlySelectionFiltersEveryImportedPageAndKeepsBranding() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let package = try fixture(in: base)
+        var selection = DiaryPresetImportCategorySelection()
+        selection.hiddenCategories.remove(.text)
+        let book = try await DiaryDocumentStore(ownerID: "text-only", baseDirectory: base).importPreset(package,
+            pageIDs: ["page-1", "page-2"], title: "仅文字", operationID: UUID(),
+            hiddenCategories: selection.hiddenCategories)
+        let store = DiaryDocumentStore(ownerID: "text-only", baseDirectory: base, bookID: book.id)
+        for page in book.pages {
+            let loaded = try await store.load(page.id)
+            let layers = loaded.document.objects.values.flatMap(\.layers)
+            #expect(layers.contains { $0.semanticKind == .text })
+            #expect(layers.contains { $0.semanticKind == .branding })
+            #expect(layers.allSatisfy { $0.contentID != nil || $0.semanticKind == .text || $0.semanticKind == .branding })
+            #expect(loaded.document.replaceablePhotos().isEmpty)
+            #expect(loaded.document.root.background == nil)
+            try DiaryDocumentStore.validate(loaded.document)
+        }
+    }
+
     @Test func deselectedPagesAreOmittedAndReplacementOrderMatchesSelection() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: base) }

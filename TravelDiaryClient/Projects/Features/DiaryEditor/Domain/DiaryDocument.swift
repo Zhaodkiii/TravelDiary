@@ -140,6 +140,9 @@ nonisolated enum DiaryLayerCategory: String, Codable, Sendable {
 nonisolated enum DiaryLayerSemanticKind: String, Codable, CaseIterable, Sendable {
     case background, photo, paper, text, illustration, branding
 
+    /// 模板预览及导入可由用户选择的分类；品牌内容始终保留。
+    static let selectablePresetCategories: [Self] = [.background, .photo, .paper, .text, .illustration]
+
     var title: String {
         switch self {
         case .background: return "背景"

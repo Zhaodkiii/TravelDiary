@@ -1,5 +1,27 @@
 import Foundation
 
+/// 未选择分类时展示完整模板供挑选，但不允许继续导入。
+nonisolated struct DiaryPresetImportCategorySelection {
+    var hiddenCategories: Set<DiaryLayerSemanticKind>
+
+    init(resuming intent: DiaryPresetImportIntent? = nil) {
+        if let intent {
+            // 旧记录没有分类字段时，沿用当时的全部开启行为。
+            hiddenCategories = intent.hiddenCategories ?? []
+        } else {
+            hiddenCategories = Set(DiaryLayerSemanticKind.selectablePresetCategories)
+        }
+    }
+
+    var hasSelection: Bool {
+        DiaryLayerSemanticKind.selectablePresetCategories.contains { !hiddenCategories.contains($0) }
+    }
+
+    var previewHiddenCategories: Set<DiaryLayerSemanticKind> {
+        hasSelection ? hiddenCategories : []
+    }
+}
+
 /// UI 意图持久化：异常退出后明确继续同一次导入，不创建重复副本。
 nonisolated struct DiaryPresetImportIntent: Codable, Identifiable, Sendable {
     let id: UUID

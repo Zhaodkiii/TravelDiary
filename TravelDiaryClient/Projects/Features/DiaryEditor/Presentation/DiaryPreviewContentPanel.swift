@@ -4,7 +4,7 @@ import SwiftUI
 struct DiaryPreviewContentPanel: View {
     @Binding var hiddenCategories: Set<DiaryLayerSemanticKind>
     var affectsImport = false
-    private let categories: [DiaryLayerSemanticKind] = [.background, .photo, .paper, .text, .illustration]
+    private let categories = DiaryLayerSemanticKind.selectablePresetCategories
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
