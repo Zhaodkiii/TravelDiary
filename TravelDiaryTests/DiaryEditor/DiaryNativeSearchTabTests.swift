@@ -3,6 +3,7 @@ import SwiftUI
 @testable import TravelDiary
 
 @MainActor
+@Suite(.serialized)
 struct DiaryNativeSearchTabTests {
     private final class Driver: ObservableObject {
         @Published var tab = 0
@@ -17,7 +18,7 @@ struct DiaryNativeSearchTabTests {
                     Tab("手帐", systemImage: "book.pages", value: 0) { NavigationStack { Text("我的手帐") } }
                     Tab("模板", systemImage: "books.vertical", value: 1) {
                         NavigationStack {
-                            DiaryPresetLibraryScreen(ownerID: "native-search-test", showsInlineSearch: false,
+                            DiaryPresetLibraryScreen(ownerID: "native-search-test",
                                 initialCatalog: catalog, catalogLoader: { catalog })
                         }
                     }
@@ -33,6 +34,35 @@ struct DiaryNativeSearchTabTests {
                 .tabViewSearchActivation(.searchTabSelection)
             }
         }
+    }
+    @Test func templateLibraryShowsSearchModesBeforeTyping() async throws {
+        let catalog = RemotePresetCatalog(series: [], books: [])
+        let scene = try #require(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let previous = scene.keyWindow
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        let host = UIHostingController(rootView: NavigationStack {
+            DiaryPresetLibraryScreen(ownerID: "library-search-test", initialCatalog: catalog, catalogLoader: { catalog })
+        })
+        window.rootViewController = host; window.windowLevel = .alert + 1; window.makeKeyAndVisible()
+        defer { window.isHidden = true; previous?.makeKey() }
+        try await Task.sleep(for: .seconds(1))
+        let search = try #require(findSearchController(in: host))
+        #expect(findView(UISegmentedControl.self, in: window) == nil)
+        search.isActive = true
+        search.searchBar.searchTextField.becomeFirstResponder()
+        try await Task.sleep(for: .seconds(1))
+        try capture(window, name: "template-library-search-modes")
+        let modes = try #require(findView(UISegmentedControl.self, in: window))
+        #expect(modes.numberOfSegments == 2)
+        #expect(modes.titleForSegment(at: 0) == "整本")
+        #expect(modes.titleForSegment(at: 1) == "跨页")
+        #expect(search.searchBar.text?.isEmpty != false)
+    }
+
+    private func findSearchController(in controller: UIViewController) -> UISearchController? {
+        controller.navigationItem.searchController
+            ?? controller.children.lazy.compactMap { findSearchController(in: $0) }.first
     }
     @Test func nativeSearchTabOwnsSystemSearchFieldAndKeepsResultsVertical() async throws {
         let catalog = RemotePresetCatalog(series: [.init(slug: "city", title: "城市漫游")], books: [])

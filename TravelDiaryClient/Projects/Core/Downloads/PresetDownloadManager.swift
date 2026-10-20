@@ -162,16 +162,17 @@ final class PresetDownloadManager: ObservableObject {
             signedURLs.removeAll(); browseCache.removeAll(); rebuildAvailability()
         }
     }
-    func request(_ path: String, body: [String: [String]]? = nil, allowETag: Bool = false) async throws -> Data {
+    func request(_ path: String, body: [String: [String]]? = nil, allowETag: Bool = false, queryItems: [URLQueryItem]? = nil) async throws -> Data {
         guard let engine else { throw URLError(.userAuthenticationRequired) }
         let response = try await engine.sendRaw(SupportNetworkRequest(method: body == nil ? .get : .post,
             path: "/api/v1/diary-presets/" + path,
+            queryItems: queryItems,
             body: body.map { .json(AnyEncodable($0)) } ?? .none,
             strategy: NetworkStrategy(requiresAuth: true, allowETag: allowETag, etagTTL: allowETag ? 300 : nil)))
         return response.data
     }
     func catalog() async throws -> RemotePresetCatalog {
-        try JSONDecoder().decode(RemotePresetCatalog.self, from: await request("catalog/"))
+        try JSONDecoder().decode(RemotePresetCatalog.self, from: await request("catalog/", queryItems: [URLQueryItem(name: "schema_max", value: "2")]))
     }
     func browse(_ book: RemotePresetBook, ownerID: String) async throws -> RemotePresetBrowse {
         let key = "\(ownerID):\(book.id):\(book.version)"
@@ -191,7 +192,7 @@ final class PresetDownloadManager: ObservableObject {
         try await browse(book, ownerID: owner ?? "").pages
     }
     @discardableResult
-    func enqueue(book: RemotePresetBook, pageIDs: [String]?, owner: String, target: DiaryBook?, after: UUID?, downloadOnly: Bool = false, minimumLayerSchema: Int? = nil) async throws -> UUID {
+    func enqueue(book: RemotePresetBook, pageIDs: [String]?, owner: String, target: DiaryBook?, after: UUID?, downloadOnly: Bool = false, minimumLayerSchema: Int? = nil, unitID: String? = nil) async throws -> UUID {
         await restoreTask?.value
         activate(owner: owner)
         if downloadOnly, let existing = jobs.last(where: { job in
@@ -208,9 +209,20 @@ final class PresetDownloadManager: ObservableObject {
             }
             return existing.id
         }
-        let data = try await request("templates/\(book.id)/\(book.version)/", body: pageIDs.map { ["page_ids": $0] } ?? [:])
+        let data: Data
+        if let unitID {
+            guard let engine else { throw URLError(.userAuthenticationRequired) }
+            let payload = PresetSpreadPlanRequest(selection: .init(kind: "spread", unit_id: unitID))
+            data = try await engine.sendRaw(SupportNetworkRequest(method: .post,
+                path: "/api/v1/diary-presets/templates/\(book.id)/\(book.version)/",
+                body: .json(AnyEncodable(payload)), strategy: NetworkStrategy(requiresAuth: true))).data
+        } else {
+            data = try await request("templates/\(book.id)/\(book.version)/", body: pageIDs.map { ["page_ids": $0] } ?? [:])
+        }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let plan = json["id"] as? String, let manifest = json["manifest"] else { throw DiaryEditorError.invalidDocument }
+        try Task.checkCancellation()
+        guard self.owner == owner else { throw CancellationError() }
         let bytes = try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
         let package = try JSONDecoder().decode(PresetManifest.self, from: bytes)
         if let minimumLayerSchema, package.layerSchemaVersion < minimumLayerSchema {
@@ -226,7 +238,7 @@ final class PresetDownloadManager: ObservableObject {
         return jobID
     }
     func prepareImport(book: RemotePresetBook, pageIDs: [String], wholeBook: Bool,
-                       ownerID: String) async throws -> PresetImportPreparation {
+                       ownerID: String, unitID: String? = nil) async throws -> PresetImportPreparation {
         await restoreTask?.value
         try Task.checkCancellation()
         activate(owner: ownerID)
@@ -234,7 +246,7 @@ final class PresetDownloadManager: ObservableObject {
             return PresetImportPreparation(package: cached, downloadID: nil)
         }
         let id = try await enqueue(book: book, pageIDs: wholeBook ? nil : pageIDs,
-                                   owner: ownerID, target: nil, after: nil, downloadOnly: true)
+                                   owner: ownerID, target: nil, after: nil, downloadOnly: true, unitID: unitID)
         if let ready = preparedPackage(id) {
             return PresetImportPreparation(package: ready, downloadID: nil)
         }

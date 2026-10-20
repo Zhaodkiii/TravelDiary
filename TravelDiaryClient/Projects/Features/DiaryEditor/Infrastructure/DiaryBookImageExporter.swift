@@ -11,11 +11,7 @@ enum DiaryBookImageExporter {
     }
 
     static func spreadPages(_ book: DiaryBook) -> [[DiaryPageEntry?]] {
-        let pages = book.contentPages
-        guard !pages.isEmpty else { return [] }
-        return (0..<(pages.count + 2) / 2).map { spread in
-            [spread * 2 - 1, spread * 2].map { pages.indices.contains($0) ? pages[$0] : nil }
-        }
+        book.contentPages.isEmpty ? [] : book.readingSpreads
     }
 
     static func export(book: DiaryBook, store: DiaryDocumentStore, mode: Mode,

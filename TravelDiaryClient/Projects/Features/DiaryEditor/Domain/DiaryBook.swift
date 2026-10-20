@@ -21,6 +21,28 @@ nonisolated struct DiaryBook: Codable, Identifiable, Equatable, Sendable {
     var shell: DiaryPageEntry? { pages.first { $0.id == shellPageID } }
     var contentPages: [DiaryPageEntry] { pages.filter { $0.id != shellPageID } }
     var effectiveCover: DiaryPageEntry? { pages.first { $0.id == coverPageID } ?? pages.first }
+    /// Explicit template pairs take precedence over legacy physical page parity.
+    var readingSpreads: [[DiaryPageEntry?]] {
+        let content = contentPages
+        guard content.contains(where: { $0.presetSpreadID != nil }) else {
+            return (0..<((content.count + 2) / 2)).map { spread in
+                [spread * 2 - 1, spread * 2].map { content.indices.contains($0) ? content[$0] : nil }
+            }
+        }
+        var result: [[DiaryPageEntry?]] = [], index = 0
+        while index < content.count {
+            let page = content[index]
+            if let pair = page.presetSpreadID, page.presetSpreadSide == "left", index + 1 < content.count,
+               content[index + 1].presetSpreadID == pair, content[index + 1].presetSpreadSide == "right" {
+                result.append([page, content[index + 1]]); index += 2
+            } else if page.presetSpreadID != nil || index == 0 || index + 1 == content.count || content[index + 1].presetSpreadID != nil {
+                result.append(page.presetSpreadSide == "left" ? [page, nil] : [nil, page]); index += 1
+            } else {
+                result.append([page, content[index + 1]]); index += 2
+            }
+        }
+        return result
+    }
 }
 
 nonisolated struct DiaryPageEntry: Codable, Identifiable, Equatable, Sendable {
@@ -32,6 +54,9 @@ nonisolated struct DiaryPageEntry: Codable, Identifiable, Equatable, Sendable {
     var revisionID: UUID
     var size: CGSize
     var presetSource: DiaryPresetSource? = nil
+    /// Explicit imported spread membership survives reopening and user edits.
+    var presetSpreadID: UUID? = nil
+    var presetSpreadSide: String? = nil
 }
 
 nonisolated struct DiaryTrashedPage: Codable, Identifiable, Equatable, Sendable {

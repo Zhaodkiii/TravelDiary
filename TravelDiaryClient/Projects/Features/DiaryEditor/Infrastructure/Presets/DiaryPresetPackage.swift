@@ -100,11 +100,36 @@ nonisolated struct PresetContent: Decodable, Sendable {
 }
 nonisolated struct PresetPage: Decodable, Identifiable, Sendable {
     let id: String
-    let title: String
+    var title: String
     let size: PresetSize
     let rootContentID: String
     let preview: Preview
     nonisolated struct Preview: Decodable, Sendable { let thumbnailPath: String; let largePath: String }
+}
+nonisolated struct PresetReadingUnit: Codable, Sendable, Identifiable {
+    let id: String
+    let kind: String
+    let title: String
+    let position: Int
+    let leftPageID: String?
+    let rightPageID: String?
+    let pairingSource: String
+    let searchEnabled: Bool
+    let locationMode: String?
+    let locationIDs: [String]?
+    let tagIDs: [String]?
+    let searchKeywords: [String]?
+    var pageIDs: [String] { [leftPageID, rightPageID].compactMap { $0 } }
+}
+nonisolated struct PresetPageMetadata: Codable, Sendable {
+    let contentRole: String
+    let displayTitle: String?
+    let locationIDs: [String]?
+    let tagIDs: [String]?
+}
+nonisolated struct PresetBookMetadata: Codable, Sendable {
+    let locationScope: String?
+    let defaultLocationIDs: [String]?
 }
 nonisolated struct PresetManifest: Decodable, Sendable {
     let format: String
@@ -125,6 +150,9 @@ nonisolated struct PresetManifest: Decodable, Sendable {
     let requiredCapabilities: [String]
     let requiredFonts: [DiaryFontReference]?
     let files: [FileRecord]
+    var readingUnits: [PresetReadingUnit]? = nil
+    var pageMetadata: [String: PresetPageMetadata]? = nil
+    var metadata: PresetBookMetadata? = nil
     nonisolated struct PageReference: Decodable, Sendable { let id: String; let title: String; let path: String }
     nonisolated struct Asset: Decodable, Sendable { let id: String; let path: String; let pixelSize: PresetSize; let sha256: String; let byteCount: Int }
     nonisolated struct FileRecord: Decodable, Sendable { let path: String; let byteCount: Int; let sha256: String }
@@ -140,7 +168,13 @@ nonisolated struct DiaryPresetPackage: Identifiable, Sendable {
     let manifest: PresetManifest
     var id: String { manifest.templateBookID }
     var pages: [PresetPage] {
-        get throws { try manifest.pages.map { try read(PresetPage.self, $0.path) } }
+        get throws {
+            try manifest.pages.map {
+                var page = try read(PresetPage.self, $0.path)
+                if let title = manifest.pageMetadata?[page.id]?.displayTitle { page.title = title }
+                return page
+            }
+        }
     }
     func url(_ path: String) throws -> URL {
         guard !path.isEmpty, !path.hasPrefix("/"), !path.contains("\\"), !path.split(separator: "/").contains("..") else { throw DiaryEditorError.invalidDocument.logged() }
@@ -173,7 +207,7 @@ nonisolated struct DiaryPresetPackage: Identifiable, Sendable {
     func validate() throws {
         let started = Date()
         log("validate.begin pages=\(manifest.pages.count) objects=\(manifest.objectTable.count) assets=\(manifest.assetTable.count) files=\(manifest.files.count)")
-        guard manifest.format == "TravelDiary.PresetBook", manifest.schemaVersion == 1,
+        guard manifest.format == "TravelDiary.PresetBook", [1, 2].contains(manifest.schemaVersion),
               [1, 2].contains(manifest.layerSchemaVersion), manifest.packageVersion > 0,
               !manifest.pages.isEmpty, manifest.pages.count <= 100,
               Set(manifest.pages.map(\.id)).count == manifest.pages.count,
@@ -185,6 +219,25 @@ nonisolated struct DiaryPresetPackage: Identifiable, Sendable {
         }
         if let shellID = manifest.shellPageID, !manifest.pages.contains(where: { $0.id == shellID }) {
             throw invalid("外壳页不在页面目录中")
+        }
+        if manifest.schemaVersion == 2 {
+            let units = manifest.readingUnits ?? []
+            let roles = manifest.pageMetadata ?? [:]
+            guard Set(roles.keys) == Set(manifest.pages.map(\.id)),
+                  Set(units.map(\.id)).count == units.count,
+                  units.flatMap(\.pageIDs) == manifest.pages.map(\.id),
+                  roles.values.allSatisfy({ ["front_cover", "back_cover", "shell", "content", "blank"].contains($0.contentRole) }) else {
+                throw invalid("阅读单元与真实页面顺序不一致")
+            }
+            for (position, unit) in units.enumerated() {
+                guard unit.position == position, ["cover", "single", "spread"].contains(unit.kind),
+                      Set(unit.pageIDs).count == unit.pageIDs.count,
+                      unit.kind == "spread" || unit.pageIDs.count == 1 else { throw invalid("阅读单元无效") }
+                if unit.searchEnabled {
+                    guard unit.kind == "spread", unit.pageIDs.count == 2, unit.pairingSource == "explicit",
+                          unit.pageIDs.allSatisfy({ roles[$0]?.contentRole == "content" }) else { throw invalid("非完整正文跨页参与搜索") }
+                }
+            }
         }
         let paths = Set(manifest.files.map(\.path))
         guard paths.count == manifest.files.count else { throw invalid("文件索引包含重复路径") }
@@ -352,7 +405,7 @@ nonisolated struct BundleDiaryPresetProvider: DiaryPresetProviding {
             for url in packages {
                 do {
                     let manifest = try JSONDecoder().decode(PresetManifest.self, from: Data(contentsOf: url.appendingPathComponent("package.json")))
-                    guard manifest.seriesID == category.id, manifest.schemaVersion == 1, [1, 2].contains(manifest.layerSchemaVersion),
+                    guard manifest.seriesID == category.id, [1, 2].contains(manifest.schemaVersion), [1, 2].contains(manifest.layerSchemaVersion),
                           manifest.format == "TravelDiary.PresetBook", !manifest.pages.isEmpty else { throw DiaryEditorError.invalidDocument.logged() }
                     let package = DiaryPresetPackage(root: url, manifest: manifest)
                     package.log("catalog.discovered series=\(category.id) pages=\(manifest.pages.count) assets=\(manifest.assetTable.count) files=\(manifest.files.count)")

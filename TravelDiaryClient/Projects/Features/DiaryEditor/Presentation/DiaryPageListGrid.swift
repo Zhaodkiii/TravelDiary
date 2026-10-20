@@ -1,5 +1,58 @@
 import SwiftUI
 
+/// 封面独占首个跨页的右侧，正文按原始页序成对展示，末尾单页仍保留。
+struct DiaryPresetOverviewSpread<Page: Identifiable>: Identifiable {
+    let left: Page?
+    let right: Page?
+    var pages: [Page] { [left, right].compactMap { $0 } }
+    var id: [Page.ID] { pages.map(\.id) }
+
+    static func group(pages: [Page], shellID: Page.ID?, coverID: Page.ID?) -> [Self] {
+        let cover = pages.first { $0.id == coverID } ?? pages.first { $0.id != shellID }
+        guard let cover else { return [] }
+        let content = pages.filter { $0.id != shellID && $0.id != cover.id }
+        var result = [Self(left: nil, right: cover)]
+        for index in stride(from: 0, to: content.count, by: 2) {
+            result.append(Self(left: content[index], right: index + 1 < content.count ? content[index + 1] : nil))
+        }
+        return result
+    }
+}
+
+struct DiaryPresetOverviewGrid<Page: Identifiable, Cell: View>: View {
+    let spreads: [DiaryPresetOverviewSpread<Page>]
+    @ViewBuilder let cell: (DiaryPresetOverviewSpread<Page>) -> Cell
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.flexible(), alignment: .top), GridItem(.flexible(), alignment: .top)],
+                  alignment: .leading, spacing: 20) {
+            ForEach(spreads) { spread in cell(spread) }
+        }
+    }
+}
+
+struct DiaryPresetOverviewThumbnail<Page: Identifiable, Paper: View>: View {
+    let spread: DiaryPresetOverviewSpread<Page>
+    let pageSize: CGSize
+    @ViewBuilder let paper: (Page) -> Paper
+
+    private var ratio: CGFloat { max(pageSize.width, 1) / max(pageSize.height, 1) }
+    var body: some View {
+        DiaryBoundSpread {
+            leaf(spread.left)
+        } right: {
+            leaf(spread.right)
+        }
+        .aspectRatio(2 / (0.955 * (1 - DiaryBookSpine.halfGapFraction) / ratio + 0.09), contentMode: .fit)
+        .shadow(color: .black.opacity(0.10), radius: 3, y: 2)
+    }
+
+    @ViewBuilder private func leaf(_ page: Page?) -> some View {
+        if let page { paper(page) }
+        else { Color.clear }
+    }
+}
+
 /// 外壳、封面固定在首行，正文另起网格；同一页同时承担两个角色时只显示一次。
 struct DiaryPageListGrid<Page: Identifiable, Cell: View>: View {
     let pages: [Page]

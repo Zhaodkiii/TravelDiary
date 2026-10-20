@@ -119,24 +119,28 @@ struct RemotePresetDetailScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if let browse {
-                    DiaryRemoteCover(url: URL(string: book.cover_url)).frame(maxWidth: .infinity).frame(height: 260)
+                    if let cover = overviewSpreads.first {
+                        overviewThumbnail(cover, size: browse.page_size.cg).frame(maxWidth: .infinity).frame(height: 260)
                         .padding(20).background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 16))
+                    }
                     Text(book.title).font(.title2.weight(.semibold))
                     HStack {
                         Text("\(pages.filter { $0.id != browse.shell_page_id }.count) 页")
                         PresetBookAvailabilityBadge(downloadedCount: min(book.page_count, availability.downloadedPageIDs(bookID: book.id, version: book.version).count), totalCount: book.page_count)
                     }
                     Text("页面总览").font(.headline)
-                    DiaryPageListGrid(pages: pages, shellID: browse.shell_page_id, coverID: browse.cover_page_id) { page in
-                        VStack {
-                            Button { previewID = page.id; showingPreview = true } label: {
-                                remoteImage(page.thumbnail_url, size: browse.page_size.cg)
+                    DiaryPresetOverviewGrid(spreads: overviewSpreads) { spread in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button { previewID = spread.pages.first?.id; showingPreview = true } label: {
+                                overviewThumbnail(spread, size: browse.page_size.cg)
                             }
-                            HStack {
-                                Text(page.title).font(.caption)
-                                PresetAvailabilityBadge(downloaded: availability.hasDownloadedPage(bookID: book.id, version: book.version, pageID: page.id))
+                            Text(spread.pages.map(\.title).joined(separator: " · ")).font(.caption)
+                            PresetAvailabilityBadge(downloaded: spread.pages.allSatisfy {
+                                availability.hasDownloadedPage(bookID: book.id, version: book.version, pageID: $0.id)
+                            })
+                            Button(spread.pages.count == 2 ? "使用这两页" : "使用这一页") {
+                                selection = RemotePresetSelection(pageIDs: spread.pages.map(\.id), wholeBook: false)
                             }
-                            Button("使用这一页") { selection = RemotePresetSelection(pageIDs: [page.id], wholeBook: false) }
                         }
                     }
                 } else if error == nil { ProgressView("正在读取预设…") }
@@ -148,7 +152,8 @@ struct RemotePresetDetailScreen: View {
             if !fixedTarget {
                 Button("用这本模板") { selection = RemotePresetSelection(pageIDs: pages.map(\.id), wholeBook: true) }
                     .buttonStyle(.borderedProminent).controlSize(.large).disabled(pages.isEmpty)
-                    .padding().frame(maxWidth: .infinity).background(.regularMaterial)
+                    .padding()
+//                    .frame(maxWidth: .infinity).background(.regularMaterial)
             }
         }
         .toolbar {
@@ -180,6 +185,14 @@ struct RemotePresetDetailScreen: View {
         }
         .sheet(item: $selection) { value in
             importPage(value)
+        }
+    }
+    private var overviewSpreads: [DiaryPresetOverviewSpread<RemotePresetPage>] {
+        DiaryPresetOverviewSpread.group(pages: pages, shellID: browse?.shell_page_id, coverID: browse?.cover_page_id)
+    }
+    private func overviewThumbnail(_ spread: DiaryPresetOverviewSpread<RemotePresetPage>, size: CGSize) -> some View {
+        DiaryPresetOverviewThumbnail(spread: spread, pageSize: size) { page in
+            DiaryRemoteCover(url: URL(string: page.thumbnail_url))
         }
     }
     private func importPage(_ value: RemotePresetSelection) -> some View {
@@ -234,7 +247,7 @@ struct RemotePresetLoadingPreview: View {
 }
 
 /// Prefer local resources; otherwise prepare only the selected download plan.
-private struct RemotePresetImportDestination: View {
+struct RemotePresetImportDestination: View {
     let ownerID: String
     let book: RemotePresetBook
     let pageIDs: [String]
@@ -245,6 +258,7 @@ private struct RemotePresetImportDestination: View {
     let previewPages: [RemotePresetPage]
     let previewSize: CGSize
     let onImported: (DiaryBook) -> Void
+    var unitID: String? = nil
     @State private var preparation: PresetImportPreparation?
     @State private var error: String?
     @State private var retry = 0
@@ -279,7 +293,7 @@ private struct RemotePresetImportDestination: View {
             error = nil
             do {
                 let value = try await PresetDownloadManager.shared.prepareImport(book: book,
-                    pageIDs: pageIDs, wholeBook: wholeBook, ownerID: ownerID)
+                    pageIDs: pageIDs, wholeBook: wholeBook, ownerID: ownerID, unitID: unitID)
                 try Task.checkCancellation()
                 preparation = value
             } catch is CancellationError { }

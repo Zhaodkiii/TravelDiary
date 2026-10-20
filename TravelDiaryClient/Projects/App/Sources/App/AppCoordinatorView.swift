@@ -120,7 +120,7 @@ struct SupportMainCoordinatorView: View {
             }
             Tab("模板", systemImage: "books.vertical", value: SupportRootTab.diaryPresets) {
                 rootNavigation(path: $templatePath) {
-                    DiaryPresetLibraryScreen(ownerID: String(session.accountID), showsInlineSearch: false)
+                    DiaryPresetLibraryScreen(ownerID: String(session.accountID))
                         .id(session.accountID)
                 }
             }
@@ -136,12 +136,12 @@ struct SupportMainCoordinatorView: View {
                         onAccountEntryTap: handleAccountEntryTap)
                 }
             }
-            Tab(value: SupportRootTab.templateSearch, role: .search) {
-                rootNavigation(path: $searchPath) {
-                    DiaryPresetSearchScreen(ownerID: String(session.accountID), searchText: $templateSearch)
-                        .id(session.accountID)
-                }
-            }
+//            Tab(value: SupportRootTab.templateSearch, role: .search) {
+//                rootNavigation(path: $searchPath) {
+//                    DiaryPresetSearchScreen(ownerID: String(session.accountID), searchText: $templateSearch)
+//                        .id(session.accountID)
+//                }
+//            }
         }
         .tabViewSearchActivation(.searchTabSelection)
         .task(id: customizations.routeID) {

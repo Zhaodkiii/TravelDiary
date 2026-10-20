@@ -19,6 +19,7 @@ struct DiaryPresetLibraryScreen: View {
     @State private var resuming: DiaryPresetImportIntent?
     @State private var recovered: DiaryBook?
     @State private var search = ""
+    @State private var isSearching = false
     @State private var reload = 0
     @State private var remoteError: String?
     @State private var remoteFinished = false
@@ -44,68 +45,53 @@ struct DiaryPresetLibraryScreen: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 24) {
-                if singlePageOnly {
-                    Text("为「\(targetBook?.title ?? "当前手帐")」挑选一页").font(.subheadline)
-                }
-                if showsInlineSearch {
-                    DiaryLibrarySearch(text: $search, prompt: fixedSeriesID == nil ? "搜索模板名称" : "搜索这个系列")
-                }
-                if let pending, !singlePageOnly {
-                    DiaryLibraryNotice(message: "有未完成的模板导入", actionTitle: "继续导入") { resuming = pending }
-                }
-                if let remoteError { DiaryLibraryNotice(message: remoteError) { reload += 1 } }
-                if hasFilters {
-                    HStack {
-                        Text("\(results.count) 本模板").font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
-                        Spacer()
-                        Button("清空条件") { search = ""; onlyDownloaded = false; styles = []; usages = [] }
-                            .font(.caption).frame(minHeight: 44)
-                    }
-                }
-                if items.isEmpty && !remoteFinished {
-                    ProgressView("正在寻找旅行灵感…").frame(maxWidth: .infinity).padding(48)
-                } else if results.isEmpty {
-                    ContentUnavailableView("暂无匹配的模板", systemImage: "books.vertical",
-                        description: Text(hasFilters ? "试试其他关键词，或清空筛选条件。" : "这个系列还没有可用模板。"))
-                } else if fixedSeriesID != nil || hasFilters {
-                    if !hasFilters {
-                        Text("\(results.count) 本模板")
-                            .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
-                    }
-                    ForEach(results) { item in
-                        templateLink(item, expanded: true).padding(.bottom, 8)
-                    }
-                } else {
-                    ForEach(sections) { section in
-                        VStack(alignment: .leading, spacing: 12) {
-                            sectionHeader(section)
-                            DiaryPresetTemplateCarousel(count: section.items.count) { index in
-                                templateLink(section.items[index])
-                            }
-                            .id(section.items.map(\.id))
-                        }
-                    }
-                }
-            }.frame(maxWidth: 1200).padding(20).frame(maxWidth: .infinity)
+        if showsInlineSearch {
+            content.searchable(text: $search, isPresented: $isSearching,
+                               placement: .navigationBarDrawer(displayMode: .automatic),
+                               prompt: fixedSeriesID == nil ? "搜索模板名称、地点或主题" : "搜索这个系列")
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
+        Group {
+            if isSearching && !singlePageOnly {
+                DiaryPresetSearchScreen(ownerID: ownerID, searchText: $search,
+                    initialCatalog: remote ?? initialCatalog, fixedSeriesID: fixedSeriesID,
+                    catalogLoader: catalogLoader, showsSearchField: false)
+            } else {
+                libraryContent
+            }
         }
         .background(DiaryLibraryStyle.background).foregroundStyle(DiaryLibraryStyle.ink).tint(DiaryLibraryStyle.accent)
         .scrollDismissesKeyboard(.interactively)
         .navigationTitle(screenTitle)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    draftStyles = styles; draftUsages = usages; draftOnlyDownloaded = onlyDownloaded; showingFilters = true
-                } label: {
-                    Image(systemName: hasFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
-                }.accessibilityLabel("筛选模板")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink { PresetDownloadCenter(ownerID: ownerID) } label: {
-                    Image(systemName: "arrow.down.circle").accessibilityLabel("下载管理")
+            if showsInlineSearch && !isSearching {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { isSearching = true } label: {
+                        Image(systemName: "magnifyingglass")
+                    }.accessibilityLabel("搜索模板")
                 }
             }
+            if !isSearching || singlePageOnly {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        draftStyles = styles; draftUsages = usages; draftOnlyDownloaded = onlyDownloaded; showingFilters = true
+                    } label: {
+                        Image(systemName: hasFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
+                    }.accessibilityLabel("筛选模板")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink { PresetDownloadCenter(ownerID: ownerID) } label: {
+                        Image(systemName: "arrow.down.circle").accessibilityLabel("下载管理")
+                    }
+                }
+            }
+        }
+        .onChange(of: isSearching) { _, active in
+            if !active { search = "" }
         }
         .refreshable { await loadRemote() }
         .sheet(isPresented: $showingFilters) { filterSheet }
@@ -135,6 +121,44 @@ struct DiaryPresetLibraryScreen: View {
                 else { remote = await Task.detached { PresetLibraryCatalogCache.read(ownerID: ownerID) }.value }
             }
             await loadRemote()
+        }
+    }
+
+    private var libraryContent: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 24) {
+                if singlePageOnly {
+                    Text("为「\(targetBook?.title ?? "当前手帐")」挑选一页").font(.subheadline)
+                }
+                if let pending, !singlePageOnly {
+                    DiaryLibraryNotice(message: "有未完成的模板导入", actionTitle: "继续导入") { resuming = pending }
+                }
+                if let remoteError { DiaryLibraryNotice(message: remoteError) { reload += 1 } }
+                if items.isEmpty && !remoteFinished {
+                    ProgressView("正在寻找旅行灵感…").frame(maxWidth: .infinity).padding(48)
+                } else if results.isEmpty {
+                    ContentUnavailableView("暂无匹配的模板", systemImage: "books.vertical",
+                        description: Text(hasFilters ? "试试其他关键词，或清空筛选条件。" : "这个系列还没有可用模板。"))
+                } else if fixedSeriesID != nil || hasFilters {
+                    if !hasFilters {
+                        Text("\(results.count) 本模板")
+                            .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
+                    }
+                    ForEach(results) { item in
+                        templateLink(item, expanded: true).padding(.bottom, 8)
+                    }
+                } else {
+                    ForEach(sections) { section in
+                        VStack(alignment: .leading, spacing: 12) {
+                            sectionHeader(section)
+                            DiaryPresetTemplateCarousel(count: section.items.count) { index in
+                                templateLink(section.items[index])
+                            }
+                            .id(section.items.map(\.id))
+                        }
+                    }
+                }
+            }.frame(maxWidth: 1200).padding(20).frame(maxWidth: .infinity)
         }
     }
 
@@ -276,6 +300,7 @@ struct DiaryPresetImage: View {
     let package: DiaryPresetPackage
     let path: String
     let size: CGSize
+    var cornerRadius: CGFloat = 10
     @State private var image: UIImage?
     @State private var failed = false
     @State private var retry = 0
@@ -285,7 +310,7 @@ struct DiaryPresetImage: View {
             if let image { Image(uiImage: image).resizable().scaledToFit() }
             else if failed { Button("重试预览") { retry += 1 } }
             else { ProgressView() }
-        }.aspectRatio(size.width / size.height, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 10))
+        }.aspectRatio(size.width / size.height, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: cornerRadius))
             .task(id: "\(package.root.path)-\(path)-\(retry)") {
                 image = nil; failed = false
                 do {
@@ -423,8 +448,10 @@ private struct DiaryPresetDetailScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                DiaryPresetCover(package: package).frame(maxWidth: .infinity).frame(height: 260)
+                if let cover = overviewSpreads.first {
+                    overviewThumbnail(cover).frame(maxWidth: .infinity).frame(height: 260)
                     .padding(20).background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 16))
+                }
                 Text(package.manifest.title).font(.title2.weight(.semibold))
                 Text("\(pages.filter { $0.id != package.manifest.shellPageID }.count) 页 · 可独立编辑的旅行手帐")
                     .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
@@ -439,14 +466,15 @@ private struct DiaryPresetDetailScreen: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Text("页面总览").font(.headline)
-                DiaryPageListGrid(pages: pages, shellID: package.manifest.shellPageID,
-                                  coverID: package.manifest.coverPageID) { page in
-                        VStack {
-                            Button { previewPage = page.id; showingPreview = true } label: {
-                                DiaryPresetImage(package: package, path: page.preview.thumbnailPath, size: page.size.cg)
+                DiaryPresetOverviewGrid(spreads: overviewSpreads) { spread in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button { previewPage = spread.pages.first?.id; showingPreview = true } label: {
+                                overviewThumbnail(spread)
                             }
-                            Text(page.title).font(.caption)
-                            Button("使用这一页") { selection = PresetSelection(pageIDs: [page.id]) }.disabled(!validated)
+                            Text(spread.pages.map(\.title).joined(separator: " · ")).font(.caption)
+                            Button(spread.pages.count == 2 ? "使用这两页" : "使用这一页") {
+                                selection = PresetSelection(pageIDs: spread.pages.map(\.id))
+                            }.disabled(!validated)
                         }
                 }
                 if let error { Text(error).foregroundStyle(.red) }
@@ -457,7 +485,8 @@ private struct DiaryPresetDetailScreen: View {
                 if !fixedTarget {
                     Button("用这本模板") { selection = PresetSelection(pageIDs: pages.map(\.id), wholeBook: true) }
                         .buttonStyle(.borderedProminent).controlSize(.large).disabled(pages.isEmpty || !validated)
-                        .padding().frame(maxWidth: .infinity).background(.regularMaterial)
+                        .padding()
+//                        .frame(maxWidth: .infinity).background(.regularMaterial)
                 }
             }
             .task {
@@ -501,6 +530,15 @@ private struct DiaryPresetDetailScreen: View {
             .sheet(item: $selection) { value in
                 importPage(value)
             }
+    }
+    private var overviewSpreads: [DiaryPresetOverviewSpread<PresetPage>] {
+        DiaryPresetOverviewSpread.group(pages: pages, shellID: package.manifest.shellPageID,
+                                       coverID: package.manifest.coverPageID)
+    }
+    private func overviewThumbnail(_ spread: DiaryPresetOverviewSpread<PresetPage>) -> some View {
+        DiaryPresetOverviewThumbnail(spread: spread, pageSize: package.manifest.pageSize.cg) { page in
+            DiaryPresetImage(package: package, path: page.preview.thumbnailPath, size: page.size.cg, cornerRadius: 0)
+        }
     }
     private func importPage(_ value: PresetSelection) -> some View {
                 DiaryPresetImportSheet(ownerID: ownerID, package: package, pageIDs: value.pageIDs,

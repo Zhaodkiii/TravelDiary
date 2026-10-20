@@ -733,6 +733,16 @@ extension DiaryDocumentStore {
                 entries.append(entry)
             }
             guard photoIndex == replacementPhotos.count else { throw DiaryEditorError.invalidDocument.logged() }
+            for unit in package.manifest.readingUnits ?? [] where unit.kind == "spread" && unit.pageIDs.count == 2 {
+                let indexes = unit.pageIDs.compactMap { source in entries.firstIndex { $0.presetSource?.pageID == source } }
+                if indexes.count == 2 {
+                    let pairID = UUID()
+                    for (side, index) in indexes.enumerated() {
+                        entries[index].presetSpreadID = pairID
+                        entries[index].presetSpreadSide = side == 0 ? "left" : "right"
+                    }
+                }
+            }
             let insertion = afterPageID.flatMap { id in book.pages.firstIndex { $0.id == id }.map { $0 + 1 } } ?? book.pages.count
             book.pages.insert(contentsOf: entries, at: insertion)
             if isNew {

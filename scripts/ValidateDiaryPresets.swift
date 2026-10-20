@@ -30,7 +30,7 @@ do {
         let packages = enumerator?.allObjects as? [URL] ?? []
         for package in packages where package.pathExtension == "diarypreset" {
             let m = try json(package.appendingPathComponent("package.json"))
-            guard m["format"] as? String == "TravelDiary.PresetBook", m["schemaVersion"] as? Int == 1,
+            guard m["format"] as? String == "TravelDiary.PresetBook", [1, 2].contains(m["schemaVersion"] as? Int ?? 0),
                   let layerSchema = m["layerSchemaVersion"] as? Int, [1, 2].contains(layerSchema),
                   m["seriesID"] as? String == category["id"] as? String,
                   let id = m["templateBookID"] as? String, ids.insert(id).inserted,
