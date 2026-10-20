@@ -18,6 +18,7 @@ struct DiaryPresetImportPreview: View {
     }
     @State private var pages: [Page] = []
     @State private var images: [String: UIImage] = [:]
+    @State private var imageIdentity = ""
     @State private var loadError: String?
     @State private var renderError: String?
     @State private var retry = 0
@@ -30,13 +31,18 @@ struct DiaryPresetImportPreview: View {
     }
     // 当前两页及两侧露出的邻页都使用当前图层开关。
     private var previewPages: [Page] {
-        let lower = max(0, firstVisiblePage - 1)
-        let upper = min(pages.count, firstVisiblePage + 3)
-        return Array(pages[lower..<upper])
+        let lower = max(0, firstVisiblePage - 2)
+        let upper = min(pages.count, firstVisiblePage + 4)
+        // 先完成当前两页，再准备左右邻页，逐页发布结果。
+        let visibleIDs = Set(visiblePages.map(\.id))
+        return visiblePages + pages[lower..<upper].filter { !visibleIDs.contains($0.id) }
+    }
+    private var categoryIdentity: String {
+        (package?.root.path ?? "remote") + "|"
+        + hiddenCategories.map(\.rawValue).sorted().joined(separator: ",")
     }
     private var renderID: String {
-        (package?.root.path ?? "remote") + previewPages.map(\.id).joined(separator: ",")
-        + hiddenCategories.map(\.rawValue).sorted().joined(separator: ",") + "-\(retry)"
+        categoryIdentity + "|" + previewPages.map(\.id).joined(separator: ",") + "-\(retry)"
     }
 
     var body: some View {
@@ -89,14 +95,31 @@ struct DiaryPresetImportPreview: View {
             catch { loadError = error.localizedDescription }
         }
         .task(id: renderID) {
-            images = [:]; renderError = nil
+            // 翻页不清空图片；只有模板或图层选项改变才使结果失效。
+            if imageIdentity != categoryIdentity {
+                images = [:]
+                imageIdentity = categoryIdentity
+            }
+            renderError = nil
             guard let package, !hiddenCategories.isEmpty, !previewPages.isEmpty else { return }
+            let identity = categoryIdentity
+            let requestedPages = previewPages
+            let maximumDimension = pages.count == 1 ? 1400 : 900
             do {
-                try await Task.sleep(for: .milliseconds(100))
-                let result = try await renderer.render(package: package, pageIDs: previewPages.map(\.id), hidden: hiddenCategories,
-                    maximumDimension: pages.count == 1 ? 1400 : 900)
-                try Task.checkCancellation()
-                images = result
+                for page in requestedPages where images[page.id] == nil {
+                    try Task.checkCancellation()
+                    do {
+                        let result = try await renderer.render(package: package, pageIDs: [page.id], hidden: hiddenCategories,
+                            maximumDimension: maximumDimension)
+                        try Task.checkCancellation()
+                        guard imageIdentity == identity else { return }
+                        images.merge(result) { _, new in new }
+                    } catch is CancellationError { throw CancellationError() }
+                    catch { renderError = error.localizedDescription }
+                }
+                // 保留最近窗口周围的结果，避免长手帐无限累积位图。
+                let retainedIDs = Set(pages[max(0, firstVisiblePage - 4)..<min(pages.count, firstVisiblePage + 6)].map(\.id))
+                images = images.filter { retainedIDs.contains($0.key) }
             } catch is CancellationError { }
             catch { if !Task.isCancelled { renderError = error.localizedDescription } }
         }
@@ -120,7 +143,7 @@ struct DiaryPresetImportPreview: View {
                             else if phase.error != nil { Image(systemName: "photo.badge.exclamationmark") }
                             else { ProgressView() }
                         }
-                    } else if let image = images[page.id] {
+                    } else if imageIdentity == categoryIdentity, let image = images[page.id] {
                         Image(uiImage: image).resizable().scaledToFit()
                     } else if renderError != nil {
                         Image(systemName: "exclamationmark.circle")

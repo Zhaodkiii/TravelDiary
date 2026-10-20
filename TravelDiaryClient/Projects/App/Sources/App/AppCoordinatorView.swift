@@ -143,6 +143,8 @@ struct SupportMainCoordinatorView: View {
 //                }
 //            }
         }
+        .environment(\.accountLoginContext, AccountLoginContext(
+            isDeviceAccount: session.isDeviceAccount, viewModel: upgradeLoginViewModel))
         .tabViewSearchActivation(.searchTabSelection)
         .task(id: customizations.routeID) {
             guard let id = customizations.routeID else { return }

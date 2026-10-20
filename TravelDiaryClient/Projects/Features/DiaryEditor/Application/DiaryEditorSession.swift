@@ -234,7 +234,9 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         do {
             var imported: DiaryAsset?
             if let item {
-                guard let data = item.image?.pngData() else { throw DiaryEditorError.invalidImage }
+                guard let source = item.image,
+                      DiaryPhotoFrameAperture.detect(source, opening: item.opening) != nil,
+                      let data = source.pngData() else { throw DiaryEditorError.invalidImage }
                 let (asset, image) = try await store.importImage(data, documentID: document.id)
                 imported = asset; images[asset.id] = image
             }
@@ -604,7 +606,9 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             var frameAssets: [String: (DiaryAsset, UIImage)] = [:]
             for item in frames where frameAssets[item.id] == nil {
                 try Task.checkCancellation()
-                guard let bytes = item.image?.pngData() else { throw DiaryEditorError.invalidImage }
+                guard let source = item.image,
+                      DiaryPhotoFrameAperture.detect(source, opening: item.opening) != nil,
+                      let bytes = source.pngData() else { throw DiaryEditorError.invalidImage }
                 frameAssets[item.id] = try await store.importImage(bytes, documentID: document.id)
             }
             try Task.checkCancellation()

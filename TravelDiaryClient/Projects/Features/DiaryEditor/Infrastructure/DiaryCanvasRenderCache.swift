@@ -17,6 +17,8 @@ final class DiaryCanvasRenderCache {
         var maskResource: ObjectIdentifier?
         var asset: DiaryAsset?
         var frameSize: CGSize?
+        var decoration: DiaryLayer?
+        var decorationResource: ObjectIdentifier?
     }
     private struct Placement: Equatable {
         var id: UUID
@@ -107,11 +109,16 @@ final class DiaryCanvasRenderCache {
             var local = layer
             local.transform = DiaryTransform(position: .zero, pivot: .zero)
             local.name = ""; local.locked = false; local.visible = true; local.blendMode = .normal; local.opacity = nil
+            var decoration = DiaryPageRenderer.decorativeFrame(for: layer, siblings: content.layers)
+            decoration?.transform = DiaryTransform(position: .zero, pivot: .zero)
+            decoration?.name = ""
             let stamp = LayerStamp(local: local, contentVersion: layer.contentID.flatMap { versions[$0] },
                 resource: layer.assetID.flatMap { images[$0] }.map(ObjectIdentifier.init),
                 maskResource: layer.photoSlot?.maskAssetID.flatMap { images[$0] }.map(ObjectIdentifier.init),
                 asset: layer.assetID.flatMap { document.assets[$0] },
-                frameSize: layer.frameTargetID.flatMap { siblings[$0]?.size })
+                frameSize: layer.frameTargetID.flatMap { siblings[$0]?.size },
+                decoration: decoration,
+                decorationResource: decoration?.assetID.flatMap { images[$0] }.map(ObjectIdentifier.init))
             let entry: Entry
             if let previous = entries[layer.id], previous.stamp == stamp {
                 entry = previous; entry.source = layer

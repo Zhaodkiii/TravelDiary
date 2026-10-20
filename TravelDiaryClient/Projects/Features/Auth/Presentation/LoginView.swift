@@ -1,6 +1,23 @@
 import AuthenticationServices
 import SwiftUI
 
+/// 由根协调器提供，让已展示的业务 sheet 也能在自身上方打开通用登录页。
+struct AccountLoginContext {
+    let isDeviceAccount: Bool
+    let viewModel: LoginViewModel
+}
+
+private struct AccountLoginContextKey: EnvironmentKey {
+    static let defaultValue: AccountLoginContext? = nil
+}
+
+extension EnvironmentValues {
+    var accountLoginContext: AccountLoginContext? {
+        get { self[AccountLoginContextKey.self] }
+        set { self[AccountLoginContextKey.self] = newValue }
+    }
+}
+
 struct LoginView: View {
     enum PresentationMode { case primarySignIn, upgradeDeviceAccount }
     @ObservedObject var viewModel: LoginViewModel

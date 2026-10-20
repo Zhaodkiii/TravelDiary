@@ -5,6 +5,7 @@ struct DiaryBookExportSheet: View {
     let store: DiaryDocumentStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accountLoginContext) private var accountLoginContext
     enum Route: Hashable {
         case singlePages, spreads, result, video, videoResult
 
@@ -20,6 +21,7 @@ struct DiaryBookExportSheet: View {
     }
 
     @State private var showingPrint = false
+    @State private var showingLogin = false
     @State private var path: [Route] = []
     @State private var selected: Set<UUID> = []
     @State private var spreadCount = 1
@@ -50,7 +52,13 @@ struct DiaryBookExportSheet: View {
                         videoOptions.firstSpread = 0
                         videoOptions.lastSpread = max(0, DiaryBookImageExporter.spreadPages(book).count - 1)
                         path.append(.video)
-                    }, onSelectPrint: { showingPrint = true })
+                    }, onSelectPrint: {
+                        if accountLoginContext?.isDeviceAccount == true {
+                            showingLogin = true
+                        } else {
+                            showingPrint = true
+                        }
+                    })
             }
             .navigationDestination(for: Route.self) { route in
                 page(title: route.title) {
@@ -90,6 +98,14 @@ struct DiaryBookExportSheet: View {
             }
         }
         .fullScreenCover(isPresented: $showingPrint) { PrintCheckoutScreen(book: book, store: store) }
+        .sheet(isPresented: $showingLogin) {
+            if let accountLoginContext {
+                LoginView(viewModel: accountLoginContext.viewModel, mode: .upgradeDeviceAccount)
+            }
+        }
+        .onChange(of: accountLoginContext?.isDeviceAccount) { _, isDeviceAccount in
+            if isDeviceAccount == false { showingLogin = false }
+        }
         .tint(ink)
         .sheet(item: $pdf, onDismiss: {
             if let pdfDirectory { try? FileManager.default.removeItem(at: pdfDirectory) }

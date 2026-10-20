@@ -55,6 +55,10 @@ enum DiaryPageRenderer {
         if layer.kind == .object, let id = layer.contentID, let content = document?.objects[id] {
             return objectBounds(content, document: document!)
         }
+        if layer.isContentPhoto,
+           let linked = decorativeFrame(for: layer, siblings: siblings) {
+            return CGRect(origin: .zero, size: layer.size).union(bounds(linked, document: document, siblings: siblings))
+        }
         if layer.isPhotoFrame, let target = siblings.first(where: { $0.id == layer.frameTargetID }) {
             if let opening = layer.frameOpening, opening.width > 0, opening.height > 0 {
                 let width = target.size.width / opening.width, height = target.size.height / opening.height
@@ -66,6 +70,11 @@ enum DiaryPageRenderer {
             return textBounds(layer)
         }
         return CGRect(origin: .zero, size: layer.size)
+    }
+
+    /// 同一照片只使用最上方可见的装饰相框；隐藏或移除相框立即恢复照片自身的取景。
+    static func decorativeFrame(for photo: DiaryLayer, siblings: [DiaryLayer]) -> DiaryLayer? {
+        siblings.last { $0.isPhotoFrame && $0.frameTargetID == photo.id && $0.visible && $0.assetID != nil && $0.frameOpening != nil }
     }
 
     /// 画框绑定照片而非页面坐标。移动或缩放照片后，画框仍使用目标照片的变换。
@@ -251,22 +260,34 @@ enum DiaryPageRenderer {
                 if layer.isPhotoFrame, layer.frameTargetID != nil, let id = layer.assetID, let image = images[id] {
                     image.draw(in: bounds(layer, document: document, siblings: siblings))
                 } else if let id = layer.assetID, let image = images[id], let asset = document.assets[id] {
-                    let frame = layer.photoFill == true ? (layer.displayBounds ?? CGRect(origin: .zero, size: layer.size)) : CGRect(origin: .zero, size: layer.size)
-                    context.clip(to: frame)
-                    if layer.photoFill == true, let slot = layer.photoSlot {
-                        if let mapped = DiaryPhotoSlotRenderer.image(image, mask: slot.maskAssetID.flatMap { images[$0] },
-                            slot: slot, size: frame.size, crop: layer.crop,
-                            pixelScale: max(hypot(context.ctm.a, context.ctm.b), hypot(context.ctm.c, context.ctm.d))) { mapped.draw(in: frame) }
-                    } else if layer.photoFill == true, let placement = layer.photoPlacement {
-                        // 在完整素材坐标中恢复烘焙的倾斜，再由外层矩阵完成页面旋转与拉伸。
-                        context.translateBy(x: frame.minX, y: frame.minY)
-                        context.translateBy(x: placement.center.x * frame.width, y: placement.center.y * frame.height)
-                        context.rotate(by: placement.radians)
-                        image.draw(in: CGRect(x: -placement.size.width * frame.width / 2,
-                                              y: -placement.size.height * frame.height / 2,
-                                              width: placement.size.width * frame.width, height: placement.size.height * frame.height))
+                    if layer.isContentPhoto, let decoration = decorativeFrame(for: layer, siblings: siblings),
+                       let frameID = decoration.assetID, let frameImage = images[frameID], let opening = decoration.frameOpening,
+                       let aperture = DiaryPhotoFrameAperture.detect(frameImage, opening: opening) {
+                        let rect = bounds(decoration, document: document, siblings: siblings)
+                        var slot = aperture.slot
+                        slot.fill = layer.photoSlot?.fill ?? .cover
+                        if let mapped = DiaryPhotoSlotRenderer.image(image, mask: aperture.mask, slot: slot, size: rect.size,
+                            crop: layer.crop, pixelScale: max(hypot(context.ctm.a, context.ctm.b), hypot(context.ctm.c, context.ctm.d))) {
+                            mapped.draw(in: rect)
+                        }
                     } else {
-                        image.draw(in: layer.isContentPhoto && layer.photoFill != true ? layer.crop.imageRect(source: asset.pixelSize, frame: layer.size) : frame)
+                        let frame = layer.photoFill == true ? (layer.displayBounds ?? CGRect(origin: .zero, size: layer.size)) : CGRect(origin: .zero, size: layer.size)
+                        context.clip(to: frame)
+                        if layer.photoFill == true, let slot = layer.photoSlot {
+                            if let mapped = DiaryPhotoSlotRenderer.image(image, mask: slot.maskAssetID.flatMap { images[$0] },
+                                slot: slot, size: frame.size, crop: layer.crop,
+                                pixelScale: max(hypot(context.ctm.a, context.ctm.b), hypot(context.ctm.c, context.ctm.d))) { mapped.draw(in: frame) }
+                        } else if layer.photoFill == true, let placement = layer.photoPlacement {
+                            // 在完整素材坐标中恢复烘焙的倾斜，再由外层矩阵完成页面旋转与拉伸。
+                            context.translateBy(x: frame.minX, y: frame.minY)
+                            context.translateBy(x: placement.center.x * frame.width, y: placement.center.y * frame.height)
+                            context.rotate(by: placement.radians)
+                            image.draw(in: CGRect(x: -placement.size.width * frame.width / 2,
+                                                  y: -placement.size.height * frame.height / 2,
+                                                  width: placement.size.width * frame.width, height: placement.size.height * frame.height))
+                        } else {
+                            image.draw(in: layer.isContentPhoto && layer.photoFill != true ? layer.crop.imageRect(source: asset.pixelSize, frame: layer.size) : frame)
+                        }
                     }
                 }
             }
@@ -300,6 +321,9 @@ enum DiaryPageRenderer {
         }
         if let target = siblings.first(where: { $0.id == layer.frameTargetID }) {
             hash.combine(target.size.width); hash.combine(target.size.height)
+        }
+        if let decoration = decorativeFrame(for: layer, siblings: siblings) {
+            hash.combine(try? JSONEncoder().encode(decoration))
         }
         // UIImage 替换或由缺失变为可用时，不能继续使用旧掩码。
         for id in images.keys.sorted(by: { $0.uuidString < $1.uuidString }) {

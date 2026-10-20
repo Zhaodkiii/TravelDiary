@@ -4,6 +4,25 @@ import UIKit
 
 @MainActor
 struct DiaryPresetImportFlowTests {
+    @Test func categoryPreviewReusesPreparedPagesAcrossScrollingAndSwitchChanges() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let package = try fixture(in: base)
+        let renderer = PresetCategoryRenderer()
+        let first = try await renderer.render(package: package, pageIDs: ["page-1"], hidden: [.illustration])
+        #expect(first["page-1"] != nil)
+        _ = try await renderer.render(package: package, pageIDs: ["page-2"], hidden: [.illustration])
+
+        // 素材移除后仍能重绘已访问页，证明翻页和开关变化没有重新读盘解码。
+        try FileManager.default.removeItem(at: package.root.appendingPathComponent("asset.png"))
+        let revisited = try await renderer.render(package: package, pageIDs: ["page-1"], hidden: [.photo])
+        #expect(revisited["page-1"]?.size == first["page-1"]?.size)
+        renderer.reset()
+        await #expect(throws: (any Error).self) {
+            try await renderer.render(package: package, pageIDs: ["page-1"], hidden: [.photo])
+        }
+    }
+
     @Test func categorySelectionRequiresExplicitOptInAndRestoresFullPreviewWhenCleared() {
         var selection = DiaryPresetImportCategorySelection()
         #expect(selection.hiddenCategories == Set(DiaryLayerSemanticKind.selectablePresetCategories))

@@ -417,13 +417,15 @@ final class PresetCategoryRenderer: ObservableObject {
     }
     private var identity = ""
     private var prepared: [String: Prepared] = [:]
+    private var preparedOrder: [String] = []
 
-    func reset() { identity = ""; prepared = [:] }
+    func reset() { identity = ""; prepared = [:]; preparedOrder = [] }
 
     func render(package: DiaryPresetPackage, pageIDs: [String], hidden: Set<DiaryLayerSemanticKind>,
                 maximumDimension: Int = 1400) async throws -> [String: UIImage] {
-        let key = package.root.path + pageIDs.joined(separator: ",") + "-\(maximumDimension)"
-        if identity != key { prepared = [:]; identity = key }
+        // 页组合改变不应使已解码素材失效；图层开关也可复用原始页面。
+        let key = package.root.path + "-\(maximumDimension)"
+        if identity != key { reset(); identity = key }
         var result: [String: UIImage] = [:]
         for id in pageIDs {
             try Task.checkCancellation()
@@ -435,6 +437,11 @@ final class PresetCategoryRenderer: ObservableObject {
                 try Task.checkCancellation()
                 guard identity == key else { throw CancellationError() }
                 prepared[id] = page
+            }
+            preparedOrder.removeAll { $0 == id }
+            preparedOrder.append(id)
+            while preparedOrder.count > 6 {
+                prepared.removeValue(forKey: preparedOrder.removeFirst())
             }
             let document = page.document.excludingPresetCategories(hidden)
             let size = document.root.referenceSize

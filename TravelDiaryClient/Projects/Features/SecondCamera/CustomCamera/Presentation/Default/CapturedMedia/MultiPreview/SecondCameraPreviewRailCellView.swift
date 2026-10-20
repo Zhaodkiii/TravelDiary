@@ -8,6 +8,8 @@ struct SecondCameraPreviewRailCellView: View {
     let onSelect: () -> Void
     var onDelete: (() -> Void)? = nil
 
+    @State private var isShowingDeleteConfirm = false
+
     private let size: CGFloat = 44
     private let cornerRadius: CGFloat = 10
 
@@ -35,7 +37,9 @@ struct SecondCameraPreviewRailCellView: View {
             .accessibilityAddTraits(isSelected ? [.isSelected] : [])
 
             if isSelected, canDelete, let onDelete {
-                Button(action: onDelete) {
+                Button {
+                    isShowingDeleteConfirm = true
+                } label: {
                     Image(systemName: "trash.fill")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(.white)
@@ -44,6 +48,19 @@ struct SecondCameraPreviewRailCellView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(SecondCameraEditorL10n.Multi.delete)
+                // Anchor the native confirmation to the tapped delete button.
+                .confirmationDialog(
+                    SecondCameraEditorL10n.Multi.deleteConfirmTitle,
+                    isPresented: $isShowingDeleteConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button(SecondCameraEditorL10n.Multi.deleteConfirmAction, role: .destructive) {
+                        onDelete()
+                    }
+                    Button(SecondCameraEditorL10n.Editor.cancel, role: .cancel) {}
+                } message: {
+                    Text(SecondCameraEditorL10n.Multi.deleteConfirmMessage)
+                }
             }
         }
         .frame(width: size, height: size)
