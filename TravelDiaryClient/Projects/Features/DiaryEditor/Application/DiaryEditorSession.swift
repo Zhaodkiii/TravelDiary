@@ -590,7 +590,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
 
     /// One transaction for a picker/camera batch. File imports may be staged, but the canvas changes only after layout succeeds.
     @discardableResult
-    func importPhotos(_ data: [Data]) async -> Bool {
+    func importPhotos(_ data: [Data], frames selectedFrames: [DiaryPhotoFrameCatalog.Item?]? = nil) async -> Bool {
         guard !busy, !closing, !childOpen, !data.isEmpty else { return false }
         guard data.count <= 30, scopeLayers.count + data.count <= 200 else {
             errorMessage = "本次照片过多，请分批添加或放到其他页面。"; return false
@@ -604,10 +604,10 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                 try Task.checkCancellation()
                 photos.append(try await store.importImage(bytes, documentID: document.id))
             }
-            let frames = DiaryPhotoFrameCatalog.select(for: photos.map { $0.0.pixelSize })
+            let frames = selectedFrames ?? DiaryPhotoFrameCatalog.select(for: photos.map { $0.0.pixelSize }).map { Optional($0) }
             guard frames.count == photos.count else { throw DiaryEditorError.invalidImage }
             var frameAssets: [String: (DiaryAsset, UIImage)] = [:]
-            for item in frames where frameAssets[item.id] == nil {
+            for item in frames.compactMap({ $0 }) where frameAssets[item.id] == nil {
                 try Task.checkCancellation()
                 guard let source = item.image,
                       DiaryPhotoFrameAperture.detect(source, opening: item.opening) != nil,
@@ -619,7 +619,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                 errorMessage = "页面已变化，请重新添加照片。"; return false
             }
             guard let (planned, ids) = plannedPhotoBatch(photos: photos.map { $0.0 }, frames: frames,
-                frameAssets: frameAssets.mapValues { $0.0 }) else {
+                frameAssets: frameAssets.mapValues { $0.0 }, manualFrames: selectedFrames != nil) else {
                 errorMessage = "当前页面空间不足，无法在不遮挡现有内容的情况下排入这些照片。请减少照片数量或添加到其他页面。"
                 return false
             }
@@ -636,8 +636,8 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     }
 
     /// Shared by editor imports and preset creation; planning never mutates the session or schedules saves.
-    func plannedPhotoBatch(photos: [DiaryAsset], frames: [DiaryPhotoFrameCatalog.Item],
-                           frameAssets: [String: DiaryAsset]) -> (DiaryDocument, [UUID])? {
+    func plannedPhotoBatch(photos: [DiaryAsset], frames: [DiaryPhotoFrameCatalog.Item?],
+                           frameAssets: [String: DiaryAsset], manualFrames: Bool = false) -> (DiaryDocument, [UUID])? {
         guard !photos.isEmpty, photos.count == frames.count,
               scopeLayers.count + photos.count <= 200 else { return nil }
         let batchID = UUID()
@@ -645,26 +645,29 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         var ids: [UUID] = []
         var inputs: [DiaryPhotoBatchLayout.Input] = []
         for (index, asset) in photos.enumerated() {
-            let item = frames[index]
-            guard let frameAsset = frameAssets[item.id] else { return nil }
-            planned.assets[asset.id] = asset; planned.assets[frameAsset.id] = frameAsset
+            planned.assets[asset.id] = asset
             let photo = DiaryLayer.photo(asset: asset, center: scopeCenter)
             planned.appendObject(containing: photo, to: contentID)
             let objectID = planned.objects[contentID]!.layers.last!.contentID!
             let primary = planned.objects[objectID]!.layers[0]
-            planned.objects[objectID]?.layers.append(Self.photoFrame(item, asset: frameAsset, photo: primary))
+            if let item = frames[index] {
+                guard let frameAsset = frameAssets[item.id] else { return nil }
+                planned.assets[frameAsset.id] = frameAsset
+                planned.objects[objectID]?.layers.append(Self.photoFrame(item, asset: frameAsset, photo: primary, manual: manualFrames))
+            }
+            if manualFrames || frames[index] == nil { planned.update(primary.id) { $0.photoFrameIsManual = true } }
             planned.update(photo.id) { $0.photoBatchID = batchID }
             ids.append(photo.id)
             inputs.append(DiaryPhotoBatchLayout.Input(photoSize: photo.size,
                 bounds: DiaryPageRenderer.objectBounds(planned.objects[objectID]!, document: planned)))
         }
         guard let placements = DiaryPhotoBatchLayout.plan(inputs, canvas: CGRect(origin: .zero, size: content.referenceSize),
-            region: batchPhotoRegion, obstacles: batchPhotoObstacles(excluding: []), foreground: batchPhotoForeground) else {
+            region: batchPhotoRegion, obstacles: batchPhotoObstacles(excluding: []), foreground: batchPhotoForeground, allowOverlap: true) else {
             return nil
         }
         for (index, id) in ids.enumerated() { planned.update(id) { $0.transform = placements[index].transform } }
         // Existing small labels/accents remain in front; scenery stays beneath the new photos.
-        let foregroundIDs = batchForegroundIDs
+        let foregroundIDs = placements.contains(where: \.overlaysExistingContent) ? [] : batchForegroundIDs
         if let layers = planned.objects[contentID]?.layers {
             planned.objects[contentID]?.layers = layers.filter { !foregroundIDs.contains($0.id) }
                 + layers.filter { foregroundIDs.contains($0.id) }
@@ -715,10 +718,10 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                 flippedVertically: layer.transform.flippedVertically)
         }
         guard let placements = DiaryPhotoBatchLayout.plan(inputs, canvas: CGRect(origin: .zero, size: content.referenceSize),
-            region: batchPhotoRegion, obstacles: batchPhotoObstacles(excluding: Set(members.map(\.id))), foreground: batchPhotoForeground) else {
+            region: batchPhotoRegion, obstacles: batchPhotoObstacles(excluding: Set(members.map(\.id))), foreground: batchPhotoForeground, allowOverlap: true) else {
             errorMessage = "当前页面空间不足，请减少照片数量或将部分内容移到其他页面。"; return false
         }
-        let foregroundIDs = batchForegroundIDs
+        let foregroundIDs = placements.contains(where: \.overlaysExistingContent) ? [] : batchForegroundIDs
         edit {
             for (index, layer) in members.enumerated() {
                 document.update(layer.id) {
@@ -793,7 +796,9 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         return bounds
     }
 
-    func importPhoto(_ data: Data, replacing: UUID? = nil, asSticker: Bool = false, stickerName: String = "贴纸", semanticKind: DiaryLayerSemanticKind? = nil) async -> Bool {
+    func importPhoto(_ data: Data, replacing: UUID? = nil, asSticker: Bool = false, stickerName: String = "贴纸",
+                     semanticKind: DiaryLayerSemanticKind? = nil, subcategory: String? = nil,
+                     renderType: String? = nil) async -> Bool {
         if replacing == nil && !asSticker { return await importPhotos([data]) }
         guard !busy else { return false }
         busy = true
@@ -827,6 +832,8 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                                              transform: DiaryTransform(position: center, pivot: CGPoint(x: size.width / 2, y: size.height / 2)),
                                              size: size, assetID: asset.id)
                     sticker.semanticKind = semanticKind
+                    sticker.subcategory = subcategory
+                    sticker.renderType = renderType
                     if semanticKind == .text { sticker.category = .textImage }
                     document.appendObject(containing: sticker, to: contentID); selectedID = sticker.id
                 }

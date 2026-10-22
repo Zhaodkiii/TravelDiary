@@ -7,77 +7,67 @@ struct SettingsView: View {
     let storageService: StorageService
     let onAccountEntryTap: () -> Void
 
+    @ObservedObject private var help = HelpFeedbackService.shared
+    @State private var legalDocument: IdentifiableURL?
+
     var body: some View {
-        List {
-            Section(L10n.text("settings.section.account", fallback: "账户")) {
-                Button(action: onAccountEntryTap) {
-                    HStack {
-                        Label(
-                            L10n.text("settings.account_management", fallback: "账户管理"),
-                            systemImage: "person.crop.circle"
-                        )
-                        Spacer()
-                        Text(accountTrailingText)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        Image(systemName: "chevron.right")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.tertiary)
+        SupportCanvas {
+            Button(action: onAccountEntryTap) {
+                HStack(spacing: 16) {
+                    Image(systemName: "person.crop.circle").font(.system(size: 38, weight: .light))
+                        .foregroundStyle(DiaryLibraryStyle.accent)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(accountTrailingText).font(.headline).foregroundStyle(DiaryLibraryStyle.ink)
+                        Text(session.isDeviceAccount ? "登录账户，让旅途记录有所归属" : "账户管理与安全设置")
+                            .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
                     }
-                }
-                .accessibilityHint(
-                    session.isDeviceAccount
-                        ? L10n.text(
-                            "settings.account.device_not_linked.accessibility_hint",
-                            fallback: "打开登录页，将游客账户升级为正式账户"
-                        )
-                        : L10n.text("settings.account_management", fallback: "账户管理")
-                )
-            }
-
-            Section("通用") {
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(DiaryLibraryStyle.secondary)
+                }.padding(20).frame(maxWidth: .infinity, alignment: .leading).feedbackPaperCard()
+            }.buttonStyle(.plain).accessibilityHint("打开账户管理")
+            VStack(alignment: .leading, spacing: 10) {
+                sectionTitle("通用")
                 MainNavigationLink {
-                    StorageManagementScreen(owner: String(session.accountID), service: storageService)
-                        .id(session.accountID)
-                } label: {
-                    Label("存储空间", systemImage: "internaldrive")
-                }
+                    StorageManagementScreen(owner: String(session.accountID), service: storageService).id(session.accountID)
+                } label: { SupportNavigationRow(title: "存储空间", symbol: "internaldrive", detail: "管理本机文件与缓存") }.buttonStyle(.plain).feedbackPaperCard()
             }
-
-            Section("实物印制") {
-                MainNavigationLink { PrintOrdersScreen(owner: String(session.accountID)) } label: {
-                    Label("我的印制订单", systemImage: "shippingbox")
-                }
+            VStack(alignment: .leading, spacing: 10) {
+                sectionTitle("服务")
+                VStack(spacing: 0) {
+                    MainNavigationLink { PrintOrdersScreen(owner: String(session.accountID)) } label: {
+                        SupportNavigationRow(title: "我的印制订单", symbol: "shippingbox", detail: "查看印制与配送进度")
+                    }
+                    cardDivider
+                    MainNavigationLink { HelpCenterScreen(owner: String(session.accountID)) } label: {
+                        SupportNavigationRow(title: "帮助与反馈", symbol: "questionmark.bubble", detail: "使用帮助、建议与问题反馈", badge: help.unread > 0 ? "有新回复" : "")
+                    }
+                }.buttonStyle(.plain).feedbackPaperCard()
             }
-
-//            Section(L10n.text("settings.section.ai", fallback: "AI")) {
-//                MainNavigationLink {
-//                    AISettingsView(viewModel: aiSettingsViewModel)
-//                } label: {
-//                    HStack {
-//                        Label(
-//                            L10n.text("settings.ai_scenarios", fallback: "AI 场景"),
-//                            systemImage: "cpu"
-//                        )
-//                        Spacer()
-//                        Text(L10n.text("settings.ai_scenarios.subtitle", fallback: "模型与能力"))
-//                            .font(.footnote)
-//                            .foregroundStyle(.secondary)
-//                    }
-//                }
-//            }
+            VStack(alignment: .leading, spacing: 10) {
+                sectionTitle("关于")
+                VStack(spacing: 0) {
+                    Button { legalDocument = IdentifiableURL(url: AppEnvironment.current.privacyPolicyURL) } label: { SupportNavigationRow(title: "隐私政策", symbol: "hand.raised") }
+                    cardDivider
+                    Button { legalDocument = IdentifiableURL(url: AppEnvironment.current.termsOfServiceURL) } label: { SupportNavigationRow(title: "用户协议", symbol: "doc.text") }
+                    cardDivider
+                    MainNavigationLink { AppVersionScreen() } label: { SupportNavigationRow(title: "版本信息", symbol: "info.circle", badge: AppVersionInformation.title) }
+                }.buttonStyle(.plain).feedbackPaperCard()
+            }
+            Text("TravelDiary · 把旅途留在手帐里").font(.caption).foregroundStyle(DiaryLibraryStyle.secondary).frame(maxWidth: .infinity).padding(.top, 4)
         }
         .navigationTitle(L10n.text("settings.title", fallback: "设置"))
+        .sheet(item: $legalDocument) { SafariWebViewSheet(url: $0.url) }
+        .task(id: session.accountID) { await help.refreshUnread(owner: String(session.accountID)) }
     }
 
+    private var cardDivider: some View { Divider().overlay(DiaryLibraryStyle.line).padding(.leading, 69) }
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(DiaryLibraryStyle.secondary).padding(.leading, 4)
+    }
     private var accountTrailingText: String {
-        if session.isDeviceAccount {
-            return L10n.text("settings.account.device_not_linked", fallback: "未登录")
-        }
-        if session.displayName.isEmpty == false {
-            return session.displayName
-        }
-        return session.email
+        if session.isDeviceAccount { return "登录或注册" }
+        let name = session.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty && !name.lowercased().hasPrefix("device_") && !name.lowercased().hasPrefix("guest_") { return name }
+        return "我的账户"
     }
 }

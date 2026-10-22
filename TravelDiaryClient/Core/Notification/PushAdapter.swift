@@ -15,6 +15,18 @@ nonisolated struct CustomPushPayload: Sendable {
     }
 }
 
+nonisolated struct SupportPushPayload: Sendable {
+    let ticket: String; let event: String
+    init?(_ payload: [AnyHashable: Any]) {
+        guard payload["schema_version"] as? Int == 1,
+              payload["scene_key"] as? String == "support.feedback.updated",
+              payload["action"] as? String == "open_support_ticket",
+              let ticket = payload["ticket_id"] as? String, UUID(uuidString: ticket) != nil,
+              let event = payload["event_id"] as? String, UUID(uuidString: event) != nil else { return nil }
+        self.ticket = ticket; self.event = event
+    }
+}
+
 @MainActor
 final class PushAdapter: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     static let shared = PushAdapter()
@@ -31,6 +43,8 @@ final class PushAdapter: NSObject, ObservableObject, UNUserNotificationCenterDel
         self.sessions = sessions; self.devices = devices; self.client = client
         UNUserNotificationCenter.current().delegate = self
         subscription = sessions.$state.sink { [weak self] _ in Task { await self?.refreshRegistration() } }
+        if let item = UserDefaults.standard.dictionary(forKey: "support-push-pending-v1"), let id = item["ticket"] as? String,
+           let expiry = item["expiry"] as? Double, expiry > Date().timeIntervalSince1970 { HelpFeedbackService.shared.routeID = id }
         if let item = UserDefaults.standard.dictionary(forKey: pendingKey), let id = item["request"] as? String,
            let expiry = item["expiry"] as? Double, expiry > Date().timeIntervalSince1970 { CustomizationService.shared.routeID = id }
     }
@@ -56,7 +70,7 @@ final class PushAdapter: NSObject, ObservableObject, UNUserNotificationCenterDel
         else if settings.authorizationStatus == .denied && openSettingsIfDenied { if let url = URL(string: UIApplication.openSettingsURLString) { await UIApplication.shared.open(url) } }
         await refreshRegistration(); return notificationsEnabled == true
     }
-    func clearPrivateState() { UserDefaults.standard.removeObject(forKey: pendingKey) }
+    func clearPrivateState() { UserDefaults.standard.removeObject(forKey: pendingKey); UserDefaults.standard.removeObject(forKey: "support-push-pending-v1") }
     func routeConsumed() { clearPrivateState() }
     private func handle(_ payload: CustomPushPayload, clicked: Bool) async {
         let id = payload.request; let event = payload.event
@@ -75,12 +89,28 @@ final class PushAdapter: NSObject, ObservableObject, UNUserNotificationCenterDel
         client?.publish(NotificationIntent(title: "专属定制",message: "你的定制有新的更新，点击查看",level: .info,presentation: .banner,
             dedupeKey: "custom-"+event,source: "customization.push",onTap: { CustomizationService.shared.routeID = id }))
     }
+    private func handleSupport(_ payload: SupportPushPayload, clicked: Bool) async {
+        let service = HelpFeedbackService.shared
+        if clicked {
+            UserDefaults.standard.set(["ticket":payload.ticket,"expiry":Date().addingTimeInterval(86400).timeIntervalSince1970],forKey:"support-push-pending-v1")
+            service.routeID = payload.ticket; return
+        }
+        guard let owner = service.owner, (try? await service.ticket(payload.ticket,owner:owner)) != nil else { return }
+        await service.refreshUnread(owner:owner)
+        let key = "support-push-seen-"+owner
+        var seen = UserDefaults.standard.stringArray(forKey:key) ?? []
+        guard !seen.contains(payload.event) else { return };seen.append(payload.event);UserDefaults.standard.set(Array(seen.suffix(500)),forKey:key)
+        client?.publish(NotificationIntent(title:"帮助与反馈",message:"你的反馈有新回复，点击查看",level:.info,presentation:.banner,dedupeKey:"support-"+payload.event,source:"support.push",onTap:{ HelpFeedbackService.shared.routeID = payload.ticket }))
+    }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         let payload = notification.request.content.userInfo
         // Exactly one foreground presentation channel. Other scenes retain system behavior.
         if (payload["scene_key"] as? String)?.hasPrefix("diary.customization.") == true {
             completionHandler([])
             if let value = CustomPushPayload(payload) { Task { @MainActor in await self.handle(value,clicked: false) } }
+        } else if let value = SupportPushPayload(payload) {
+            completionHandler([])
+            Task { @MainActor in await self.handleSupport(value,clicked:false) }
         } else { completionHandler([.banner,.sound]) }
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
@@ -88,6 +118,7 @@ final class PushAdapter: NSObject, ObservableObject, UNUserNotificationCenterDel
         completionHandler()
         guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
         if let value = CustomPushPayload(payload) { Task { @MainActor in await self.handle(value,clicked: true) } }
+        else if let value = SupportPushPayload(payload) { Task { @MainActor in await self.handleSupport(value,clicked:true) } }
     }
 }
 

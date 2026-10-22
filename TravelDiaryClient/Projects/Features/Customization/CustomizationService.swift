@@ -156,7 +156,7 @@ final class CustomizationService: ObservableObject {
     func asset(_ asset: CustomAsset, request id: String, owner: String, body: [String: Any]? = nil, delete: Bool = false) async throws -> CustomRequest {
         try await request("requests/\(id)/assets/\(asset.id)/", owner: owner, method: delete ? .delete : .patch, body: body)
     }
-    func saveForm(_ fields: [String: String], id: String, owner: String) { try? persist(JSONEncoder().encode(fields), to: directory(owner).appendingPathComponent(id+"-form.json")) }
+    func saveForm(_ fields: [String: String], id: String, owner: String) throws { try persist(JSONEncoder().encode(fields), to: directory(owner).appendingPathComponent(id+"-form.json")) }
     func loadForm(id: String, owner: String) -> [String: String]? {
         guard let data = try? Data(contentsOf: directory(owner).appendingPathComponent(id+"-form.json")) else { return nil }
         return try? JSONDecoder().decode([String: String].self, from: data)

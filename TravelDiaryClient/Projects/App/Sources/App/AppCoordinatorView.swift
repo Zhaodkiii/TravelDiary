@@ -91,6 +91,7 @@ struct SupportMainCoordinatorView: View {
     @StateObject private var upgradeLoginViewModel: LoginViewModel
     @State private var showsDeviceAccountUpgradeSheet = false
     @State private var showsCreateDiaryBookForm = false
+    @ObservedObject private var helpFeedback = HelpFeedbackService.shared
     @ObservedObject private var customizations = CustomizationService.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: SupportRootTab = .diaryEditor
@@ -134,6 +135,8 @@ struct SupportMainCoordinatorView: View {
                     SettingsView(accountManagementViewModel: accountViewModel,
                         aiSettingsViewModel: aiSettingsViewModel, session: session, storageService: dependencies.storageService,
                         onAccountEntryTap: handleAccountEntryTap)
+                        .id(session.accountID)
+                        .navigationDestination(for: SupportRoute.self) { route in FeedbackDetailScreen(id: route.id, owner: String(session.accountID)) }
                 }
             }
 //            Tab(value: SupportRootTab.templateSearch, role: .search) {
@@ -146,6 +149,16 @@ struct SupportMainCoordinatorView: View {
         .environment(\.accountLoginContext, AccountLoginContext(
             isDeviceAccount: session.isDeviceAccount, viewModel: upgradeLoginViewModel))
         .tabViewSearchActivation(.searchTabSelection)
+        .task(id: helpFeedback.routeID) {
+            guard let id = helpFeedback.routeID else { return }
+            selectedTab = .settings
+            do {
+                _ = try await helpFeedback.ticket(id, owner: String(session.accountID))
+                settingsPath = NavigationPath(); settingsPath.append(SupportRoute(id: id))
+            } catch { helpFeedback.routeError = "此反馈在当前账号下不可访问，请确认登录账号后重试。" }
+            helpFeedback.routeID = nil; UserDefaults.standard.removeObject(forKey: "support-push-pending-v1")
+        }
+        .alert("帮助与反馈", isPresented: Binding(get: { helpFeedback.routeError != nil }, set: { if !$0 { helpFeedback.routeError = nil } })) { Button("好") { helpFeedback.routeError = nil } } message: { Text(helpFeedback.routeError ?? "") }
         .task(id: customizations.routeID) {
             guard let id = customizations.routeID else { return }
             do {
@@ -157,7 +170,7 @@ struct SupportMainCoordinatorView: View {
             customizations.routeID = nil; PushAdapter.shared.routeConsumed()
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await PushAdapter.shared.refreshRegistration(); await customizations.refreshUnread(owner: String(session.accountID)) } }
+            if phase == .active { Task { await PushAdapter.shared.refreshRegistration(); await customizations.refreshUnread(owner: String(session.accountID)); await helpFeedback.refreshUnread(owner: String(session.accountID)) } }
         }
         .sheet(isPresented: $showsDeviceAccountUpgradeSheet) {
             LoginView(viewModel: upgradeLoginViewModel, mode: .upgradeDeviceAccount)

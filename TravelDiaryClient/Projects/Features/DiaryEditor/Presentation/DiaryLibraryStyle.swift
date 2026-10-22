@@ -73,3 +73,28 @@ struct DiaryLibraryNotice: View {
         .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 14))
     }
 }
+
+/// 与现有反馈表单一致的主操作样式，不依赖系统 tint 或 controlSize 的额外内边距。
+struct DiaryPrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.colorScheme) private var scheme
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.body.weight(.semibold))
+            .padding(.horizontal, 18).padding(.vertical, 12).frame(minHeight: 52)
+            .foregroundStyle(scheme == .dark ? Color.black.opacity(0.85) : .white)
+            .background(DiaryLibraryStyle.accent.opacity(enabled ? (configuration.isPressed ? 0.82 : 1) : 0.45), in: RoundedRectangle(cornerRadius: 16))
+            .contentShape(RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+struct DiarySecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.body.weight(.medium)).padding(.horizontal, 16).padding(.vertical, 12).frame(minHeight: 52)
+            .foregroundStyle(DiaryLibraryStyle.accent)
+            .background(DiaryLibraryStyle.surface.opacity(configuration.isPressed ? 0.65 : 1), in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(DiaryLibraryStyle.line, lineWidth: 0.75))
+            .contentShape(RoundedRectangle(cornerRadius: 16))
+    }
+}

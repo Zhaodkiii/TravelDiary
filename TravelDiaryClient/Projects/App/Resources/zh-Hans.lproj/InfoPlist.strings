@@ -1,6 +1,6 @@
 /* 隐私权限用途说明 */
 "NSSpeechRecognitionUsageDescription" = "用于在你使用语音输入时，将你说的话转换为文字。";
 "NSCameraUsageDescription" = "允许访问相机后，可以拍摄照片和视频。";
-"NSMicrophoneUsageDescription" = "允许访问麦克风后，可以录制带声音的视频。";
+"NSMicrophoneUsageDescription" = "用于录制带声音的视频，以及在语音输入时采集你的声音并转换为文字。";
 "NSPhotoLibraryUsageDescription" = "允许访问相册后，可以选择照片和视频进行预览与编辑。";
-"NSPhotoLibraryAddUsageDescription" = "允许保存到相册后，可以把拍摄和编辑结果保存到本机相册。";
+"NSPhotoLibraryAddUsageDescription" = "用于将拍摄的照片、编辑后的作品，以及导出的手帐图片和视频保存到本机相册。";

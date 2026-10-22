@@ -4,88 +4,6 @@ import ImageIO
 
 struct CustomizationRoute: Hashable { let id: String }
 
-struct CustomizationHomeView: View {
-    let owner: String
-    @ObservedObject private var service = CustomizationService.shared
-    @State private var rows: [CustomRequestRow] = []
-    @State private var error: String?
-    @State private var busy = false
-    @State private var nextPage: Int? = 1
-    @State private var reminders = true
-    @ObservedObject private var push = PushAdapter.shared
-    @State private var quiet = false
-    @State private var quietStart = "22:00"
-    @State private var quietEnd = "08:00"
-    var body: some View {
-        List {
-            Section {
-                Text("把照片和故事交给我们，为你制作专属主题手帐。成品可预览、添加到书架并继续编辑。")
-                Button { Task { await create() } } label: { Label("发起定制", systemImage: "sparkles") }.disabled(busy)
-                Toggle("定制进度与成品提醒", isOn: $reminders).onChange(of: reminders) { _, value in Task { await preference(value) } }
-                Button("开启系统通知") { Task { _ = await PushAdapter.shared.requestAuthorizationIfNotDetermined(openSettingsIfDenied: true) } }
-                if push.notificationsEnabled == false { Text("系统通知尚未开启，仍可在这里查看全部进度。").font(.footnote).foregroundStyle(.secondary) }
-                if let problem = push.registrationError { Text(problem).font(.footnote).foregroundStyle(.secondary) }
-                DisclosureGroup("免打扰设置") {
-                    Toggle("使用静默时段", isOn: $quiet)
-                    if quiet {
-                        TextField("开始时间 HH:mm", text: $quietStart)
-                        TextField("结束时间 HH:mm", text: $quietEnd)
-                        Text("时区：\(TimeZone.current.identifier)").font(.caption)
-                    }
-                    Button("保存免打扰设置") { Task { await saveQuiet() } }
-                }
-                Text("照片和成品默认仅你可见，不会进入公共模板或素材库。关闭通知仍可领取成品。")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            if let error { Section { Text(error).foregroundStyle(.red) } }
-            if let problem = service.routeError { Section { Text(problem).foregroundStyle(.secondary) } }
-            Section("我的定制") {
-                if rows.isEmpty { Text("还没有定制需求").foregroundStyle(.secondary) }
-                ForEach(rows) { row in
-                    NavigationLink(value: CustomizationRoute(id: row.id)) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack { Text(row.title.isEmpty ? "未命名草稿" : row.title); if row.unread { Circle().fill(.orange).frame(width: 7,height: 7) } }
-                            Text(customizationStatus(row.status)).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                if let nextPage { Button("加载更多") { Task { await load(page: nextPage) } } }
-            }
-        }
-        .overlay { if busy { ProgressView() } }
-        .refreshable { await load() }
-        .task {
-            await load()
-            struct Pref: Decodable { let enabled: Bool; let quiet_hours: [String: String] }
-            if let value: Pref = try? await service.request("preferences/", owner: owner) {
-                reminders = value.enabled; quiet = !value.quiet_hours.isEmpty
-                quietStart = value.quiet_hours["start"] ?? "22:00"; quietEnd = value.quiet_hours["end"] ?? "08:00"
-            }
-            while !Task.isCancelled { try? await Task.sleep(for: .seconds(30)); if !Task.isCancelled { await service.refreshUnread(owner: owner) } }
-        }
-    }
-    private func load(page: Int = 1) async {
-        do { let r = try await service.list(owner: owner,page: page); rows = page == 1 ? r.results : rows + r.results; nextPage = r.next_page; error = nil; await service.refreshUnread(owner: owner) }
-        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
-    }
-    private func create() async {
-        busy = true; defer { busy = false }
-        do { let value = try await service.create(owner: owner); service.routeID = value.id; await load() }
-        catch { self.error = error.localizedDescription }
-    }
-    private func saveQuiet() async {
-        struct Pref: Decodable { let enabled: Bool }
-        do { let _: Pref = try await service.request("preferences/", owner: owner, method: .patch,
-            body: ["enabled":reminders,"quiet_hours":quiet ? ["start":quietStart,"end":quietEnd,"timezone":TimeZone.current.identifier] : [:]]) }
-        catch { self.error = error.localizedDescription }
-    }
-    private func preference(_ enabled: Bool) async {
-        struct Pref: Decodable { let enabled: Bool }
-        do { let _: Pref = try await service.request("preferences/", owner: owner, method: .patch, body: ["enabled":enabled]) }
-        catch { self.error = error.localizedDescription }
-    }
-}
-
 struct CustomizationDetailView: View {
     let id: String; let owner: String
     @ObservedObject private var service = CustomizationService.shared
@@ -106,16 +24,94 @@ struct CustomizationDetailView: View {
     @State private var showDelete = false
     @Environment(\.dismiss) private var dismiss
     private var isBusy: Bool { busy || photoImport.isImporting }
-    private var hasPendingPhotos: Bool {
-        service.jobs.contains { $0.owner == owner && $0.requestID == id && $0.state != "已完成" }
+    @State private var step: CustomizationFormStep = .photos
+    @State private var issue: CustomizationFormIssue?
+    @State private var localSaved = false
+    @State private var localSaveError: String?
+    @State private var cloudSaved = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var focusedField: String?
+    private var pendingJobs: [CustomUploadJob] {
+        service.jobs.filter { $0.owner == owner && $0.requestID == id && $0.state != "已完成" }
+    }
+    private var remainingPhotoCapacity: Int {
+        guard let value else { return 30 }
+        return max(1, 30 - photoCount(value))
+    }
+    private var saveHint: String {
+        if localSaveError != nil { return "草稿尚未保存" }
+        if cloudSaved { return "草稿已同步" }
+        return localSaved ? "已保存到本机" : "填写后自动保存到本机"
     }
     var body: some View {
+        lifecycleContent
+        .photosPicker(isPresented: $showPhotoPicker, selection: $photos,
+                      maxSelectionCount: remainingPhotoCapacity, matching: .images)
+        .onChange(of: photos) { _, selected in
+            guard !selected.isEmpty else { return }
+            Task { await upload(selected) }
+        }
+        .alert("照片添加失败", isPresented: $photoImport.showError) {
+            Button("知道了", role: .cancel) { }
+        } message: { Text(photoImport.error ?? "请重新选择照片后重试") }
+        .sheet(item: $editingAsset) { a in CustomAssetSettings(asset: a, requestID: id,owner: owner) { value = $0 } }
+        .confirmationDialog("删除后停止云端访问并进入清理流程；已添加的本地手帐仍保留。",isPresented: $showDelete) {
+            Button("删除云端资料",role: .destructive) { Task { await remove() } }
+        }
+    }
+    private var navigationContent: some View {
+        Group {
+            if let value, value.editable { draftFlow(value) }
+            else { detailList }
+        }
+        .navigationTitle(value?.editable == true ? "创建专属手帐" : "专属定制").navigationBarTitleDisplayMode(.inline)
+        .background(DiaryLibraryStyle.background).foregroundStyle(DiaryLibraryStyle.ink).tint(DiaryLibraryStyle.accent)
+        .toolbar(.hidden, for: .tabBar)
+        .navigationBarBackButtonHidden(busy)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let value, value.editable { draftFooter(value) }
+        }
+        .toolbar {
+            if value?.editable == true {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("保存草稿") { focusedField = nil; Task { await save() } }.disabled(isBusy || refreshing)
+                }
+            }
+            ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { focusedField = nil } }
+        }
+    }
+    private var lifecycleContent: some View {
+        navigationContent
+        .onAppear { service.visibleRequestID = id }
+        .onDisappear {
+            if value?.editable == true { persistForm() }
+            if service.visibleRequestID == id { service.visibleRequestID = nil }
+        }
+        .onChange(of: service.refreshSequence) { _, _ in Task { await refresh() } }
+        .overlay { if busy { ProgressView("正在保存…").padding().background(.regularMaterial,in: RoundedRectangle(cornerRadius: 12)) } }
+        .refreshable { await refresh() }
+        .task(id: id) {
+            step = CustomizationFormStep(rawValue: UserDefaults.standard.integer(forKey: CustomizationFormRules.stepKey(owner: owner, requestID: id))) ?? .photos
+            await refresh(restore: true)
+            while !Task.isCancelled { try? await Task.sleep(for: .seconds(30)); if !Task.isCancelled && !isBusy && !showPhotoPicker { await refresh() } }
+        }
+        .onChange(of: scenePhase) { _, phase in if phase == .active && !isBusy && !showPhotoPicker { Task { await refresh() } } }
+        .onChange(of: fields) { _, _ in
+            cloudSaved = false
+            if value?.editable == true { persistForm() }
+            if let issue, fields[issue.field] != nil { self.issue = CustomizationFormRules.storyIssue(fields) }
+        }
+        .onChange(of: step) { _, new in
+            UserDefaults.standard.set(new.rawValue, forKey: CustomizationFormRules.stepKey(owner: owner, requestID: id))
+        }
+    }
+    private var detailList: some View {
         List {
             if let error { Section { Text(error).foregroundStyle(.red) } }
             if let v = value {
                 Section {
                     Text(customizationStatus(v.status)).font(.headline)
-                    Text(v.number).font(.caption).foregroundStyle(.secondary)
+                    DisclosureGroup("需求信息") { Text(v.number).font(.caption).textSelection(.enabled) }
                     if let date = v.due_at { Text("预计交付：\(customDate(date))").font(.footnote) }
                     if v.pending_submission == true && v.status == "in_production" {
                         Label("补充资料已提交，等待制作方确认新的制作依据", systemImage: "doc.badge.clock").font(.footnote)
@@ -123,73 +119,10 @@ struct CustomizationDetailView: View {
                     if v.cancellation_requested == true { Label("已申请取消，等待制作方处理", systemImage: "clock").font(.footnote) }
                 }
                 if let delivery = v.deliveries.first(where: { $0.id == v.current_delivery_id }) { deliverySection(delivery) }
-                if v.editable {
-                    Section("主题与想法") {
-                        TextField("主题名称（必填）", text: field("title"))
-                        TextField("想记录的故事（必填）", text: field("description"), axis: .vertical).lineLimit(4...8)
-                        TextField("场景：旅行、亲子、爱情、生日等", text: field("category"))
-                        TextField("风格偏好", text: field("style"))
-                        TextField("必须保留的姓名、日期或短句", text: field("important_text"), axis: .vertical)
-                        TextField("故事顺序与页数偏好", text: field("story_order"), axis: .vertical)
-                        TextField("不希望出现的内容", text: field("avoid"), axis: .vertical)
-                        Button("保存草稿") { Task { await save() } }.disabled(isBusy)
-                    }
-                    Section("照片（1～30 张）") {
-                        Button(action: choosePhotos) { Label("添加照片", systemImage: "photo.badge.plus") }
-                            .disabled(isBusy || v.assets.count >= 30)
-                        if let message = photoImport.message {
-                            Text(message).font(.footnote).foregroundStyle(.secondary)
-                        }
-                        if let problem = photoImport.error {
-                            Label(problem, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red)
-                        }
-                        Text("上传制作图长边最多 4096px；Live Photo 仅取静态图，保留方向并移除位置元数据。")
-                            .font(.footnote).foregroundStyle(.secondary)
-                        ForEach(v.assets) { a in
-                            HStack {
-                                Group {
-                                    if a.thumbnail_url == nil, let job = service.jobs.first(where: { $0.owner == owner && $0.requestID == id && $0.id.uuidString.lowercased() == a.client_id.lowercased() }) {
-                                        CustomLocalPhotoThumbnail(file: job.file)
-                                    } else { CustomPrivateImage(raw: a.thumbnail_url) }
-                                }.frame(width: 65,height: 65).clipped()
-                                VStack(alignment: .leading) { Text(a.note.isEmpty ? "照片 \(a.position+1)" : a.note); Text(a.status == "ready" ? (a.must_use ? "必用照片" : "已就绪") : a.status).font(.caption) }
-                                Spacer(); Button("设置") { editingAsset = a }.buttonStyle(.borderless)
-                            }
-                        }
-                        ForEach(service.jobs.filter { job in
-                            job.owner == owner && job.requestID == id && job.state != "已完成" &&
-                            !v.assets.contains { $0.client_id.lowercased() == job.id.uuidString.lowercased() }
-                        }) { job in
-                            HStack {
-                                CustomLocalPhotoThumbnail(file: job.file).frame(width: 65, height: 65)
-                                VStack(alignment: .leading) {
-                                    Text("已添加照片")
-                                    Text(job.state).font(.caption).foregroundStyle(.secondary)
-                                    if let progress = job.progress { ProgressView(value: progress) }
-                                    if let problem = job.error { Text(problem).font(.footnote).foregroundStyle(.red) }
-                                }
-                            }
-                        }
-                    }
-                    Section {
-                        Button(v.status == "needs_info" ? "提交补充资料" : "提交定制需求") { Task { await submit() } }
-                            .disabled(isBusy || hasPendingPhotos || v.assets.isEmpty || v.assets.contains { $0.status != "ready" })
-                        if hasPendingPhotos || v.assets.contains(where: { $0.status != "ready" }) {
-                            Text("还有照片未完成上传，请在下方查看进度或重试；上传完成后即可提交。")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        } else if v.assets.isEmpty {
-                            Text("请至少添加 1 张照片，并等待上传完成后提交。")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }
-                        Text("提交后资料用于人工制作，默认不会公开。请确认你有权使用所选照片。")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                } else {
                     Section("需求摘要") { Text(v.title); Text(v.brief["description"] ?? ""); Text(v.brief["important_text"] ?? "") }
                     Section("已提交照片") {
                         ForEach(v.assets) { a in HStack { CustomPrivateImage(raw: a.thumbnail_url).frame(width: 65,height: 65); Text(a.note.isEmpty ? "照片 \(a.position+1)" : a.note) } }
                     }
-                }
                 let jobs = service.jobs.filter { $0.owner == owner && $0.requestID == id && $0.state != "已完成" }
                 if !jobs.isEmpty {
                     Section("照片上传") {
@@ -238,42 +171,21 @@ struct CustomizationDetailView: View {
                 }
                 Section {
                     if v.permits("cancel", fallback: ["draft","submitted","needs_info","in_production","revision_requested"].contains(v.status)) {
-                        Button(["in_production","revision_requested"].contains(v.status) ? "申请取消" : "撤回需求",role: .destructive) { Task { await perform("cancel") } }.disabled(isBusy)
+                        Button(["in_production","revision_requested"].contains(v.status) ? "申请取消" : "撤回需求",role: .destructive) { Task { await perform("cancel") } }.disabled(isBusy || refreshing)
                     }
-                    Button("删除云端定制资料", role: .destructive) { showDelete = true }.disabled(isBusy)
+                    Button("删除云端定制资料", role: .destructive) { showDelete = true }.disabled(isBusy || refreshing)
                 }
-            } else { ProgressView("正在加载定制") }
+            } else if error == nil { ProgressView("正在加载定制") }
+            else { Button("重新加载") { Task { await refresh(restore: true) } } }
         }
-        .navigationTitle("专属定制").navigationBarTitleDisplayMode(.inline)
-        .onAppear { service.visibleRequestID = id }
-        .onDisappear { if service.visibleRequestID == id { service.visibleRequestID = nil } }
-        .onChange(of: service.refreshSequence) { _, _ in Task { await refresh() } }
-        .overlay { if isBusy { ProgressView(photoImport.isImporting ? (photoImport.message ?? "正在读取照片…") : "正在处理…").padding().background(.regularMaterial,in: RoundedRectangle(cornerRadius: 12)) } }
-        .refreshable { await refresh() }
-        .task(id: id) {
-            await refresh(restore: true)
-            while !Task.isCancelled { try? await Task.sleep(for: .seconds(30)); if !Task.isCancelled && !isBusy && !showPhotoPicker { await refresh() } }
-        }
-        .onChange(of: scenePhase) { _, phase in if phase == .active && !isBusy && !showPhotoPicker { Task { await refresh() } } }
-        .onChange(of: fields) { _, new in service.saveForm(new,id: id,owner: owner) }
-        .photosPicker(isPresented: $showPhotoPicker, selection: $photos,
-                      maxSelectionCount: max(1, 30 - (value?.assets.count ?? 0)), matching: .images)
-        .onChange(of: photos) { _, selected in
-            guard !selected.isEmpty else { return }
-            Task { await upload(selected) }
-        }
-        .alert("照片添加失败", isPresented: $photoImport.showError) {
-            Button("知道了", role: .cancel) { }
-        } message: { Text(photoImport.error ?? "请重新选择照片后重试") }
-        .sheet(item: $editingAsset) { a in CustomAssetSettings(asset: a, requestID: id,owner: owner) { value = $0 } }
-        .confirmationDialog("删除后停止云端访问并进入清理流程；已添加的本地手帐仍保留。",isPresented: $showDelete) {
-            Button("删除云端资料",role: .destructive) { Task { await remove() } }
-        }
+        .scrollContentBackground(.hidden)
+        .listRowSeparator(.hidden)
     }
+
     private func field(_ name: String) -> Binding<String> { Binding(get: { fields[name] ?? "" },set: { fields[name] = $0 }) }
     private func refresh(restore: Bool = false) async {
         restoreFormPending = restoreFormPending || restore
-        guard !refreshing else { refreshPending = true; return }
+        guard !refreshing, !busy else { refreshPending = true; return }
         refreshing = true
         defer { refreshing = false }
         repeat {
@@ -283,22 +195,53 @@ struct CustomizationDetailView: View {
                 if restoreFormPending {
                     fields = service.loadForm(id: id,owner: owner) ?? r.brief.merging(["title":r.title]) { _, new in new }
                     restoreFormPending = false
+                    if photoCount(r) == 0 { step = .photos }
+                    else if step == .review && CustomizationFormRules.storyIssue(fields) != nil { step = .story }
                 }
                 await service.read(r,owner: owner); error = nil
             } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         } while refreshPending && !Task.isCancelled
     }
+    private func finishWork() {
+        busy = false
+        if refreshPending { Task { await refresh() } }
+    }
+    private func persistForm() {
+        do { try service.saveForm(fields, id: id, owner: owner); localSaved = true; localSaveError = nil }
+        catch { localSaveError = "草稿未能保存到本机，请检查设备可用空间后重试。" }
+    }
     private func save() async {
-        guard let v = value else { return }; busy = true; defer { busy = false }
-        do { var brief = fields; let title = brief.removeValue(forKey: "title") ?? ""; value = try await service.action("edit",value: v,owner: owner,body: ["title":title,"brief":brief]); error = nil }
-        catch { self.error = error.localizedDescription }
+        guard let v = value, v.editable, !isBusy, !refreshing else { return }
+        persistForm()
+        busy = true; defer { finishWork() }
+        do {
+            var brief = fields
+            let title = brief.removeValue(forKey: "title") ?? ""
+            value = try await service.action("edit", value: v, owner: owner, body: ["title": title, "brief": brief])
+            error = nil; cloudSaved = true
+        } catch { self.error = error.localizedDescription }
     }
     private func submit() async {
-        await save(); guard error == nil else { return }; await perform("submit")
-        if error == nil { _ = await PushAdapter.shared.requestAuthorizationIfNotDetermined() }
+        guard let current = value, current.editable, !isBusy, !refreshing else { return }
+        if let problem = CustomizationFormRules.photoIssue(assets: current.assets, pendingJobs: pendingJobs.count, importing: photoImport.isImporting)
+            ?? CustomizationFormRules.storyIssue(fields) {
+            reveal(problem); return
+        }
+        persistForm()
+        busy = true; defer { finishWork() }
+        do {
+            var brief = fields
+            let title = brief.removeValue(forKey: "title")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let saved = try await service.action("edit", value: current, owner: owner, body: ["title": title, "brief": brief])
+            value = saved
+            let submitted = try await service.action("submit", value: saved, owner: owner)
+            value = submitted; error = nil; cloudSaved = true; issue = nil
+            await service.read(submitted, owner: owner)
+            _ = await PushAdapter.shared.requestAuthorizationIfNotDetermined()
+        } catch { self.error = error.localizedDescription }
     }
     private func perform(_ action: String,extra: [String: Any] = [:]) async {
-        guard let v = value else { return }; busy = true; defer { busy = false }
+        guard let v = value, !isBusy, !refreshing else { return }; busy = true; defer { finishWork() }
         do { value = try await service.action(action,value: v,owner: owner,body: extra); error = nil; if let value { await service.read(value,owner: owner) } }
         catch { self.error = error.localizedDescription }
     }
@@ -319,7 +262,7 @@ struct CustomizationDetailView: View {
     private func remove() async {
         guard let v = value else { return }
         struct Ack: Decodable { let deleted: Bool }
-        do { let _: Ack = try await service.request("requests/\(id)/delete/",owner: owner,method: .post,body: ["expected_revision":v.revision],key: "delete-\(v.revision)"); await service.purgeLocalRequest(id,owner: owner,templateIDs: Set(v.deliveries.map(\.template_id))); dismiss() }
+        do { let _: Ack = try await service.request("requests/\(id)/delete/",owner: owner,method: .post,body: ["expected_revision":v.revision],key: "delete-\(v.revision)"); await service.purgeLocalRequest(id,owner: owner,templateIDs: Set(v.deliveries.map(\.template_id))); UserDefaults.standard.removeObject(forKey: CustomizationFormRules.stepKey(owner: owner, requestID: id)); dismiss() }
         catch { self.error = error.localizedDescription }
     }
     @ViewBuilder private func deliverySection(_ d: CustomDelivery) -> some View {
@@ -349,13 +292,238 @@ struct CustomizationDetailView: View {
         }
     }
     private func add(_ d: CustomDelivery) async {
-        guard !busy else { return }; busy = true; defer { busy = false }
+        guard !busy else { return }; busy = true; defer { finishWork() }
         do { try service.require(owner); var book = d.book(owner: owner); book.customizationID = id; _ = try await downloads.enqueue(book: book,pageIDs: nil,owner: owner,target: nil,after: nil) }
         catch { self.error = error.localizedDescription }
     }
     private func eventTitle(_ action: String) -> String {
         ["submitted":"需求已提交","info_requested":"请补充资料","info_submitted":"补充资料已提交","accepted":"已受理","basis_updated":"制作方已确认补充资料","delivered":"成品已交付","redelivered":"新版已交付","revision_requested":"修改意见已提交","revision_started":"正在修改","completed":"已确认完成","due_changed":"预计日期已更新","cancelled":"已取消","rejected":"暂无法制作","delivery_withdrawn":"交付已撤回","delivery_rolled_back":"交付版本已调整","cancellation_requested":"取消申请已提交"][action] ?? action
     }
+}
+
+extension CustomizationDetailView {
+    private func draftFlow(_ request: CustomRequest) -> some View {
+        ScrollViewReader { scroll in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    CustomizationFormSteps(selection: step, onSelect: { selectStep($0, request: request) }).id("stepTop")
+                    if request.status == "needs_info" {
+                        DiaryLibraryNotice(message: request.events.last(where: { $0.action == "info_requested" })?.message.nonEmpty
+                            ?? "制作方需要你补充资料，请确认后重新提交。")
+                    }
+                    if let error { DiaryLibraryNotice(message: error) { Task { await refresh() } } }
+                    if let localSaveError { DiaryLibraryNotice(message: localSaveError, actionTitle: "重新保存") { persistForm() } }
+                    switch step {
+                    case .photos: photoStep(request)
+                    case .story: CustomizationStoryFields(fields: $fields, focus: $focusedField, issue: issue)
+                    case .review: reviewStep(request)
+                    }
+                    DisclosureGroup("需求信息与更多操作") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(request.number).font(.caption).textSelection(.enabled)
+                            if request.permits("cancel") {
+                                Button("撤回需求", role: .destructive) { Task { await perform("cancel") } }.disabled(isBusy || refreshing)
+                            }
+                            Button("删除云端定制资料", role: .destructive) { showDelete = true }.disabled(isBusy || refreshing)
+                        }.padding(.top, 12)
+                    }.font(.subheadline)
+                }
+                .frame(maxWidth: 640, alignment: .leading).padding(20).frame(maxWidth: .infinity)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .onChange(of: step) { _, _ in
+                focusedField = nil
+                if reduceMotion { scroll.scrollTo("stepTop", anchor: .top) }
+                else { withAnimation(.easeInOut(duration: 0.2)) { scroll.scrollTo("stepTop", anchor: .top) } }
+            }
+        }
+        .disabled(busy)
+    }
+    private func draftFooter(_ request: CustomRequest) -> some View {
+        VStack(spacing: 10) {
+            if step == .review,
+               let problem = CustomizationFormRules.photoIssue(assets: request.assets, pendingJobs: pendingJobs.count, importing: photoImport.isImporting) {
+                Button { reveal(problem) } label: { Label(problem.message, systemImage: "info.circle").font(.caption) }
+            }
+            HStack(spacing: 12) {
+                if step != .photos {
+                    Button("上一步") { selectStep(CustomizationFormStep(rawValue: step.rawValue - 1) ?? .photos, request: request) }
+                        .frame(minHeight: 44).disabled(isBusy || refreshing)
+                }
+                Button {
+                    focusedField = nil
+                    switch step {
+                    case .photos: selectStep(.story, request: request)
+                    case .story: selectStep(.review, request: request)
+                    case .review: Task { await submit() }
+                    }
+                } label: {
+                    HStack {
+                        if busy { ProgressView() }
+                        Text(step == .photos ? "下一步 · 讲讲故事" : step == .story ? "下一步 · 确认需求" : request.status == "needs_info" ? "提交补充资料" : "提交定制需求")
+                    }.frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent).controlSize(.large)
+                .disabled(isBusy || refreshing || (step == .review && (!request.permits("submit") || CustomizationFormRules.photoIssue(assets: request.assets, pendingJobs: pendingJobs.count, importing: photoImport.isImporting) != nil)))
+            }
+            Label(saveHint, systemImage: localSaveError == nil ? "checkmark.circle" : "exclamationmark.circle")
+                .font(.caption).foregroundStyle(localSaveError == nil ? DiaryLibraryStyle.secondary : Color.red)
+        }
+        .frame(maxWidth: 640).padding(.horizontal, 20).padding(.vertical, 12).frame(maxWidth: .infinity)
+        .background(.regularMaterial)
+    }
+    private func selectStep(_ target: CustomizationFormStep, request: CustomRequest) {
+        guard !isBusy else { return }
+        if let problem = CustomizationFormRules.navigationIssue(from: step, to: target, fields: fields, selectedPhotos: photoCount(request)) {
+            reveal(problem); return
+        }
+        issue = nil; step = target; persistForm()
+    }
+    private func reveal(_ problem: CustomizationFormIssue) {
+        issue = problem; step = problem.step
+        if problem.step == .story { focusedField = problem.field }
+    }
+    private func unregisteredJobs(_ request: CustomRequest) -> [CustomUploadJob] {
+        let registered = Set(request.assets.map { $0.client_id.lowercased() })
+        return pendingJobs.filter { !registered.contains($0.id.uuidString.lowercased()) }
+    }
+    private func photoCount(_ request: CustomRequest) -> Int { request.assets.count + unregisteredJobs(request).count }
+    private func photoStep(_ request: CustomRequest) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("先选几张喜欢的照片").font(.title2.weight(.semibold))
+                Text("选择 1～30 张。上传期间可以继续填写故事，之后也能调整照片顺序和要求。")
+                    .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack { photoCountLabel(request); Spacer(); addPhotoButton(request) }
+                VStack(alignment: .leading) { photoCountLabel(request); addPhotoButton(request) }
+            }
+            if let message = photoImport.message { Label(message, systemImage: photoImport.isImporting ? "photo" : "checkmark.circle").font(.footnote).foregroundStyle(DiaryLibraryStyle.secondary) }
+            if let problem = photoImport.error { Label(problem, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red) }
+            if issue?.step == .photos { Text(issue?.message ?? "").font(.footnote).foregroundStyle(.red) }
+            if request.assets.isEmpty && unregisteredJobs(request).isEmpty {
+                Button(action: choosePhotos) {
+                    VStack(spacing: 12) {
+                        Image(systemName: "photo.badge.plus").font(.largeTitle.weight(.light))
+                        Text("添加你的旅行与生活照片").font(.headline)
+                        Text("之后可以逐张添加备注、标记必用照片。").font(.footnote).foregroundStyle(DiaryLibraryStyle.secondary)
+                    }.frame(maxWidth: .infinity, minHeight: 170).padding(20)
+                        .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 16))
+                }.buttonStyle(.plain).disabled(isBusy || refreshing)
+            } else {
+                photoGrid(request)
+            }
+            if !pendingJobs.isEmpty { uploadTasks }
+            DisclosureGroup("照片使用说明") {
+                Text("照片仅用于本次定制。可逐张设置是否允许裁切、标记必用及封面偏好。Live Photo 使用静态照片，上传前会移除位置信息。")
+                    .font(.footnote).foregroundStyle(DiaryLibraryStyle.secondary).padding(.top, 8)
+            }.font(.subheadline)
+        }
+    }
+    private func photoCountLabel(_ request: CustomRequest) -> some View {
+        Text("已选 \(photoCount(request))/30 张").font(.subheadline.weight(.medium)).monospacedDigit()
+    }
+    private func addPhotoButton(_ request: CustomRequest) -> some View {
+        Button(action: choosePhotos) { Label("添加照片", systemImage: "plus").frame(minHeight: 44) }
+            .disabled(isBusy || photoCount(request) >= 30)
+    }
+    private func photoGrid(_ request: CustomRequest) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 12)], alignment: .leading, spacing: 16) {
+            ForEach(request.assets) { asset in
+                Button { editingAsset = asset } label: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        GeometryReader { geometry in
+                            Group {
+                                if asset.thumbnail_url == nil, let job = service.jobs.first(where: { $0.owner == owner && $0.requestID == id && $0.id.uuidString.lowercased() == asset.client_id.lowercased() }) {
+                                    CustomLocalPhotoThumbnail(file: job.file)
+                                } else { CustomPrivateImage(raw: asset.thumbnail_url) }
+                            }.frame(width: geometry.size.width, height: geometry.size.height)
+                        }.aspectRatio(1, contentMode: .fit)
+                            .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 12)).clipShape(RoundedRectangle(cornerRadius: 12))
+                        Text(asset.note.isEmpty ? "照片 \(asset.position + 1)" : asset.note).font(.subheadline).lineLimit(2)
+                        Text(asset.status == "ready" ? (asset.must_use ? "必用 · 编辑要求" : "已上传 · 编辑要求") : asset.status == "failed" ? "上传失败 · 查看要求" : "上传中 · 编辑要求")
+                            .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain).disabled(isBusy || refreshing)
+            }
+            ForEach(unregisteredJobs(request)) { job in
+                VStack(alignment: .leading, spacing: 8) {
+                    CustomLocalPhotoThumbnail(file: job.file).aspectRatio(1, contentMode: .fit)
+                        .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+                    Text("已添加照片").font(.subheadline)
+                    Text(job.state).font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                }
+            }
+        }
+    }
+    private var uploadTasks: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("照片上传").font(.headline)
+            ForEach(pendingJobs) { job in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(job.state).font(.subheadline)
+                    if let progress = job.progress { ProgressView(value: progress) }
+                    if let problem = job.error { Text(problem).font(.footnote).foregroundStyle(.red) }
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 16) { jobActions(job) }
+                        VStack(alignment: .leading, spacing: 8) { jobActions(job) }
+                    }
+                }
+                if job.id != pendingJobs.last?.id { Divider() }
+            }
+            Button("刷新照片状态") { Task { await refresh() } }.frame(minHeight: 44)
+        }.padding(16).background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 16))
+    }
+    @ViewBuilder private func jobActions(_ job: CustomUploadJob) -> some View {
+        Button("继续 / 重试") { service.resume(job.id) }.frame(minHeight: 44)
+        Button("暂停") { service.pause(job.id) }.frame(minHeight: 44)
+        Button("移除", role: .destructive) {
+            Task { do { try await service.discard(job.id); await refresh() } catch { self.error = error.localizedDescription } }
+        }.frame(minHeight: 44)
+    }
+    private func reviewStep(_ request: CustomRequest) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("确认这次想留下的回忆").font(.title2.weight(.semibold))
+                Text("提交后由制作方受理，再与你确认制作安排。")
+                    .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
+            }
+            if let issue, issue.step == .story { Text(issue.message).font(.footnote).foregroundStyle(.red) }
+            VStack(alignment: .leading, spacing: 16) {
+                HStack { Text("主题与故事").font(.headline); Spacer(); Button("修改") { selectStep(.story, request: request) }.frame(minHeight: 44) }
+                Text(fields["title"] ?? "").font(.title3.weight(.semibold))
+                Text(fields["description"] ?? "").font(.body).fixedSize(horizontal: false, vertical: true)
+                ForEach(["category", "style", "important_text", "story_order", "avoid"], id: \.self) { key in
+                    if let text = fields[key], !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(["category":"场景", "style":"风格偏好", "important_text":"重要文字", "story_order":"顺序与页数偏好", "avoid":"不希望出现的内容"][key] ?? key)
+                                .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                            Text(text).font(.subheadline)
+                        }
+                    }
+                }
+            }.padding(16).background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 16))
+            VStack(alignment: .leading, spacing: 12) {
+                HStack { Text("照片与要求").font(.headline); Spacer(); Button("修改") { selectStep(.photos, request: request) }.frame(minHeight: 44) }
+                Text("\(request.assets.count) 张照片 · \(request.assets.filter(\.must_use).count) 张必用")
+                    .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
+                ForEach(request.assets.filter { $0.must_use || $0.cover_preferred || !$0.crop_allowed || !$0.note.isEmpty }) { asset in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("照片 \(asset.position + 1)").font(.subheadline.weight(.medium))
+                        Text(([asset.must_use ? "必用" : nil, asset.cover_preferred ? "封面偏好" : nil, !asset.crop_allowed ? "不可裁切" : nil].compactMap { $0 } + (asset.note.isEmpty ? [] : [asset.note])).joined(separator: " · "))
+                            .font(.footnote).foregroundStyle(DiaryLibraryStyle.secondary)
+                    }
+                }
+            }.padding(16).background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 16))
+            Label("资料仅用于本次制作与交付，默认不公开。请确认你有权使用所选照片。", systemImage: "lock")
+                .font(.footnote).foregroundStyle(DiaryLibraryStyle.secondary)
+        }
+    }
+}
+
+private extension String {
+    var nonEmpty: String? { isEmpty ? nil : self }
 }
 
 private struct CustomSubmissionRecord: View {
@@ -403,7 +571,7 @@ private struct CustomAssetSettings: View {
     }
 }
 
-private struct CustomLocalPhotoThumbnail: View {
+struct CustomLocalPhotoThumbnail: View {
     let file: URL
     @State private var image: UIImage?
     var body: some View {
@@ -427,7 +595,7 @@ private struct CustomLocalPhotoThumbnail: View {
     }
 }
 
-private struct CustomPrivateImage: View {
+struct CustomPrivateImage: View {
     let raw: String?
     @State private var image: UIImage?
     @State private var loadedPath: String?

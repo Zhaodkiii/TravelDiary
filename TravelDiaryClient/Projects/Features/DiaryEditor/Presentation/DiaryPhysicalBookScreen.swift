@@ -272,8 +272,8 @@ struct DiaryPhysicalBookScreen: View {
             if let data {
                 let (asset, image) = try await store.importImage(data, documentID: document.id)
                 document.assets[asset.id] = asset; images[asset.id] = image
-                document.appendObject(containing: DiaryLayer.photo(asset: asset,
-                    center: CGPoint(x: book.defaultPageSize.width / 2, y: book.defaultPageSize.height / 2)))
+                document.objects[document.rootContentID]?.layers.insert(
+                    DiaryLayer.photoBackground(asset: asset, pageSize: book.defaultPageSize), at: 0)
             }
             try await store.save(document)
             book = try await store.loadBook()

@@ -141,6 +141,19 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
                           transform: DiaryTransform(position: center, pivot: CGPoint(x: size.width / 2, y: size.height / 2)),
                           size: size, assetID: asset.id)
     }
+
+    /// 从照片新建页面时，将整图按比例铺满画布，作为可替换的底层背景。
+    static func photoBackground(asset: DiaryAsset, pageSize: CGSize) -> DiaryLayer {
+        let scale = max(pageSize.width / asset.pixelSize.width, pageSize.height / asset.pixelSize.height)
+        let size = CGSize(width: asset.pixelSize.width * scale, height: asset.pixelSize.height * scale)
+        var layer = DiaryLayer(name: "背景", kind: .sticker,
+            transform: DiaryTransform(position: CGPoint(x: pageSize.width / 2, y: pageSize.height / 2),
+                                      pivot: CGPoint(x: size.width / 2, y: size.height / 2)),
+            size: size, assetID: asset.id)
+        layer.semanticKind = .background
+        layer.isLibraryBackground = true
+        return layer
+    }
 }
 
 /// 语义分类独立于绘制类型；nil 表示普通图层，不从显示名称推断。

@@ -29,7 +29,7 @@ struct URLSessionNetworkTransport: SupportNetworkTransport {
         let requestId = request.value(forHTTPHeaderField: "X-Request-ID") ?? "-"
 
         let requestHeaders = NetworkLogSanitizer.headersPreview(request.allHTTPHeaderFields)
-        let privatePrint = ["/print/", "/diary-customizations/", "/diary-presets/", "/device/register/"].contains { request.url?.path.contains($0) == true }
+        let privatePrint = ["/print/", "/support/", "/diary-customizations/", "/diary-presets/", "/device/register/"].contains { request.url?.path.contains($0) == true }
         let requestBody = privatePrint ? "<private payload>" : NetworkLogSanitizer.bodyFullUTF8(data: request.httpBody, contentType: request.value(forHTTPHeaderField: "Content-Type"))
 
         logger.info(
@@ -113,6 +113,7 @@ private enum NetworkLogSanitizer {
     static func loggableURL(_ url: URL?) -> String {
         guard let url else { return "-" }
         var path = url.path
+        if path.contains("/support/") { return path }
         if let query = url.query, query.isEmpty == false {
             path += "?\(query)"
         }

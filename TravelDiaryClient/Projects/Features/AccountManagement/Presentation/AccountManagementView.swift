@@ -6,33 +6,31 @@ struct AccountManagementView: View {
     let session: UserSession
     @State private var showSignOutConfirm = false
     @State private var showAdvancedOptions = false
+    @State private var showDangerOptions = false
 
     var body: some View {
         ZStack {
             ScrollView {
-                VStack(spacing: 24) {
+                VStack(spacing: 20) {
                     if let profile = viewModel.profile {
                         AccountProfileCard(profile: profile)
                         accountInfoSection(profile)
                     } else if viewModel.isLoadingProfile {
-                        ProgressView()
-                            .padding(.top, 48)
+                        ProgressView().padding(.top, 48)
                     }
-
                     if let identityList = viewModel.identityList {
                         identitySection(identityList)
                     } else if viewModel.isLoadingIdentities {
-                        ProgressView(L10n.text("account_management.identity.loading"))
-                            .padding(.top, 8)
+                        ProgressView(L10n.text("account_management.identity.loading")).padding(.top, 8)
                     }
-
                     sessionSection
                     dangerSection
                 }
-                .padding(16)
-                .padding(.bottom, 48)
+                .frame(maxWidth: 640).frame(maxWidth: .infinity)
+                .padding(20).padding(.bottom, 48)
             }
-            .background(Color(.systemGroupedBackground))
+            .scrollDismissesKeyboard(.interactively)
+            .background(DiaryLibraryStyle.background)
 
             if viewModel.flowState.isOverlayPresented {
                 deactivationOverlay
@@ -44,6 +42,7 @@ struct AccountManagementView: View {
         }
         .navigationTitle(L10n.text("settings.account_management"))
         .navigationBarTitleDisplayMode(.inline)
+        .tint(DiaryLibraryStyle.accent)
         .task {
             await viewModel.load(session: session)
         }
@@ -79,41 +78,53 @@ struct AccountManagementView: View {
     }
 
     private func accountInfoSection(_ profile: AccountProfile) -> some View {
-        AccountSection(title: L10n.text("account_management.section.account_info")) {
-            AccountInfoRow(
-                icon: "person.text.rectangle",
-                tint: .blue,
-                title: L10n.text("account_management.field.account_id"),
-                value: "\(profile.accountID)"
-            )
-            Divider()
-            AccountInfoRow(
-                icon: profile.signInMethod == .phone ? "phone.fill" : "envelope.fill",
-                tint: .green,
-                title: profile.signInMethod == .phone
-                    ? L10n.text("account_management.field.phone")
-                    : L10n.text("settings.email"),
-                value: profile.contact
-            )
-            Divider()
-            AccountInfoRow(
-                icon: "checkmark.shield.fill",
-                tint: .purple,
-                title: L10n.text("settings.sign_in_method"),
-                value: profile.signInMethodDescription
-            )
-            Divider()
-            AccountInfoRow(
-                icon: "clock.fill",
-                tint: .orange,
-                title: L10n.text("settings.sign_in_time"),
-                value: profile.signedInAt.formatted(date: .abbreviated, time: .shortened)
-            )
+        AccountSection(title: "账户信息") {
+            AccountInfoRow(icon: "person.text.rectangle", tint: DiaryLibraryStyle.accent,
+                           title: "账户 ID", value: "\(profile.accountID)")
+            Divider().overlay(DiaryLibraryStyle.line)
+            AccountInfoRow(icon: profile.signInMethod == .phone ? "phone.fill" : "envelope.fill",
+                           tint: DiaryLibraryStyle.accent,
+                           title: profile.signInMethod == .phone ? "登录手机号" : profile.signInMethod == .apple ? "Apple 转发邮箱" : "登录邮箱",
+                           value: maskedContact(profile.contact, method: profile.signInMethod))
+            Divider().overlay(DiaryLibraryStyle.line)
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(profile.contact.isEmpty ? "未提供联系地址" : profile.contact)
+                        .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
+                        .textSelection(.enabled).lineLimit(2).minimumScaleFactor(0.85)
+                    Text("登录时间 · " + profile.signedInAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 56).padding(.bottom, 14)
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "info.circle").font(.subheadline).foregroundStyle(DiaryLibraryStyle.accent).frame(width: 40)
+                    Text("完整账户信息").font(.subheadline).foregroundStyle(DiaryLibraryStyle.ink)
+                }.padding(16).contentShape(Rectangle())
+            }.tint(DiaryLibraryStyle.accent)
         }
     }
 
+    private var profilePrimaryDescription: String {
+        viewModel.profile?.signInMethodDescription ?? "当前登录方式"
+    }
+
+    private func maskedContact(_ value: String, method: UserSession.SignInMethod) -> String {
+        guard !value.isEmpty else { return "未提供" }
+        if method == .phone {
+            let digits = value.filter(\.isNumber)
+            guard digits.count > 7 else { return value }
+            return String(digits.prefix(3)) + "••••" + String(digits.suffix(2))
+        }
+        guard let at = value.firstIndex(of: "@") else { return value }
+        let domain = value[value.index(after: at)...]
+        return String(value.prefix(1)) + "•••@" + domain
+    }
+
     private func identitySection(_ identities: AccountIdentityList) -> some View {
-        AccountSection(title: L10n.text("account_management.identity.section.title")) {
+        AccountSection(title: "登录与绑定方式") {
+            Text("\(profilePrimaryDescription) 可用来登录；手机号和邮箱也可单独绑定。")
+                .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.top, 14)
             ForEach(Array(identities.identities.enumerated()), id: \.offset) { index, status in
                 if index > 0 {
                     Divider()
@@ -133,11 +144,11 @@ struct AccountManagementView: View {
                 showSignOutConfirm = true
             } label: {
                 HStack(spacing: 12) {
-                    AccountSquareBadge(color: .orange, icon: "rectangle.portrait.and.arrow.right")
+                    AccountSquareBadge(color: DiaryLibraryStyle.accent, icon: "rectangle.portrait.and.arrow.right")
                     VStack(alignment: .leading, spacing: 4) {
                         Text(L10n.text("settings.sign_out"))
                             .font(.body.weight(.semibold))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(DiaryLibraryStyle.accent)
                         Text(L10n.text("account_management.sign_out.subtitle"))
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -155,7 +166,8 @@ struct AccountManagementView: View {
     }
 
     private var dangerSection: some View {
-        AccountSection(title: L10n.text("account_management.section.danger")) {
+        DisclosureGroup(isExpanded: $showDangerOptions) {
+            AccountSection(title: L10n.text("account_management.section.danger")) {
             VStack(alignment: .leading, spacing: 14) {
                 Text(L10n.text("account_management.deactivation.intro"))
                     .font(.footnote)
@@ -177,7 +189,7 @@ struct AccountManagementView: View {
                     .font(.footnote.weight(.medium))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.blue)
+                .foregroundStyle(DiaryLibraryStyle.accent)
 
                 if showAdvancedOptions {
                     VStack(spacing: 12) {
@@ -245,7 +257,19 @@ struct AccountManagementView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "hand.raised").foregroundStyle(DiaryLibraryStyle.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("账户注销选项").font(.subheadline.weight(.medium)).foregroundStyle(DiaryLibraryStyle.ink)
+                    Text("查看注销说明与账户数据选项").font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
         }
+        .tint(DiaryLibraryStyle.secondary)
+        .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(DiaryLibraryStyle.line.opacity(0.65), lineWidth: 0.75))
     }
 
     @ViewBuilder
@@ -534,17 +558,14 @@ private struct AccountSection<Content: View>: View {
             Text(title)
                 .font(.caption.weight(.semibold))
                 .textCase(.uppercase)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DiaryLibraryStyle.secondary)
                 .padding(.horizontal, 4)
 
             VStack(spacing: 0) {
                 content()
             }
-            .background(.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color(.separator).opacity(0.35))
-            }
+            .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(DiaryLibraryStyle.line.opacity(0.65), lineWidth: 0.75))
         }
     }
 }

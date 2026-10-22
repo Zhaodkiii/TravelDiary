@@ -13,6 +13,7 @@ struct DiaryBatchPhotoSheet: View {
     var finishesImport = false
     var embedded = false
     var creationFlow = false
+    var addsToPage = false
     var onPrepared: (([URL], DiaryPhotoSlot.Fill) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var documents: [DiaryDocument] = []
@@ -22,13 +23,18 @@ struct DiaryBatchPhotoSheet: View {
 
     /// Homepage creation and every preset import use the same photo preparation page.
     private var preparesPresetPhotos: Bool { creationFlow || (preset != nil && onPrepared != nil) }
-    private var addsPhotos: Bool { preparesPresetPhotos && slots.isEmpty }
+    private var addsPhotos: Bool { addsToPage || (preparesPresetPhotos && slots.isEmpty) }
     private var preparationActionTitle: String {
+        if addsToPage { return "添加 \(selection.count) 张照片" }
+        if session != nil { return "替换全部照片" }
         if creationFlow { return selection.isEmpty ? "跳过并创建" : "创建" }
         if finishesImport { return selection.isEmpty ? "跳过并完成添加" : "完成添加" }
         return selection.isEmpty ? "跳过，下一步" : "下一步"
     }
-    private var photoLimit: Int { addsPhotos ? recommendedAdditionCount : slots.count }
+    private var photoLimit: Int {
+        if addsToPage, let session { return max(0, min(30, 200 - session.scopeLayers.count)) }
+        return addsPhotos ? recommendedAdditionCount : slots.count
+    }
     @State private var selection: [PhotosPickerItem] = []
     @State private var thumbnails: [UIImage?] = []
     private let fill: DiaryPhotoSlot.Fill = .cover
@@ -48,15 +54,16 @@ struct DiaryBatchPhotoSheet: View {
 
     var body: some View {
         Group {
-            if preparesPresetPhotos { creationContent }
+            if preparesPresetPhotos || session != nil { creationContent }
             else if embedded { content } else { NavigationStack { content } }
         }
     }
     private var creationContent: some View {
         VStack(spacing: 12) {
-            Text(addsPhotos
+            Text(addsToPage ? "可一次添加最多 \(photoLimit) 张照片"
+                 : addsPhotos
                  ? "已选 \(documents.count) 页，建议添加 \(photoLimit) 张照片"
-                 : "这本手帐可一键替换 \(slots.count) 张照片")
+                 : "\(session == nil ? "这本手帐" : "当前页面")可一键替换 \(slots.count) 张照片")
                 .font(.subheadline)
                 .foregroundStyle(.secondary).multilineTextAlignment(.center)
             if !slots.isEmpty {
@@ -88,7 +95,8 @@ struct DiaryBatchPhotoSheet: View {
                 Text(addsPhotos ? "添加照片" : "选择替换照片")
                     .font(.subheadline.weight(.semibold))
                 if addsPhotos {
-                    Text(photoLimit > 0 ? "根据页面空间建议数量，选好后自动配相框并排入手帐。" : "当前页面空间不足，请返回增加页面或调整内容。")
+                    Text(addsToPage ? "自动配框并优先排入空白区域，页面已满时叠加放置。"
+                         : photoLimit > 0 ? "根据页面空间建议数量，选好后自动配相框并排入手帐。" : "当前页面空间不足，请返回增加页面或调整内容。")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 ScrollView {
@@ -145,20 +153,22 @@ struct DiaryBatchPhotoSheet: View {
             }
             Text("已选 \(selection.count) / \(photoLimit)")
                 .font(.footnote).foregroundStyle(.secondary)
-            Text(addsPhotos ? "按选择顺序分配到页面，自动添加相框并排版。创建后仍可编辑。" : "按选择顺序替换，未选择的位置保留预设照片。创建后仍可编辑。")
+            Text(addsToPage ? "按选择顺序添加，可移除已选照片。添加后仍可调整位置和相框。"
+                 : session != nil ? "按选择顺序替换当前页面照片，保留原相框与排版。"
+                 : addsPhotos ? "按选择顺序分配到页面，自动添加相框并排版。创建后仍可编辑。" : "按选择顺序替换，未选择的位置保留预设照片。创建后仍可编辑。")
                 .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(DiaryLibraryStyle.background)
-        .navigationTitle(creationFlow ? "第 3 步 · 添加照片" : "第 2 步 · 选择照片")
+        .navigationTitle(addsToPage ? "添加照片" : session != nil ? "一键替换照片" : creationFlow ? "第 3 步 · 添加照片" : "第 2 步 · 选择照片")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(busy)
         .safeAreaInset(edge: .bottom) {
             DiaryImportFloatingActions {
                 Button { Task { await replace() } } label: {
                     Text(preparationActionTitle).frame(maxWidth: .infinity)
-                }.disabled(!ready)
+                }.disabled(!ready || (session != nil && (selection.isEmpty || (!addsToPage && selection.count != slots.count))))
             }
         }
         .disabled(busy)
@@ -346,12 +356,30 @@ struct DiaryBatchPhotoSheet: View {
         guard !busy, ready else { return }
         if preparesPresetPhotos {
             guard onPrepared != nil, preparationDirectory != nil, selection.count <= photoLimit else { return }
+        } else if addsToPage {
+            guard session != nil, !selection.isEmpty, selection.count <= photoLimit else { return }
         } else {
             guard selection.count == slots.count, !slots.isEmpty else { return }
         }
         busy = true; message = nil
         defer { busy = false }
         do {
+            if addsToPage, let session {
+                var photos: [Data] = []
+                for (index, item) in selection.enumerated() {
+                    progress = "正在准备第 \(index + 1)/\(selection.count) 张照片…"
+                    guard let data = try await item.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage }
+                    photos.append(data)
+                }
+                progress = "正在添加照片…"
+                guard await session.importPhotos(photos) else {
+                    message = session.errorMessage ?? "照片添加失败，请重试。"
+                    session.errorMessage = nil
+                    return
+                }
+                dismiss()
+                return
+            }
             if let onPrepared, let preparationDirectory {
                 try FileManager.default.createDirectory(at: preparationDirectory, withIntermediateDirectories: true)
                 var files: [URL] = []
@@ -396,6 +424,6 @@ struct DiaryBatchPhotoSheet: View {
                 try await store.savePhotoReplacementBatch(updated.enumerated().filter { changed.contains($0.offset) }.map(\.element), expected: expectedBook)
             }
             dismiss()
-        } catch { message = "替换未完成，原照片保持不变。\(error.localizedDescription)" }
+        } catch { message = "\(addsToPage ? "添加未完成" : "替换未完成")，原照片保持不变。\(error.localizedDescription)" }
     }
 }

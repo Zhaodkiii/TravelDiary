@@ -3,6 +3,34 @@ import UIKit
 @testable import TravelDiary
 
 @MainActor struct DiaryEmptyPhotoFrameTests {
+    @Test func importedMaterialFrameOffersPhotoInsertionAfterReopening() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DiaryDocumentStore(ownerID: "imported-frame-tests", baseDirectory: root)
+        let session = DiaryEditorSession(document: DiaryDocument(), images: [:], store: store)
+        let item = try #require(DiaryPhotoFrameCatalog.items.first { $0.title == "梧桐街道_双胶带" })
+        let data = try #require(item.image?.pngData())
+        #expect(await session.importPhoto(data, asSticker: true, stickerName: item.title,
+            semanticKind: .photo, subcategory: "frame", renderType: "image"))
+        let selection = try #require(session.selected)
+        #expect(selection.kind == .object)
+        let target = try #require(session.selectedEmptyPhotoFrameTarget)
+        let frame = try #require(session.document.layer(target.frameID))
+        #expect(frame.kind == .sticker)
+        #expect(frame.semanticKind == .photo)
+        #expect(frame.subcategory == "frame")
+        #expect(frame.renderType == "image")
+        #expect(session.contextActions.contains(.addPhotoToFrame))
+        try await store.save(session.document)
+        let loaded = try await store.load(session.document.id)
+        let reopened = DiaryEditorSession(document: loaded.document, images: loaded.images, store: store)
+        reopened.select(selection.id)
+        #expect(reopened.selectedEmptyPhotoFrameTarget == target)
+        #expect(await reopened.addPhotoToEmptyFrame(try photoData(), target: target))
+        #expect(reopened.selectedPhotos.count == 1)
+        #expect(!reopened.contextActions.contains(.addPhotoToFrame))
+    }
+
     private func photoData() throws -> Data {
         let format = UIGraphicsImageRendererFormat(); format.scale = 1
         return try #require(UIGraphicsImageRenderer(size: CGSize(width: 160, height: 220), format: format).image { renderer in

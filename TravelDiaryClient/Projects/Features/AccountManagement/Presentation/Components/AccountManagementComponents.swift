@@ -3,30 +3,37 @@ import SwiftUI
 
 struct AccountProfileCard: View {
     let profile: AccountProfile
+    private var displayName: String { AccountProfileDisplayName.resolve(profile.displayName) }
 
     var body: some View {
-        VStack(spacing: 10) {
+        HStack(spacing: 15) {
             ZStack {
-                Circle()
-                    .fill(Color.blue)
-                    .frame(width: 76, height: 76)
-                Image(systemName: "person.fill")
-                    .font(.system(size: 34, weight: .semibold))
-                    .foregroundStyle(.white)
+                Circle().fill(DiaryLibraryStyle.accent.opacity(0.13)).frame(width: 58, height: 58)
+                Image(systemName: profile.signInMethod == .device ? "person.crop.circle" : "person.fill")
+                    .font(.system(size: 25, weight: .medium)).foregroundStyle(DiaryLibraryStyle.accent)
             }
-            Text(profile.displayName.isEmpty ? profile.contact : profile.displayName)
-                .font(.title3.weight(.semibold))
-            Text(profile.signInMethodDescription)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(displayName).font(.title3.weight(.semibold)).foregroundStyle(DiaryLibraryStyle.ink).lineLimit(1)
+                Label(profile.signInMethodDescription, systemImage: "checkmark.shield")
+                    .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+            }
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity)
-        .padding(20)
-        .background(.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(.separator).opacity(0.35))
-        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(20)
+        .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(DiaryLibraryStyle.line.opacity(0.65), lineWidth: 0.75))
+    }
+}
+
+nonisolated enum AccountProfileDisplayName {
+    static func resolve(_ value: String) -> String {
+        let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowered = name.lowercased()
+        guard !name.isEmpty,
+              !lowered.hasPrefix("device_"),
+              !lowered.hasPrefix("guest_"),
+              !lowered.hasPrefix("auto_") else { return "我的账户" }
+        return name
     }
 }
 
@@ -39,15 +46,15 @@ struct AccountInfoRow: View {
     var body: some View {
         HStack(spacing: 12) {
             AccountSquareBadge(color: tint, icon: icon)
-            Text(title)
+            Text(title).foregroundStyle(DiaryLibraryStyle.ink)
             Spacer(minLength: 12)
             Text(value)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DiaryLibraryStyle.secondary)
                 .multilineTextAlignment(.trailing)
-                .lineLimit(2)
+                .lineLimit(1).minimumScaleFactor(0.7)
                 .font(.subheadline)
         }
-        .padding(16)
+        .padding(.horizontal, 16).padding(.vertical, 14).frame(minHeight: 68)
     }
 }
 
@@ -343,12 +350,12 @@ struct AccountIdentityRow: View {
                     .font(.body.weight(.medium))
                 Text(statusLabel)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DiaryLibraryStyle.secondary).lineLimit(1).minimumScaleFactor(0.8)
             }
             Spacer(minLength: 12)
             actionButton
         }
-        .padding(16)
+        .padding(.horizontal, 16).padding(.vertical, 14).frame(minHeight: 72)
     }
 
     @ViewBuilder

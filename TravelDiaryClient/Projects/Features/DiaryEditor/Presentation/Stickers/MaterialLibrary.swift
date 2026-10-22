@@ -102,6 +102,19 @@ struct MaterialLibraryBrowser: View {
     @State private var adding = false
     @State private var preview: CloudMaterial?
     @State private var requestID = UUID()
+
+    init(session: DiaryEditorSession? = nil, replacingID: UUID? = nil,
+         templateID: String? = nil, templateVersion: Int? = nil,
+         type: String = "sticker", keepsOpenAfterAdding: Bool = false) {
+        self.session = session
+        self.replacingID = replacingID
+        self.templateID = templateID
+        self.templateVersion = templateVersion
+        self.type = type
+        self.keepsOpenAfterAdding = keepsOpenAfterAdding
+        _kind = State(initialValue: type == "sticker" ? "illustration" : "")
+    }
+
     private var isLocal: Bool { kind == "builtin" }
     private var title: String { type == "background" ? "背景" : "贴纸" }
     private var categories: [(String, String)] {
@@ -333,7 +346,9 @@ struct MaterialLibraryBrowser: View {
             } else if let replacingID {
                 imported = await session.importPhoto(data, replacing: replacingID)
             } else {
-                imported = await session.importPhoto(data, asSticker: true, stickerName: item.name, semanticKind: DiaryLayerSemanticKind(rawValue: item.kind))
+                imported = await session.importPhoto(data, asSticker: true, stickerName: item.name,
+                    semanticKind: DiaryLayerSemanticKind(rawValue: item.kind),
+                    subcategory: item.subcategory, renderType: "image")
             }
             if imported { pausedItem = nil; finishAdding() }
             else { error = session.errorMessage }

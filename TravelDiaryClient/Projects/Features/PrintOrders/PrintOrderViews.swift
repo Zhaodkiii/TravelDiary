@@ -582,21 +582,114 @@ struct PrintOrdersScreen: View {
     @State private var busy = false
     @State private var error: String?
     var body: some View {
-        List {
-            let local = service.jobs.filter { $0.owner == owner && $0.state != "已上传" }
-            if !local.isEmpty { Section("待上传 / 可恢复") { ForEach(local) { job in NavigationLink { PrintUploadScreen(id: job.id, owner: owner) } label: { VStack(alignment: .leading) { Text(job.submission.title); Text(job.state).font(.caption).foregroundStyle(.secondary) } } } } }
-            Section("印制订单") {
-                ForEach(orders) { order in NavigationLink { PrintOrderDetailScreen(id: order.id, owner: owner) } label: {
-                    VStack(alignment: .leading, spacing: 6) { HStack { Text(order.title).font(.headline); Spacer(); Text(order.statusText).font(.caption) }
-                        Text("\(order.spec.title) · \(order.quantity) 份 · \(PrintText.money(order.total_fen))").font(.subheadline).foregroundStyle(.secondary)
+        let local = service.jobs.filter { $0.owner == owner && $0.state != "已上传" }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("把旅途，装订成册").font(.title2.bold()).foregroundStyle(DiaryLibraryStyle.ink)
+                    Text("查看印制进度，也可以继续完成尚未上传的生产文件。")
+                        .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
+                }
+                if !local.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        sectionHeading("待上传 / 可恢复", detail: "\(local.count) 项")
+                        ForEach(local) { job in
+                            NavigationLink { PrintUploadScreen(id: job.id, owner: owner) } label: {
+                                HStack(spacing: 14) {
+                                    Image(systemName: "arrow.up.doc").font(.title3).foregroundStyle(DiaryLibraryStyle.accent)
+                                        .frame(width: 42, height: 42).background(DiaryLibraryStyle.background, in: RoundedRectangle(cornerRadius: 12))
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(job.submission.title).font(.headline).foregroundStyle(DiaryLibraryStyle.ink)
+                                        Text(job.state).font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(DiaryLibraryStyle.secondary.opacity(0.65))
+                                }.padding(16).background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+                            }.buttonStyle(.plain)
+                        }
                     }
-                } }
-                if orders.isEmpty && !busy { Text("还没有印制订单。完成手帐后，在导出页选择“装订成册”。").foregroundStyle(.secondary) }
-                if next != nil { Button("加载更多") { Task { await load(more: true) } }.disabled(busy) }
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    sectionHeading("印制订单", detail: orders.isEmpty ? nil : "\(orders.count) 笔")
+                    if orders.isEmpty && !busy && error == nil {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Image(systemName: "book.closed").font(.title2).foregroundStyle(DiaryLibraryStyle.accent)
+                            Text("还没有印制订单").font(.headline).foregroundStyle(DiaryLibraryStyle.ink)
+                            Text("完成旅行手帐后，在导出页选择“装订成册”，把回忆做成一本可以珍藏的书。")
+                                .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(20)
+                            .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 20))
+                    }
+                    ForEach(orders) { order in orderCard(order) }
+                    if next != nil {
+                        Button { Task { await load(more: true) } } label: {
+                            HStack { Spacer(); if busy { ProgressView().controlSize(.small) }; Text(busy ? "正在加载…" : "加载更多订单"); Spacer() }
+                                .font(.subheadline.weight(.semibold)).foregroundStyle(DiaryLibraryStyle.accent).padding(14)
+                                .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 16))
+                        }.buttonStyle(.plain).disabled(busy)
+                    }
+                }
+                if busy && orders.isEmpty { ProgressView("正在读取订单…").frame(maxWidth: .infinity).padding() }
+                if let error {
+                    DiaryLibraryNotice(message: "订单暂时无法加载：\(error)", actionTitle: "重新加载") { Task { await load() } }
+                }
             }
-            if busy { ProgressView() }
-            if let error { Text(error).foregroundStyle(.red) }
-        }.navigationTitle("我的印制订单").task { await load() }.refreshable { await load() }
+            .frame(maxWidth: 680, alignment: .leading).padding(20).frame(maxWidth: .infinity)
+        }
+        .background(DiaryLibraryStyle.background.ignoresSafeArea())
+        .foregroundStyle(DiaryLibraryStyle.ink).tint(DiaryLibraryStyle.accent)
+        .navigationTitle("我的印制订单")
+        .task { await load() }
+        .refreshable { await load() }
+    }
+
+    private func sectionHeading(_ title: String, detail: String?) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title).font(.headline).foregroundStyle(DiaryLibraryStyle.ink)
+            Spacer()
+            if let detail { Text(detail).font(.caption).foregroundStyle(DiaryLibraryStyle.secondary) }
+        }.padding(.horizontal, 2)
+    }
+
+    private func orderCard(_ order: PrintOrder) -> some View {
+        NavigationLink { PrintOrderDetailScreen(id: order.id, owner: owner) } label: {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(order.title).font(.headline).foregroundStyle(DiaryLibraryStyle.ink).lineLimit(2)
+                        Text("\(order.spec.title) · \(order.quantity) 份")
+                            .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    statusBadge(order.statusText, state: order.state)
+                }
+                Rectangle().fill(DiaryLibraryStyle.line.opacity(0.7)).frame(height: 1)
+                HStack {
+                    Text("订单金额").font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                    Spacer()
+                    Text(PrintText.money(order.total_fen)).font(.subheadline.weight(.semibold)).foregroundStyle(DiaryLibraryStyle.ink)
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(DiaryLibraryStyle.secondary.opacity(0.6)).padding(.leading, 4)
+                }
+            }.padding(16).background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+        }.buttonStyle(.plain)
+    }
+
+    private func statusBadge(_ title: String, state: String) -> some View {
+        let tone = orderTone(state)
+        return Text(title).font(.caption.weight(.medium)).foregroundStyle(tone)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(tone.opacity(0.1), in: Capsule())
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func orderTone(_ state: String) -> Color {
+        switch state {
+        case "completed": .green
+        case "cancelled": DiaryLibraryStyle.secondary
+        case "needs_revision", "exception", "failed": .orange
+        case "shipped", "ready_to_ship": DiaryLibraryStyle.accent
+        default: DiaryLibraryStyle.accent
+        }
     }
     private func load(more: Bool = false) async {
         guard !busy else { return }; busy = true; error = nil; defer { busy = false }
@@ -617,66 +710,96 @@ struct PrintOrderDetailScreen: View {
     @State private var revisionContext: PrintRevisionContext?
     @State private var message = ""
     @State private var actionKey = UUID()
+    @State private var showingAfterSale = false
     private let service = PrintOrderService.shared
     var body: some View {
-        List {
-            if let order {
-                Section { Text(order.statusText).font(.title2.bold()); Text(order.title).font(.headline)
-                    Text("订单号：\(order.number)").font(.caption).textSelection(.enabled)
-                    LabeledContent("金额", value: PrintText.money(order.total_fen))
-                    Text(PrintText.label(order.payment_state)).foregroundStyle(.secondary)
-                    if !order.production_error.isEmpty { Text(order.production_error).foregroundStyle(.red) }
-                }
-                if order.state == "needs_revision" {
-                    Section("修改后重新提交") {
-                        Text(order.exception_reason).foregroundStyle(.orange)
-                        Text("在原作品中完成修改，再重新生成生产稿。保留原订单与付款信息，无需重复下单。").font(.footnote)
-                        Button("打开原订单重提页面") { Task { await openRevision(order) } }.disabled(busy)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                if let order {
+                    statusCard(order)
+                    if order.state == "needs_revision" {
+                        noticeCard(title: "修改后重新提交", message: "\(order.exception_reason)\n\n在原作品中完成修改，再重新生成生产稿。保留原订单与付款信息，无需重复下单。", symbol: "pencil.and.outline", tone: .orange) {
+                            Button { Task { await openRevision(order) } } label: {
+                                Label("打开原订单重提页面", systemImage: "arrow.up.right.square")
+                                    .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(13)
+                            }.buttonStyle(.borderedProminent).disabled(busy)
+                        }
+                    } else if !order.exception_reason.isEmpty {
+                        noticeCard(title: "制作情况", message: order.exception_reason, symbol: "info.circle", tone: .orange)
                     }
-                } else if !order.exception_reason.isEmpty {
-                    Section("制作情况") { Text(order.exception_reason) }
-                }
-                if !order.after_sale_state.isEmpty {
-                    Section("售后进度 · " + PrintText.label(order.after_sale_state)) {
-                        Text(order.after_sale_message)
-                        if !order.after_sale_resolution.isEmpty { Text("处理结果：" + order.after_sale_resolution) }
+                    if !order.production_error.isEmpty {
+                        noticeCard(title: "生产文件提示", message: order.production_error, symbol: "exclamationmark.triangle", tone: .orange)
                     }
-                }
-                if order.refund_state == "exception" { Section { Text("退款暂未完成，工作人员正在核对。可通过售后联系处理。").foregroundStyle(.orange) } }
-                Section("印制与寄送") {
-                    Text("\(order.spec.title) · \(order.quantity) 份 · \(order.page_count) 面内页")
-                    Text("\(order.address.name) · \(order.address.phone)")
-                    Text(order.address.region + " " + order.address.detail)
-                    ForEach(order.shipments) { s in Text("\(s.kind == "reship" ? "补寄 · " : "")\(s.carrier) · \(s.tracking_number)").textSelection(.enabled) }
-                }
-                Section {
-                    if order.allowed_actions.contains("upload"), let local = service.jobs.first(where: { $0.orderID == id && $0.owner == owner && $0.productionID == order.production_id }) {
-                        NavigationLink("继续上传生产文件") { PrintUploadScreen(id: local.id, owner: owner) }
+                    if !order.after_sale_state.isEmpty {
+                        detailCard(title: "售后进度", symbol: "bubble.left.and.bubble.right") {
+                            Text(PrintText.label(order.after_sale_state)).font(.subheadline.weight(.semibold)).foregroundStyle(DiaryLibraryStyle.accent)
+                            Text(order.after_sale_message).font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
+                            if !order.after_sale_resolution.isEmpty { infoRow("处理结果", value: order.after_sale_resolution) }
+                        }
                     }
-                    if order.allowed_actions.contains("pay") { Button("微信支付 · \(PrintText.money(order.total_fen))") { Task { await pay() } } }
-                    Button("刷新订单与付款结果") { Task { await load(payment: order.payment_state == "unpaid" || order.payment_state == "refund_pending") } }
-                    if order.allowed_actions.contains("cancel") {
-                        Button("取消订单", role: .destructive) { confirmingCancel = true }
-                            .confirmationDialog("取消此印制订单？已付款订单将申请原路退款。", isPresented: $confirmingCancel, titleVisibility: .visible) {
-                                Button("确认取消", role: .destructive) { Task { await act("cancel") } }
+                    if order.refund_state == "exception" {
+                        noticeCard(title: "退款处理中", message: "退款暂未完成，工作人员正在核对。可通过售后联系处理。", symbol: "clock", tone: .orange)
+                    }
+                    detailCard(title: "印制规格", symbol: "book.closed") {
+                        infoRow("成品规格", value: order.spec.title)
+                        infoRow("印制数量", value: "\(order.quantity) 份")
+                        infoRow("内页", value: "\(order.page_count) 面")
+                        if let covers = order.cover_page_count, covers > 0 { infoRow("封面", value: "\(covers) 面") }
+                        infoRow("付款状态", value: PrintText.label(order.payment_state))
+                    }
+                    detailCard(title: "收货与物流", symbol: "shippingbox") {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("\(order.address.name) · \(order.address.phone)").font(.subheadline.weight(.medium)).foregroundStyle(DiaryLibraryStyle.ink)
+                            Text(order.address.region + " " + order.address.detail).font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary).textSelection(.enabled)
+                        }.padding(.vertical, 4)
+                        if !order.shipments.isEmpty {
+                            ForEach(order.shipments) { shipment in
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: "shippingbox.fill").foregroundStyle(DiaryLibraryStyle.accent)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("\(shipment.kind == "reship" ? "补寄 · " : "物流单号 · ")\(shipment.carrier)").font(.subheadline.weight(.medium))
+                                        Text(shipment.tracking_number).font(.caption).foregroundStyle(DiaryLibraryStyle.secondary).textSelection(.enabled)
+                                    }
+                                }.padding(.top, 8)
                             }
+                        } else {
+                            Text("发货后，物流信息会显示在这里。") .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                        }
                     }
-                    if order.allowed_actions.contains("receive") {
-                        Button("确认收货") { confirmingReceive = true }
-                            .confirmationDialog("确认已收到并检查此订单的全部成品？", isPresented: $confirmingReceive, titleVisibility: .visible) {
-                                Button("确认收货") { Task { await act("receive") } }
-                            }
+                    actionCard(order)
+                    if order.allowed_actions.contains("after_sale") {
+                        detailCard(title: "售后申请", symbol: "text.bubble") {
+                            Text("描述遇到的问题，我们会根据订单进度协助处理。")
+                                .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                            TextField("请描述遇到的问题", text: $message, axis: .vertical)
+                                .lineLimit(3...6).padding(12).background(DiaryLibraryStyle.background, in: RoundedRectangle(cornerRadius: 12))
+                            Button { Task { await act("after_sale") } } label: {
+                                Text("提交售后申请").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(13)
+                            }.buttonStyle(.bordered).disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy)
+                        }
                     }
-                }.disabled(busy)
-                if order.allowed_actions.contains("after_sale") {
-                    Section("售后申请") { TextField("请描述遇到的问题", text: $message, axis: .vertical); Button("提交售后申请") { Task { await act("after_sale") } }.disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy) }
+                    timelineCard(order)
+                } else if busy {
+                    ProgressView("正在读取订单…").frame(maxWidth: .infinity).padding(32)
+                        .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 20))
                 }
-                Section("订单进度") { ForEach(order.events.reversed()) { event in VStack(alignment: .leading, spacing: 5) { Text(event.message); Text(event.created_at.replacingOccurrences(of: "T", with: " ").prefix(19)).font(.caption).foregroundStyle(.secondary) } } }
+                if let error {
+                    DiaryLibraryNotice(message: "订单处理未完成：\(error)", actionTitle: "刷新订单") { Task { await load(payment: true) } }
+                }
+                if busy && order != nil { ProgressView("正在处理…").frame(maxWidth: .infinity).padding(.vertical, 4) }
             }
-            if busy { ProgressView("正在处理…") }
-            if let error { Text(error).foregroundStyle(.red) }
+            .frame(maxWidth: 680, alignment: .leading).padding(20).frame(maxWidth: .infinity)
         }
-        .navigationTitle("印制订单")
+        .background(DiaryLibraryStyle.background.ignoresSafeArea())
+        .foregroundStyle(DiaryLibraryStyle.ink).tint(DiaryLibraryStyle.accent)
+        .navigationTitle("订单详情")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { Task { await load(payment: order?.payment_state == "unpaid" || order?.payment_state == "refund_pending") } } label: {
+                    Image(systemName: "arrow.clockwise").foregroundStyle(DiaryLibraryStyle.accent)
+                }.disabled(busy).accessibilityLabel("刷新订单")
+            }
+        }
         .task {
             await load()
             while !Task.isCancelled {
@@ -689,6 +812,150 @@ struct PrintOrderDetailScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .printPaymentReturned)) { _ in Task { await load(payment: true) } }
         .sheet(item: $revisionContext, onDismiss: { Task { await load() } }) { context in
             PrintCheckoutScreen(book: context.book, store: context.store, revisionOrder: context.order)
+        }
+    }
+
+    private func statusCard(_ order: PrintOrder) -> some View {
+        let tone = orderTone(order.state)
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: orderSymbol(order.state)).font(.subheadline.weight(.semibold))
+                Text(order.statusText).font(.subheadline.weight(.semibold))
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                Spacer(minLength: 4)
+                Text(PrintText.label(order.payment_state)).font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+            }.foregroundStyle(tone)
+            Text(order.title).font(.title3.bold()).foregroundStyle(DiaryLibraryStyle.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("订单金额").font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                    Text(PrintText.money(order.total_fen)).font(.title2.bold()).foregroundStyle(DiaryLibraryStyle.ink)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("订单编号").font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                    Text(order.number).font(.caption.monospaced()).foregroundStyle(DiaryLibraryStyle.secondary)
+                        .lineLimit(1).textSelection(.enabled)
+                }.frame(maxWidth: 190, alignment: .trailing)
+            }
+            Rectangle().fill(DiaryLibraryStyle.line.opacity(0.75)).frame(height: 1)
+            Label("订单信息与进度会随印制状态更新", systemImage: "sparkle")
+                .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+        }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+            .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 20))
+            .overlay(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 2).fill(tone).frame(width: 34, height: 4).padding(.leading, 18)
+            }
+    }
+
+    private func detailCard<Content: View>(title: String, symbol: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(title, systemImage: symbol).font(.headline).foregroundStyle(DiaryLibraryStyle.ink)
+            content()
+        }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+            .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private func infoRow(_ title: String, value: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(title).font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
+            Spacer(minLength: 12)
+            Text(value).font(.subheadline).foregroundStyle(DiaryLibraryStyle.ink).multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
+        }.padding(.vertical, 5)
+    }
+
+    private func noticeCard<Content: View>(title: String, message: String, symbol: String, tone: Color, @ViewBuilder content: () -> Content = { EmptyView() }) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: symbol).font(.headline).foregroundStyle(tone)
+            Text(message).font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary).fixedSize(horizontal: false, vertical: true)
+            content()
+        }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+            .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(tone.opacity(0.18), lineWidth: 1))
+    }
+
+    @ViewBuilder private func actionCard(_ order: PrintOrder) -> some View {
+        let local = service.jobs.first(where: { $0.orderID == id && $0.owner == owner && $0.productionID == order.production_id })
+        if (order.allowed_actions.contains("upload") && local != nil) || order.allowed_actions.contains("pay") || order.allowed_actions.contains("cancel") || order.allowed_actions.contains("receive") {
+            VStack(spacing: 10) {
+                if order.allowed_actions.contains("pay") {
+                    Button { Task { await pay() } } label: {
+                        HStack { Image(systemName: "creditcard"); Text("微信支付 · \(PrintText.money(order.total_fen))") }
+                            .font(.headline).frame(maxWidth: .infinity).padding(14)
+                    }.buttonStyle(.borderedProminent)
+                }
+                if order.allowed_actions.contains("upload"), let local {
+                    NavigationLink { PrintUploadScreen(id: local.id, owner: owner) } label: {
+                        Label("继续上传生产文件", systemImage: "arrow.up.doc")
+                            .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(12)
+                    }.buttonStyle(.bordered)
+                }
+                HStack(spacing: 10) {
+                    if order.allowed_actions.contains("cancel") {
+                        Button("取消订单", role: .destructive) { confirmingCancel = true }
+                            .frame(maxWidth: .infinity).buttonStyle(.bordered)
+                            .confirmationDialog("取消此印制订单？已付款订单将申请原路退款。", isPresented: $confirmingCancel, titleVisibility: .visible) {
+                                Button("确认取消", role: .destructive) { Task { await act("cancel") } }
+                            }
+                    }
+                    if order.allowed_actions.contains("receive") {
+                        Button("确认收货") { confirmingReceive = true }
+                            .frame(maxWidth: .infinity).buttonStyle(.bordered)
+                            .confirmationDialog("确认已收到并检查此订单的全部成品？", isPresented: $confirmingReceive, titleVisibility: .visible) {
+                                Button("确认收货") { Task { await act("receive") } }
+                            }
+                    }
+                }
+            }.padding(14).background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 18)).disabled(busy)
+        }
+    }
+
+    private func timelineCard(_ order: PrintOrder) -> some View {
+        detailCard(title: "订单进度", symbol: "clock.arrow.circlepath") {
+            if order.events.isEmpty {
+                Text("订单进度更新后会显示在这里。").font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(order.events.reversed().enumerated()), id: \.element.id) { index, event in
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(spacing: 0) {
+                                Circle().fill(index == 0 ? DiaryLibraryStyle.accent : DiaryLibraryStyle.line)
+                                    .frame(width: 9, height: 9).padding(.top, 4)
+                                if index < order.events.count - 1 {
+                                    Rectangle().fill(DiaryLibraryStyle.line).frame(width: 1, height: 36)
+                                }
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(event.message).font(.subheadline).foregroundStyle(DiaryLibraryStyle.ink)
+                                Text(event.created_at.replacingOccurrences(of: "T", with: " ").prefix(19))
+                                    .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                            }.padding(.bottom, 12)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func orderTone(_ state: String) -> Color {
+        switch state {
+        case "completed": .green
+        case "cancelled": DiaryLibraryStyle.secondary
+        case "needs_revision", "exception", "failed": .orange
+        case "shipped", "ready_to_ship": DiaryLibraryStyle.accent
+        default: DiaryLibraryStyle.accent
+        }
+    }
+
+    private func orderSymbol(_ state: String) -> String {
+        switch state {
+        case "completed": "checkmark.circle.fill"
+        case "cancelled": "xmark.circle.fill"
+        case "needs_revision", "exception", "failed": "exclamationmark.circle.fill"
+        case "shipped", "ready_to_ship": "shippingbox.fill"
+        default: "clock.fill"
         }
     }
     private func openRevision(_ order: PrintOrder) async {

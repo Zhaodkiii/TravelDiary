@@ -211,6 +211,69 @@ struct DiaryPhotoBatchTests {
         #expect(await session.close())
     }
 
+    @Test func fullPageStacksNewBatchesWithinMargins() throws {
+        let canvas = CGRect(x: 0, y: 0, width: 1000, height: 1400)
+        let safe = canvas.insetBy(dx: 50, dy: 70)
+        for count in [1, 3, 6, 7, 30] {
+            let inputs = (0..<count).map { input($0 % 2 == 0 ? CGSize(width: 500, height: 800) : CGSize(width: 800, height: 500)) }
+            let placements = try #require(DiaryPhotoBatchLayout.plan(inputs, canvas: canvas,
+                obstacles: [canvas], foreground: [canvas], allowOverlap: true))
+            #expect(placements.count == count)
+            for (index, placement) in placements.enumerated() {
+                #expect(placement.overlaysExistingContent)
+                #expect(safe.contains(placement.bounds))
+                #expect(placement.transform.scale >= 0.05)
+                #expect(placement.bounds == inputs[index].bounds.applying(placement.transform.matrix))
+            }
+        }
+    }
+
+    @Test func chosenFramesAndNoFrameCommitAsOneBatch() async throws {
+        let editor = session()
+        let frame = try #require(DiaryPhotoFrameCatalog.items.first)
+        #expect(await editor.importPhotos(try [data(CGSize(width: 120, height: 180)),
+            data(CGSize(width: 180, height: 120), color: .red)], frames: [frame, nil]))
+        #expect(editor.managedPhotos.count == 2)
+        #expect(editor.undoStack.count == 1)
+        let photos = editor.managedPhotos
+        let first = try #require(editor.document.objects[photos[0].ownerID])
+        let second = try #require(editor.document.objects[photos[1].ownerID])
+        #expect(first.layers.first(where: \.isPhotoFrame)?.photoFrameCatalogID == frame.id)
+        #expect(!second.layers.contains { $0.isPhotoFrame })
+        #expect(photos.allSatisfy { $0.layer.photoFrameIsManual == true })
+        try await editor.save()
+        #expect(try await editor.store.load(editor.document.id).document == editor.document)
+        editor.undo()
+        #expect(editor.managedPhotos.isEmpty)
+        editor.redo()
+        #expect(editor.managedPhotos.count == 2)
+        #expect(await editor.close())
+    }
+
+    @Test func fullPageImportKeepsExistingContentAndAddsOnTop() async throws {
+        let editor = session()
+        let (asset, image) = try await editor.store.importImage(try data(CGSize(width: 120, height: 180)), documentID: editor.document.id)
+        var original = editor.document
+        original.assets[asset.id] = asset
+        var photo = DiaryLayer.photo(asset: asset, center: .zero)
+        photo.size = original.root.referenceSize
+        photo.transform = DiaryTransform(position: .zero, pivot: .zero)
+        original.objects[original.rootContentID]?.layers = [photo]
+        let crowded = DiaryEditorSession(document: original, images: [asset.id: image], store: editor.store)
+        #expect(await crowded.importPhotos(try [data(CGSize(width: 120, height: 180), color: .red)]))
+        #expect(crowded.document.layer(photo.id) == photo)
+        #expect(crowded.scopeLayers.first?.id == photo.id)
+        #expect(crowded.scopeLayers.last?.photoBatchID != nil)
+        try await crowded.save()
+        #expect(try await crowded.store.load(crowded.document.id).document == crowded.document)
+        crowded.undo()
+        #expect(crowded.document.root.layers == original.root.layers)
+        #expect(crowded.document.assets == original.assets)
+        #expect(crowded.document.objects.count == original.objects.count)
+        await crowded.cancelEditor()
+        await editor.cancelEditor()
+    }
+
     @Test func manualFramesAndRemovalSurviveRearrangementAndExistingLayersStayFixed() async throws {
         var document = DiaryDocument()
         let text = DiaryLayer(name: "标题", kind: .text,
@@ -246,10 +309,15 @@ struct DiaryPhotoBatchTests {
         var blocked = DiaryDocument()
         blocked.objects[blocked.rootContentID]?.photoLayoutRegion = CGRect(x: 100, y: 100, width: 10, height: 10)
         let crowded = self.session(blocked)
-        #expect(!(await crowded.importPhotos(try [data(CGSize(width: 120, height: 180))])))
-        #expect(crowded.document == blocked)
-        #expect(crowded.errorMessage?.contains("空间不足") == true)
-        #expect(crowded.undoStack.isEmpty)
+        #expect(await crowded.importPhotos(try [data(CGSize(width: 120, height: 180))]))
+        #expect(crowded.managedPhotos.count == 1)
+        #expect(crowded.document.root.photoLayoutRegion == blocked.root.photoLayoutRegion)
+        #expect(crowded.errorMessage == nil)
+        #expect(crowded.undoStack.count == 1)
+        crowded.undo()
+        #expect(crowded.document.root.layers == blocked.root.layers)
+        #expect(crowded.document.assets == blocked.assets)
+        #expect(crowded.document.root.photoLayoutRegion == blocked.root.photoLayoutRegion)
         await crowded.cancelEditor()
     }
 }

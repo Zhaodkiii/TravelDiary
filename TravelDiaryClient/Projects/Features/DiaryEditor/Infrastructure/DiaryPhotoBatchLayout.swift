@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 
-/// Pure layout planning: no document mutations until every new photo fits.
+/// Pure layout planning, with optional stacking when existing content fills the page.
 nonisolated enum DiaryPhotoBatchLayout {
     struct Input {
         let photoSize: CGSize
@@ -13,11 +13,36 @@ nonisolated enum DiaryPhotoBatchLayout {
     struct Placement {
         let transform: DiaryTransform
         let bounds: CGRect
+        var overlaysExistingContent = false
     }
 
     static func plan(_ inputs: [Input], canvas: CGRect, region: CGRect? = nil,
-                     obstacles: [CGRect] = [], foreground: [CGRect] = []) -> [Placement]? {
+                     obstacles: [CGRect] = [], foreground: [CGRect] = [], allowOverlap: Bool = false) -> [Placement]? {
         guard !inputs.isEmpty, inputs.count <= 30, canvas.width > 0, canvas.height > 0 else { return nil }
+        if allowOverlap {
+            if let clear = plan(inputs, canvas: canvas, region: region, obstacles: obstacles, foreground: foreground) {
+                return clear
+            }
+            // 页面已满时保留原内容，将新照片分组叠放在上层；不再缩成不可读的小图。
+            var stacked: [Placement] = []
+            for start in stride(from: 0, to: inputs.count, by: 6) {
+                let group = Array(inputs[start..<min(start + 6, inputs.count)])
+                guard let placements = plan(group, canvas: canvas) else { return nil }
+                let level = CGFloat(start / 6) - CGFloat((inputs.count - 1) / 6) / 2
+                stacked += placements.enumerated().map { index, placement in
+                    var transform = placement.transform
+                    // 略微错开每组，避免多组照片完全重合，同时保持相框在安全边距内。
+                    let scale: CGFloat = inputs.count > 6 ? 0.92 : 1
+                    transform.scale *= scale
+                    transform.position = CGPoint(
+                        x: canvas.midX + (transform.position.x - canvas.midX) * scale + canvas.width * 0.012 * level,
+                        y: canvas.midY + (transform.position.y - canvas.midY) * scale + canvas.height * 0.012 * level)
+                    let input = group[index]
+                    return Placement(transform: transform, bounds: input.bounds.applying(transform.matrix), overlaysExistingContent: true)
+                }
+            }
+            return stacked
+        }
         let safe = canvas.insetBy(dx: canvas.width * 0.05, dy: canvas.height * 0.05)
         let area = region.map { safe.intersection($0) } ?? safe
         guard !area.isNull, area.width > 0, area.height > 0 else { return nil }

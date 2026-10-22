@@ -546,9 +546,10 @@
 					"$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/PureLayout",
 				);
 				INFOPLIST_FILE = TravelDiaryClient/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "寻寻仔";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access to take photos and videos.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow microphone access to record videos with sound.";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving to Photos so captured and edited media can be stored on this device.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow microphone access to record videos with sound and capture your speech for voice input.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving captured photos, edited media, and exported diary images and videos to your photo library.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow photo library access to choose photos and videos for preview and editing.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -601,9 +602,10 @@
 					"$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/PureLayout",
 				);
 				INFOPLIST_FILE = TravelDiaryClient/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "寻寻仔";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access to take photos and videos.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow microphone access to record videos with sound.";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving to Photos so captured and edited media can be stored on this device.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow microphone access to record videos with sound and capture your speech for voice input.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving captured photos, edited media, and exported diary images and videos to your photo library.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow photo library access to choose photos and videos for preview and editing.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
