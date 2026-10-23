@@ -37,7 +37,7 @@ nonisolated struct DiaryObjectContent: Codable, Equatable, Identifiable, Sendabl
 extension DiaryDocument {
     /// 每层都使用相同的对象工厂。外部摆放留在实例中，内部主内容回到本地坐标。
     @discardableResult
-    mutating func appendObject(containing layer: DiaryLayer, to destination: UUID? = nil) -> UUID {
+    nonisolated mutating func appendObject(containing layer: DiaryLayer, to destination: UUID? = nil) -> UUID {
         let parentID = destination ?? rootContentID
         var primary = layer
         primary.id = UUID(); primary.visible = true; primary.locked = false; primary.opacity = nil

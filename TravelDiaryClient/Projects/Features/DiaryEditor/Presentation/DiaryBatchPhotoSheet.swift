@@ -99,52 +99,17 @@ struct DiaryBatchPhotoSheet: View {
                          : photoLimit > 0 ? "根据页面空间建议数量，选好后自动配相框并排入手帐。" : "当前页面空间不足，请返回增加页面或调整内容。")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
-                ScrollView {
-                    if selection.isEmpty {
-                        photoPicker {
-                            VStack(spacing: 8) {
-                                Image(systemName: "plus").font(.system(size: 26, weight: .light))
-                                Text(addsPhotos ? "点这里添加照片，自动配框排版" : "点这里选择照片进行替换")
-                                    .font(.caption)
-                            }
-                            .foregroundStyle(DiaryLibraryStyle.accent.opacity(0.55))
-                            .frame(maxWidth: .infinity).frame(height: 100)
-                            .background(RoundedRectangle(cornerRadius: 14)
-                                .strokeBorder(DiaryLibraryStyle.line, style: StrokeStyle(lineWidth: 1.5, dash: [6])))
+                DiaryPhotoSelectionGrid(count: selection.count,
+                    emptyPrompt: addsPhotos ? "点这里添加照片，自动配框排版" : "点这里选择照片进行替换",
+                    picker: { expanded in
+                        photoPicker { DiaryPhotoAddLabel(expanded: expanded, prompt: addsPhotos ? "点这里添加照片，自动配框排版" : "点这里选择照片进行替换") }
+                    }, thumbnail: { index in
+                        Color.clear.overlay {
+                            if thumbnails.indices.contains(index), let image = thumbnails[index] {
+                                Image(uiImage: image).resizable().scaledToFill()
+                            } else { ProgressView() }
                         }
-                    } else {
-                        LazyVGrid(columns: photoColumns, spacing: 10) {
-                            photoPicker {
-                                Image(systemName: "plus").font(.title2)
-                                    .frame(maxWidth: .infinity).frame(height: 72)
-                                    .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 10))
-                            }
-                            ForEach(selection.indices, id: \.self) { index in
-                                Color.clear.frame(height: 72)
-                                    .overlay {
-                                        if thumbnails.indices.contains(index), let image = thumbnails[index] {
-                                            Image(uiImage: image).resizable().scaledToFill()
-                                        } else { ProgressView() }
-                                    }
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                                    .overlay(alignment: .bottomLeading) {
-                                        Text("\(index + 1)").font(.caption2.weight(.semibold))
-                                            .padding(.horizontal, 5).padding(.vertical, 2)
-                                            .foregroundStyle(.white).background(.black.opacity(0.5), in: Capsule())
-                                            .padding(3)
-                                    }
-                                    .overlay(alignment: .topTrailing) {
-                                        Button { selection.remove(at: index) } label: {
-                                            Image(systemName: "xmark.circle.fill").font(.system(size: 18))
-                                                .symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.6))
-                                                .frame(width: 32, height: 32)
-                                        }.accessibilityLabel("删除第 \(index + 1) 张照片")
-                                    }
-                            }
-                        }
-                    }
-                }
-                .frame(maxHeight: .infinity)
+                    }, remove: { selection.remove(at: $0) })
             }
             .frame(maxHeight: .infinity)
             if let message {

@@ -294,7 +294,7 @@ final class DiaryCanvasSurface: UIView {
         case .began:
             startPosition = nil
             draggingID = nil
-            // 只拖动已选中的素材；选框内的透明区域同样可以起拖，操作手柄优先。
+            // 手柄按可见形状命中；透明区域不抢走下方文字或素材的拖动。
             // began 回调已越过手势识别阈值，用位移还原按下点，避免跨入另一素材后误命中。
             let location = gesture.location(in: self)
             let translation = gesture.translation(in: self)
@@ -304,7 +304,10 @@ final class DiaryCanvasSurface: UIView {
             if let handle = activeHandle, [.delete, .edit, .duplicate].contains(handle) { return }
             let selectionBounds = renderCache.entries[layer.id]?.rect ?? CGRect(origin: .zero, size: layer.size)
             let localOrigin = displayTransform(layer).projection.inverse.point(designPoint(touchOrigin))
-            guard activeHandle != nil || selectionBounds.insetBy(dx: -3, dy: -3).contains(localOrigin) else { return }
+            if activeHandle == nil {
+                guard let entry = renderCache.entries[layer.id],
+                      renderCache.contains(localOrigin, entry: entry), hit(touchOrigin) == layer.id else { return }
+            }
             initialLayer = layer
             initialBounds = selectionBounds
             initialTouch = designPoint(touchOrigin)
@@ -451,9 +454,20 @@ final class DiaryCanvasSurface: UIView {
         return points.map { ($0.0, screenPoint(displayTransform(layer).projection.point($0.1))) }
     }
     private func handleHit(_ p: CGPoint) -> Handle? {
-        // 控制点优先于素材命中；相邻触摸区重叠时选择最近的中心。
-        handles().map { ($0.0, hypot(p.x-$0.1.x, p.y-$0.1.y)) }
-            .filter { $0.1 <= 22 / viewportZoom }.min { $0.1 < $1.1 }?.0
+        let matrix = displayedSelection.map { displayMatrix($0) } ?? .identity
+        let insideSelection: Bool
+        if let layer = displayedSelection, let entry = renderCache.entries[layer.id] {
+            let local = displayTransform(layer).projection.inverse.point(designPoint(p))
+            insideSelection = entry.rect.contains(local)
+        } else { insideSelection = false }
+        return handles().compactMap { handle, center -> (Handle, CGFloat)? in
+            let offset = CGPoint(x: (p.x - center.x) * viewportZoom, y: (p.y - center.y) * viewportZoom)
+            let horizontal = handle == .top || handle == .bottom
+            let isEdge = horizontal || handle == .left || handle == .right
+            let angle = horizontal ? atan2(matrix.b, matrix.a) : atan2(matrix.d, matrix.c)
+            guard DiaryCanvasHandleHitRegion.contains(offset, edgeAngle: isEdge ? angle : nil, allowsExpansion: !insideSelection) else { return nil }
+            return (handle, hypot(offset.x, offset.y))
+        }.min { $0.1 < $1.1 }?.0
     }
     private static let symbols: [String: UIImage] = Dictionary(uniqueKeysWithValues:
         Set(Handle.allCases.map(\.symbol)).compactMap { symbol in

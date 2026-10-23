@@ -181,6 +181,48 @@ struct DiaryPresetImportFlowTests {
         #expect(try await local.load(book.pages[0].id).document == loaded.document)
     }
 
+    @Test func repeatedPhotoImportsReuseExistingAssetAndRetryKeepsOriginalPagesReadable() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let package = try fixture(in: base)
+        let library = DiaryDocumentStore(ownerID: "reuse-photo", baseDirectory: base)
+        let original = try await library.createBook(title: "已有手帐")
+        let store = DiaryDocumentStore(ownerID: "reuse-photo", baseDirectory: base, bookID: original.id)
+        let photo = try imageFile(in: base, name: "same-photo", size: CGSize(width: 120, height: 90), color: .green)
+        let first = try await store.importPreset(package, pageIDs: ["page-1"], title: "", operationID: UUID(), replacementPhotos: [photo])
+        let firstPage = try #require(first.pages.first)
+        let firstLoaded = try await store.load(firstPage.id)
+        let assetID = try #require(firstLoaded.document.replaceablePhotos().first?.assetID)
+        let operation = UUID()
+        let paths = StoragePaths(support: base, caches: base.appendingPathComponent("Caches"), temporary: base.appendingPathComponent("Temporary"))
+        // 模拟旧版本失败留下的日志，包含仍被原页面引用的稳定照片 ID。
+        let journal = paths.books("reuse-photo").appendingPathComponent(".import-\(operation.uuidString).json")
+        let data = try JSONSerialization.data(withJSONObject: ["destinationID": original.id.uuidString,
+            "stage": "publishing", "pageIDs": [], "assetIDs": [assetID.uuidString]])
+        try data.write(to: journal)
+        let second = try await store.importPreset(package, pageIDs: ["page-2"], title: "", operationID: operation, replacementPhotos: [photo])
+        #expect(second.pages.count == 2)
+        let reopened = DiaryDocumentStore(ownerID: "reuse-photo", baseDirectory: base, bookID: original.id)
+        for page in second.pages {
+            let loaded = try await reopened.load(page.id)
+            let id = try #require(loaded.document.replaceablePhotos().first?.assetID)
+            #expect(id == assetID)
+            #expect(loaded.images[id] != nil)
+        }
+        let retry = try await store.importPreset(package, pageIDs: ["page-2"], title: "", operationID: operation, replacementPhotos: [photo])
+        #expect(retry.pages.count == 2)
+        #expect(!FileManager.default.fileExists(atPath: journal.path))
+        // 新日志曾创建的资源，之后也可能被另一导入引用；重试不能删除已发布引用。
+        let nextOperation = UUID()
+        let nextJournal = paths.books("reuse-photo").appendingPathComponent(".import-\(nextOperation.uuidString).json")
+        let owned = try JSONSerialization.data(withJSONObject: ["destinationID": original.id.uuidString,
+            "stage": "publishing", "pageIDs": [], "assetIDs": [assetID.uuidString], "ownedAssetIDs": [assetID.uuidString]])
+        try owned.write(to: nextJournal)
+        let third = try await store.importPreset(package, pageIDs: ["page-1"], title: "", operationID: nextOperation, replacementPhotos: [photo])
+        #expect(third.pages.count == 3)
+        #expect(try await reopened.load(firstPage.id).images[assetID] != nil)
+    }
+
     @Test func photoSwitchSkipsSlotsAndRemovesFramesBeforePublishing() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: base) }

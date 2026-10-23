@@ -5,24 +5,27 @@ struct DiaryPresetTemplateCarousel<Content: View>: View {
     let count: Int
     var position: Binding<Int?>? = nil
     var maximumCardWidth: CGFloat = 290
+    var cardWidthFraction: CGFloat = 0.72
     @ViewBuilder let content: (Int) -> Content
     @State private var current: Int? = 0
 
-    nonisolated static func cardWidth(in width: CGFloat) -> CGFloat { max(1, min(290, width * 0.72)) }
+    nonisolated static func cardWidth(in width: CGFloat, maximum: CGFloat = 290, fraction: CGFloat = 0.72) -> CGFloat {
+        max(1, min(maximum, width * fraction))
+    }
 
     var body: some View {
         ScrollView(.horizontal) {
             LazyHStack(alignment: .top, spacing: 12) {
                 ForEach(0..<count, id: \.self) { index in
                     content(index)
-                        .containerRelativeFrame(.horizontal) { width, _ in min(maximumCardWidth, Self.cardWidth(in: width)) }
+                        .containerRelativeFrame(.horizontal) { width, _ in Self.cardWidth(in: width, maximum: maximumCardWidth, fraction: cardWidthFraction) }
                         .id(index)
                 }
             }
             .scrollTargetLayout()
         }
         .scrollIndicators(.hidden)
-        .scrollTargetBehavior(DiaryPresetTemplateSnapBehavior(maximumCardWidth: maximumCardWidth))
+        .scrollTargetBehavior(DiaryPresetTemplateSnapBehavior(maximumCardWidth: maximumCardWidth, cardWidthFraction: cardWidthFraction))
         .scrollPosition(id: position ?? $current, anchor: .leading)
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .environment(\.layoutDirection, .leftToRight)
@@ -31,9 +34,10 @@ struct DiaryPresetTemplateCarousel<Content: View>: View {
 
 private struct DiaryPresetTemplateSnapBehavior: ScrollTargetBehavior {
     let maximumCardWidth: CGFloat
+    let cardWidthFraction: CGFloat
     func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
         ViewAlignedScrollTargetBehavior(limitBehavior: .alwaysByOne).updateTarget(&target, context: context)
-        let width = max(1, min(maximumCardWidth, min(290, context.containerSize.width * 0.72)))
+        let width = max(1, min(maximumCardWidth, context.containerSize.width * cardWidthFraction))
         let stride = width + 12
         let index = max(0, (target.rect.minX / stride).rounded())
         // 中间项左侧保留 12pt 上一张卡片和 12pt 间距；首尾不制造额外空白。

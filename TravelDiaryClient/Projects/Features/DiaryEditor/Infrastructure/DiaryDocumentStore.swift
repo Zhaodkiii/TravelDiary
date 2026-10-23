@@ -598,6 +598,63 @@ extension DiaryDocumentStore {
             return try self.publish(book)
         }
     }
+    /// 所有资源与页面先写到隐藏暂存目录，再移动整本，失败不会留下半本作品。
+    func createAlbum(_ draft: DiaryAlbumDraft, photoDirectory: URL,
+                     cancellation: DiaryPresetCancellation? = nil,
+                     progress: @escaping @Sendable (String) -> Void = { _ in }) async throws -> DiaryBook {
+        try await run {
+            let name = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, name.count <= 60 else { throw DiaryEditorError.invalidName }
+            guard !draft.pages.isEmpty, Set(draft.pages.map(\.id)).count == draft.pages.count,
+                  Set(draft.photos.map(\.id)).count == draft.photos.count else { throw DiaryEditorError.invalidDocument }
+            let sourceIDs = Set(draft.photos.map(\.id))
+            guard draft.pages.allSatisfy({ $0.placements.count <= 6 && $0.placements.allSatisfy {
+                sourceIDs.contains($0.photoID) && $0.zoom.isFinite && (1...3).contains($0.zoom)
+                    && $0.offsetX.isFinite && abs($0.offsetX) <= 1 && $0.offsetY.isFinite && abs($0.offsetY) <= 1
+            } }) else { throw DiaryEditorError.invalidDocument }
+            // 同一次完成操作重试时返回已发布作品，避免重复建本。
+            if let existing = try? self.readBook(draft.id) { return existing }
+            let staging = self.libraryRoot.appendingPathComponent(".album-" + draft.id.uuidString)
+            try? FileManager.default.removeItem(at: staging)
+            try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: staging) }
+            let target = DiaryDocumentStore(ownerID: "album-staging", baseDirectory: staging, bookID: draft.id)
+            var assets: [UUID: DiaryAsset] = [:]
+            let used = Set(draft.pages.flatMap { $0.placements.map(\.photoID) })
+            for (index, photo) in draft.photos.filter({ used.contains($0.id) }).enumerated() {
+                try cancellation?.check()
+                guard photo.filename == URL(fileURLWithPath: photo.filename).lastPathComponent else { throw DiaryEditorError.invalidDocument }
+                progress("正在保存第 \(index + 1) 张照片…")
+                let bytes = try Data(contentsOf: photoDirectory.appendingPathComponent(photo.filename))
+                assets[photo.id] = try target.writeImportedImage(bytes, documentID: draft.pages[0].id).0
+            }
+            var book = DiaryBook(title: name)
+            book.id = draft.id; book.defaultPageSize = draft.pageSize
+            for (index, page) in draft.pages.enumerated() {
+                try cancellation?.check()
+                progress("正在制作第 \(index + 1) / \(draft.pages.count) 页…")
+                let document = DiaryAlbumDocumentBuilder.document(page: page, draft: draft, assets: assets)
+                let path: String
+                do {
+                    path = try target.writeSnapshot(document, prefix: "revisions", directory: target.directory(document.id))
+                } catch DiaryEditorError.invalidDocument {
+                    SupportLogger.log(level: .error, module: .diaryEditor,
+                        message: "album_save_invalid_page page=\(index + 1) theme=\(page.theme.rawValue) layout=\(page.layout.rawValue)")
+                    throw DiaryAlbumSaveError.invalidPage(index + 1)
+                }
+                let revision = UUID(uuidString: String(path.split(separator: "/")[1]))!
+                var entry = DiaryPageEntry(id: page.id, title: document.title, revisionID: revision, size: draft.pageSize)
+                entry.presetSpreadID = page.spreadID; entry.presetSpreadSide = page.spreadSide
+                book.pages.append(entry)
+            }
+            book.coverPageID = draft.pages.first(where: { $0.role == .cover })?.id ?? draft.pages.first?.id
+            try cancellation?.check()
+            let prepared = try target.publish(book)
+            try FileManager.default.moveItem(at: target.root, to: self.libraryRoot.appendingPathComponent(draft.id.uuidString))
+            return prepared
+        }
+    }
+
     nonisolated func loadBook() async throws -> DiaryBook {
         try await run {
             guard let id = self.bookID else { throw DiaryEditorError.invalidDocument.logged() }
@@ -841,8 +898,23 @@ extension DiaryDocumentStore {
                 for pageID in journal.pageIDs where !pageIDs.contains(pageID) {
                     try? FileManager.default.removeItem(at: self.libraryRoot.appendingPathComponent("\(destinationID)/pages/\(pageID)"))
                 }
-                // 资源为本次新 UUID，日志在发布前持久化；未发布的资源不可能被其他页面引用。
-                for id in journal.assetIDs { try? FileManager.default.removeItem(at: self.libraryRoot.appendingPathComponent("\(destinationID)/assets/\(id).image")) }
+                // 照片按内容生成稳定 ID，不能把旧日志中的全部 assetIDs 当作本次新建资源。
+                // 仅清理明确记录为本次新增的资源；旧日志没有所有权字段时保留文件。
+                var referencedAssets = Set<UUID>()
+                var canCleanAssets = published != nil || !FileManager.default.fileExists(atPath:
+                    self.libraryRoot.appendingPathComponent("\(destinationID)/book.json").path)
+                if let published, journal.ownedAssetIDs?.isEmpty == false {
+                    for entry in published.pages + published.trashedPages.map(\.entry) {
+                        do {
+                            let directory = self.libraryRoot.appendingPathComponent("\(destinationID)/pages/\(entry.id)")
+                            let document = try self.readSnapshot("revisions/\(entry.revisionID)/manifest.json", directory: directory, documentID: entry.id)
+                            referencedAssets.formUnion(document.assets.keys)
+                        } catch { canCleanAssets = false; break }
+                    }
+                }
+                for id in journal.ownedAssetIDs ?? [] where canCleanAssets && !referencedAssets.contains(id) {
+                    try? FileManager.default.removeItem(at: self.libraryRoot.appendingPathComponent("\(destinationID)/assets/\(id).image"))
+                }
             }
             var journal = PresetImportJournal(destinationID: destinationID, stage: "staging", pageIDs: [], assetIDs: [])
             func log(_ stage: String) throws {
@@ -930,6 +1002,9 @@ extension DiaryDocumentStore {
             if book.presetImports == nil { book.presetImports = [:] }
             book.presetImports?[operationID.uuidString] = entries.map(\.id)
             journal.pageIDs = entries.map(\.id); journal.assetIDs = Array(copied)
+            journal.ownedAssetIDs = copied.filter { id in
+                !FileManager.default.fileExists(atPath: self.libraryRoot.appendingPathComponent("\(destinationID)/assets/\(id).image").path)
+            }
             try cancellation?.check()
             try log("publishing")
             progress("正在保存手帐…")
@@ -939,7 +1014,8 @@ extension DiaryDocumentStore {
                 try? FileManager.default.removeItem(at: journalURL)
                 return prepared
             }
-            // 素材与页目录均为新 UUID，不覆盖已有资源。异常留下的孤立文件不被目录引用。
+            // 模板资源和页使用新 UUID；用户照片按内容复用稳定 ID。
+            // 同名且内容相同的素材直接复用，回滚只移除本次真正新增的文件。
             var moved: [URL] = []
             do {
                 for name in ["assets", "pages"] {
@@ -948,6 +1024,14 @@ extension DiaryDocumentStore {
                     try FileManager.default.createDirectory(at: to, withIntermediateDirectories: true)
                     for item in (try? FileManager.default.contentsOfDirectory(at: from, includingPropertiesForKeys: nil)) ?? [] {
                         let dest = to.appendingPathComponent(item.lastPathComponent)
+                        if name == "assets", FileManager.default.fileExists(atPath: dest.path) {
+                            guard FileManager.default.contentsEqual(atPath: item.path, andPath: dest.path) else {
+                                SupportLogger.log(level: .error, module: .diaryEditor,
+                                    message: "preset_asset_conflict file=\(item.lastPathComponent)")
+                                throw DiaryEditorError.pageConflict
+                            }
+                            continue
+                        }
                         try FileManager.default.moveItem(at: item, to: dest); moved.append(dest)
                     }
                 }
@@ -967,6 +1051,7 @@ private nonisolated struct PresetImportJournal: Codable {
     var stage: String
     var pageIDs: [UUID]
     var assetIDs: [UUID]
+    var ownedAssetIDs: [UUID]? = nil
 }
 
 extension DiaryDocumentStore {

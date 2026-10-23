@@ -1,13 +1,26 @@
 import SwiftUI
 import UIKit
 
-/// 首页创建入口：轻量挑选预设，再复用模板库的预览、下载和照片流程。
+/// 同一新建面板切换手帐、照片、空白；手帐保留原有预设导入流程。
 struct DiaryCreateBookSheet: View {
     let ownerID: String
     let completed: (DiaryBook) -> Void
+    @State private var category = "手帐"
+    @State private var album: DiaryAlbumComposer
+    @State private var blankPalette = "0"
+    init(ownerID: String, completed: @escaping (DiaryBook) -> Void) {
+        self.ownerID = ownerID; self.completed = completed
+        _album = State(initialValue: DiaryAlbumComposer(ownerID: ownerID))
+    }
     @Environment(\.dismiss) private var dismiss
     @State private var path = NavigationPath()
-    @State private var detent: PresentationDetent = .fraction(0.48)
+    @State private var detent: PresentationDetent = .height(450)
+    @State private var fittedHeight: CGFloat = 450
+    @State private var rootContentHeight: CGFloat = 340
+    @State private var actionHeight: CGFloat = 90
+    @State private var templateCardHeight: CGFloat = 0
+    @State private var photoContentHeight: CGFloat = 400
+    @State private var blankContentHeight: CGFloat = 260
     @State private var fullHeight = false
     @State private var items: [PresetLibraryItem] = []
     @State private var selectedID: String?
@@ -20,22 +33,42 @@ struct DiaryCreateBookSheet: View {
     private let downloads = PresetDownloadManager.shared
     @ObservedObject private var availability = PresetDownloadManager.shared.availability
 
-    private enum Route: Hashable { case preview(String) }
+    private enum Route: Hashable { case preview(String), photos, blank }
 
     var body: some View {
         NavigationStack(path: $path) {
             GeometryReader { geometry in
                 VStack(alignment: .leading, spacing: 8) {
-                    if !loaded && items.isEmpty {
-                        ProgressView("正在读取预设…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                    HStack(spacing: 12) {
+                        Button { dismiss() } label: {
+                            Image(systemName: "xmark").font(.system(size: 18, weight: .medium))
+                                .frame(width: 44, height: 44)
+                                .background(DiaryLibraryStyle.ink.opacity(0.04), in: Circle())
+                        }
+                        .accessibilityLabel("关闭新建面板")
+                        .disabled(album.busy)
+                        Picker("制作方式", selection: $category) {
+                            Text("手帐").tag("手帐"); Text("照片").tag("照片"); Text("空白").tag("空白")
+                        }.pickerStyle(.segmented)
+                    }.padding(.top, 16).padding(.bottom, 8)
+                    if category == "照片" {
+                        DiaryAlbumDesignPicker(model: album, contentHeightChanged: { height in
+                            if abs(photoContentHeight - height) > 1 { photoContentHeight = height }
+                        })
+                        .frame(height: photoContentHeight)
+                    } else if category == "空白" {
+                        blankDesigns.frame(height: blankContentHeight)
+                    } else if !loaded && items.isEmpty {
+                        ProgressView("正在读取预设…").frame(maxWidth: .infinity, minHeight: 220)
                     } else if items.isEmpty {
                         Text(error ?? "暂无可用预设").font(.footnote).foregroundStyle(.secondary)
                         Button("重新加载") { Task { await loadCatalog() } }
-                        Spacer()
                     } else if expandedCatalog {
                         expandedPresets
                     } else {
-                        DiaryPresetTemplateCarousel(count: items.count, position: $compactPosition) { index in
+                        ScrollView(.vertical) {
+                        DiaryPresetTemplateCarousel(count: items.count, position: $compactPosition,
+                            maximumCardWidth: 380, cardWidthFraction: 0.76) { index in
                             let item = items[index]
                             Button { selectedID = item.id } label: {
                                 DiaryPresetTemplateCard(item: item, ownerID: ownerID,
@@ -46,11 +79,27 @@ struct DiaryCreateBookSheet: View {
                                     }
                             }
                             .buttonStyle(.plain)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                                if height > 0, abs(templateCardHeight - height) > 1 { templateCardHeight = height }
+                            }
                             .accessibilityAddTraits(selectedID == item.id ? .isSelected : [])
                         }
-                        .frame(height: max(80, geometry.size.height))
+                        .frame(height: templateCardHeight > 0 ? templateCardHeight : DiaryPresetTemplateCarousel<EmptyView>.cardWidth(in: geometry.size.width - 40,
+                            maximum: 380, fraction: 0.76) * 0.75 + 64)
+                        }
+                        .frame(height: templateCardHeight > 0 ? templateCardHeight : DiaryPresetTemplateCarousel<EmptyView>.cardWidth(in: geometry.size.width - 40,
+                            maximum: 380, fraction: 0.76) * 0.75 + 64)
+                        .scrollIndicators(.hidden)
                     }
-                }.padding(.horizontal, 20)
+                }
+                .padding(.horizontal, 20)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                    guard !expandedCatalog, height > 0 else { return }
+                    rootContentHeight = height
+                    fitSheet(content: height, actions: actionHeight)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
             .background(DiaryLibraryStyle.background)
             .background {
@@ -59,31 +108,45 @@ struct DiaryCreateBookSheet: View {
                     withAnimation {
                         expandedCatalog = false
                         fullHeight = false
-                        detent = .fraction(0.48)
+                        detent = .height(fittedHeight)
                     }
                 }
             }
-            .navigationTitle("新建手帐本")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭", systemImage: "xmark") { dismiss() }
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
             .safeAreaInset(edge: .bottom) {
-                if detent != .large {
+                if category != "手帐" || detent != .large {
                     DiaryImportFloatingActions {
+                        if category == "照片" {
+                            NavigationLink(value: Route.photos) { Text(album.draft.pages.isEmpty ? "下一步 · 添加照片" : "继续制作相册").frame(maxWidth: .infinity) }
+                        } else if category == "空白" {
+                            NavigationLink(value: Route.blank) { Text("下一步").frame(maxWidth: .infinity) }
+                        } else {
                         NavigationLink(value: selectedID.map { Route.preview($0) }) {
                             Text("下一步").frame(maxWidth: .infinity)
                         }.disabled(selectedID == nil)
+                        }
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                        guard height > 0 else { return }
+                        actionHeight = height
+                        fitSheet(content: rootContentHeight, actions: height)
                     }
                 }
             }
             .navigationDestination(for: Route.self) { route in
                 switch route {
+                case .photos:
+                    DiaryAlbumComposerScreen(model: album, completed: completed)
+                        .toolbar(.visible, for: .navigationBar)
+                        .onAppear { detent = .large; fullHeight = true }
+                case .blank:
+                    DiaryBlankBookSheet(ownerID: ownerID, completed: completed, paletteID: blankPalette)
+                        .toolbar(.visible, for: .navigationBar)
+                        .onAppear { detent = .large; fullHeight = true }
                 case .preview(let id):
                     if let item = items.first(where: { $0.id == id }) {
                         DiaryCreatePresetDestination(ownerID: ownerID, item: item, path: $path, completed: completed)
+                            .toolbar(.visible, for: .navigationBar)
                             .background {
                                 DiaryNavigationAppearanceObserver {
                                     // push 完成后再展开，避免两种系统动画互相打断。
@@ -95,7 +158,7 @@ struct DiaryCreateBookSheet: View {
             }
         }
         .tint(DiaryLibraryStyle.accent)
-        .presentationDetents(fullHeight ? [.large] : [.fraction(0.48), .large], selection: $detent)
+        .presentationDetents(fullHeight ? [.large] : [.height(fittedHeight), .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .task(id: detent == .large && path.isEmpty) {
             guard detent == .large, path.isEmpty else {
@@ -110,6 +173,39 @@ struct DiaryCreateBookSheet: View {
             catch { }
         }
         .task { await loadCatalog() }
+    }
+
+    /// 测量自然内容，而不是 sheet 容器高度，避免 detent 与布局互相放大。
+    private func fitSheet(content: CGFloat, actions: CGFloat) {
+        let height = max(280, ceil(content + actions + 8))
+        guard abs(fittedHeight - height) > 1 else { return }
+        let followsContent = detent != .large && !fullHeight
+        fittedHeight = height
+        if followsContent { detent = .height(height) }
+    }
+
+    private var blankDesigns: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(["0", "1", "2"], id: \.self) { id in
+                    Button { blankPalette = id } label: {
+                        VStack(spacing: 10) {
+                            Rectangle().fill(Color(uiColor: DiaryPageRenderer.color(id == "2" ? DiaryAlbumTheme.film.palette("1").paper : DiaryAlbumTheme.minimal.palette(id).paper)))
+                                .aspectRatio(176.0 / 250, contentMode: .fit)
+                                .overlay(Rectangle().stroke(blankPalette == id ? DiaryLibraryStyle.accent : DiaryLibraryStyle.line, lineWidth: blankPalette == id ? 2 : 1))
+                            Text(id == "0" ? "白纸" : id == "1" ? "暖纸" : "深色纸").font(.subheadline)
+                        }
+                    }.buttonStyle(.plain).accessibilityAddTraits(blankPalette == id ? .isSelected : [])
+                }
+            }.padding(.vertical)
+            Text("B5 竖版 · 从一张白纸开始，创建后自由添加照片与文字。")
+                .font(.footnote).foregroundStyle(.secondary)
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                if height > 0, abs(blankContentHeight - height) > 1 { blankContentHeight = height }
+            }
+        }
     }
 
     private var expandedPresets: some View {

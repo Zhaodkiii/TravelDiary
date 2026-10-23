@@ -94,6 +94,8 @@ enum DiaryBookImageExporter {
         return image
     }
 
+    private static let collageBackground = UIImage(named: "DiarySpreadExportBackground")
+
     static func collage(_ images: [UIImage], canvasWidth: CGFloat = 1200, scale: CGFloat = 2) -> UIImage {
         let size = CGSize(width: canvasWidth, height: canvasWidth / DiaryCollageLayout.aspectRatio)
         let frames = DiaryCollageLayout.frames(imageSizes: images.map(\.size), canvas: size)
@@ -101,6 +103,14 @@ enum DiaryBookImageExporter {
         return UIGraphicsImageRenderer(size: size, format: format).image { ctx in
             UIColor(red: 0.98, green: 0.975, blue: 0.96, alpha: 1).setFill()
             ctx.fill(CGRect(origin: .zero, size: size))
+            if let background = collageBackground {
+                let fillScale = max(size.width / background.size.width, size.height / background.size.height)
+                let backgroundSize = CGSize(width: background.size.width * fillScale,
+                                            height: background.size.height * fillScale)
+                background.draw(in: CGRect(x: (size.width - backgroundSize.width) / 2,
+                                           y: (size.height - backgroundSize.height) / 2,
+                                           width: backgroundSize.width, height: backgroundSize.height))
+            }
             for (image, frame) in zip(images, frames) { image.draw(in: frame) }
         }
     }
