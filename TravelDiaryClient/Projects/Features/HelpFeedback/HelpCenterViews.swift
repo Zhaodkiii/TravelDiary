@@ -184,7 +184,7 @@ struct AppVersionScreen: View {
                 Divider().overlay(DiaryLibraryStyle.line)
                 LabeledContent("构建号", value: AppVersionInformation.build)
                 Divider().overlay(DiaryLibraryStyle.line)
-                LabeledContent("系统", value: "iOS " + UIDevice.current.systemVersion)
+                LabeledContent("系统", value: "iOS " + AppleDeviceInfo.systemVersion)
             }.font(.subheadline).padding(20).feedbackPaperCard()
             Button { UIPasteboard.general.string = AppVersionInformation.copiedText; copied = true } label: {
                 Label(copied ? "已复制版本信息" : "复制版本信息", systemImage: copied ? "checkmark" : "doc.on.doc").frame(maxWidth: .infinity)

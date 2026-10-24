@@ -15,6 +15,34 @@ struct DiaryBookStoreTests {
     }
 
     @Test
+    func initialBooksInstallOncePerOwnerAndPreserveEditsAndDeletion() async throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let seed = try await store(owner: "source").createBook(title: "初始手帐")
+        let paths = StoragePaths(support: folder, caches: folder.appendingPathComponent("Caches"), temporary: folder.appendingPathComponent("Temporary"))
+        let package = folder.appendingPathComponent("Initial.bundle")
+        try FileManager.default.createDirectory(at: package.appendingPathComponent("Books"), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: paths.books("source").appendingPathComponent(seed.id.uuidString),
+            to: package.appendingPathComponent("Books/\(seed.id)"))
+        let catalog: [String: Any] = ["format": "TravelDiary.InitialResources", "schemaVersion": 1,
+            "books": [["id": seed.id.uuidString, "path": "Books/\(seed.id)"]]]
+        try JSONSerialization.data(withJSONObject: catalog).write(to: package.appendingPathComponent("catalog.json"))
+        try await store().installInitialBooks(resourceURL: package)
+        try await store(seed.id).renameBook("用户编辑")
+        try await store().installInitialBooks(resourceURL: package)
+        let edited = try await store(seed.id).loadBook()
+        #expect(edited.title == "用户编辑")
+        try await store().trashBook(seed.id)
+        // 模拟清空回收站后再次启动。
+        try FileManager.default.removeItem(at: paths.trash("owner").appendingPathComponent(seed.id.uuidString))
+        try await store().installInitialBooks(resourceURL: package)
+        let deleted = try await store().listBooks()
+        #expect(deleted.isEmpty)
+        try await store(owner: "another").installInitialBooks(resourceURL: package)
+        let other = try await store(owner: "another").listBooks()
+        #expect(other.map(\.id) == [seed.id])
+    }
+
+    @Test
     func deletingBookRemovesOnlySelectedOwnersBook() async throws {
         defer { try? FileManager.default.removeItem(at: folder) }
         let deleted = try await store().createBook(title: "删除")

@@ -43,10 +43,10 @@ final class SupportSystemInfo {
     var appVersion: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0" }
     var buildVersion: String { Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1" }
     var platform: String { "ios" }
-    var systemVersion: String { UIDevice.current.systemVersion }
-    var deviceModel: String { UIDevice.current.model }
-    var deviceModelName: String { UIDevice.current.localizedModel }
-    var deviceName: String { UIDevice.current.name }
+    var systemVersion: String { AppleDeviceInfo.systemVersion }
+    var deviceModel: String { AppleDeviceInfo.modelIdentifier }
+    var deviceModelName: String { AppleDeviceInfo.modelName }
+    var deviceName: String { AppleDeviceInfo.deviceName }
     var screenSize: String {
         let size = UIScreen.main.bounds.size
         return "\(Int(size.width))x\(Int(size.height))"
@@ -58,13 +58,7 @@ final class SupportSystemInfo {
     var countryCode: String { Locale.current.region?.identifier ?? "" }
     var mostLikelyCountryCode: String { countryCode.uppercased() }
     var isMostLikelyMainlandChina: Bool { countryCode.uppercased() == "CN" }
-    var isSimulator: Bool {
-        #if targetEnvironment(simulator)
-        return true
-        #else
-        return false
-        #endif
-    }
+    var isSimulator: Bool { AppleDeviceInfo.isSimulator }
 }
 
 enum L10n {

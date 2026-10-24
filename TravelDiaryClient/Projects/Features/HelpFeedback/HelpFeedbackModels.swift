@@ -46,8 +46,8 @@ nonisolated struct HelpFailure: LocalizedError { let message: String; init(_ mes
     static var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知" }
     static var build: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "未知" }
     static var title: String { "\(version) (\(build))" }
-    static var environment: [String: String] { ["app": Bundle.main.bundleIdentifier ?? "", "version": version, "build": build, "os": UIDevice.current.systemVersion, "device": UIDevice.current.model, "language": Locale.preferredLanguages.first ?? "zh-Hans"] }
-    static var copiedText: String { "TravelDiary \(title)\niOS \(UIDevice.current.systemVersion)" }
+    static var environment: [String: String] { ["app": Bundle.main.bundleIdentifier ?? "", "version": version, "build": build, "os": AppleDeviceInfo.systemVersion, "device": AppleDeviceInfo.modelName, "language": Locale.preferredLanguages.first ?? "zh-Hans"] }
+    static var copiedText: String { "TravelDiary \(title)\niOS \(AppleDeviceInfo.systemVersion)" }
 }
 
 nonisolated enum HelpBodyBlock: Identifiable, Equatable {

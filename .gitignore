@@ -20,3 +20,6 @@ xcuserdata/
 
 # Local regression fixtures relocated from the application bundle
 /TravelDiaryTests/Fixtures/DiaryPresets.bundle/
+
+# Initial diary resources (kept locally)
+/TravelDiaryClient/Projects/App/Resources/InitialDiaryResources.bundle/

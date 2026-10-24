@@ -28,6 +28,72 @@ struct DiaryImmersiveReaderTests {
         }
     }
 
+    @Test func doubleTapFocusesSelectedPageAndClampsVerticalEdges() throws {
+        let viewport = CGSize(width: 900, height: 650)
+        let spread = DiaryBookStageLayout.openSize(viewport: viewport, paperRatio: 0.7)
+        let left = try #require(DiaryBookFocusLayout.rect(viewport: viewport, spread: spread,
+            point: CGPoint(x: 250, y: 30)))
+        let right = try #require(DiaryBookFocusLayout.rect(viewport: viewport, spread: spread,
+            point: CGPoint(x: 650, y: 620)))
+        #expect(left.midX < viewport.width / 2)
+        #expect(right.midX > viewport.width / 2)
+        #expect(left.minY >= (viewport.height - spread.height) / 2)
+        #expect(right.maxY <= (viewport.height + spread.height) / 2)
+        #expect(abs(left.width / left.height - viewport.width / viewport.height) < 0.001)
+        #expect(DiaryBookFocusLayout.rect(viewport: viewport, spread: spread, point: .zero) == nil)
+        #expect(DiaryBookFocusLayout.rect(viewport: .zero, spread: .zero, point: .zero) == nil)
+    }
+
+    @Test func onlyDuoUsesTheShelllessDeviceStyle() {
+        #expect(AppleDeviceInfo.isDuo(modelIdentifier: "iPhone19,4"))
+        for identifier in ["iPhone19,2", "iPhone17,2", "iPad16,6", "", "iPhone Duo"] {
+            #expect(!AppleDeviceInfo.isDuo(modelIdentifier: identifier))
+        }
+    }
+
+    @Test func plainPaperFillsViewportWithoutCroppingOrChangingPageRatio() {
+        for viewport in [CGSize(width: 900, height: 650), CGSize(width: 844, height: 390)] {
+            for ratio in [CGFloat(0.5), 0.7, 1, 1.5] {
+                let size = DiaryBookStageLayout.paperSize(viewport: viewport, paperRatio: ratio)
+                #expect(size.width <= viewport.width - 16 + 0.001)
+                #expect(size.height <= viewport.height - 16 + 0.001)
+                #expect(abs(size.width * (1 - DiaryBookSpine.halfGapFraction) / size.height - 2 * ratio) < 0.001)
+                #expect(abs(size.width - viewport.width + 16) < 0.001 ||
+                        abs(size.height - viewport.height + 16) < 0.001)
+            }
+        }
+    }
+
+    @Test func bindingVisibilityFollowsReaderStyle() throws {
+        let reader = DiaryPageCurlReader(spreadCount: 2, spread: .constant(0),
+            reduceMotion: true, showsBinding: false) { Paper(index: $0, canSelect: $1) }
+        let coordinator = reader.makeCoordinator()
+        let controller = UIPageViewController(transitionStyle: .pageCurl, navigationOrientation: .horizontal)
+        coordinator.installRings(in: controller)
+        let rings = try #require(controller.children.first)
+        #expect(rings.view.alpha == 0)
+        coordinator.parent.showsBinding = true
+        coordinator.updateBindingVisibility()
+        #expect(rings.view.alpha == 1)
+        coordinator.parent.showsBinding = false
+        coordinator.updateBindingVisibility()
+        #expect(rings.view.alpha == 0)
+    }
+
+    @Test func nineBindingHolesAreSymmetricInThreeEqualGroups() {
+        let holes = DiaryBookSpine.ringPositions
+        #expect(holes.count == 9)
+        #expect(holes[4] == 0.5)
+        for index in 0..<9 {
+            #expect(abs(holes[index] + holes[8 - index] - 1) < 0.0001)
+        }
+        for start in [0, 3, 6] {
+            #expect(abs(holes[start + 1] - holes[start] - 0.075) < 0.0001)
+            #expect(abs(holes[start + 2] - holes[start + 1] - 0.075) < 0.0001)
+        }
+        #expect(DiaryBookStageLayout.paperCornerRadius == 24)
+    }
+
     @Test func cachedPageActionsUseCurrentReadingMode() throws {
         let reader = DiaryPageCurlReader(spreadCount: 3, spread: .constant(1), reduceMotion: false) {
             Paper(index: $0, canSelect: $1)

@@ -500,6 +500,48 @@ nonisolated final class DiaryDocumentStore: Sendable {
 }
 
 extension DiaryDocumentStore {
+    private nonisolated struct InitialCatalog: Decodable {
+        struct Book: Decodable { let id: UUID; let path: String }
+        let format: String
+        let schemaVersion: Int
+        let books: [Book]
+    }
+
+    /// 每个账号只安装一次；暂存后移动发布，避免中断复制留下半本手帐。
+    func installInitialBooks(resourceURL: URL? = Bundle.main.url(forResource: "InitialDiaryResources", withExtension: "bundle")) async throws {
+        try await run {
+            guard let resourceURL else { throw DiaryEditorError.missingResource.logged() }
+            let catalog = try JSONDecoder().decode(InitialCatalog.self,
+                from: Data(contentsOf: resourceURL.appendingPathComponent("catalog.json")))
+            guard catalog.format == "TravelDiary.InitialResources", catalog.schemaVersion == 1 else {
+                throw DiaryEditorError.unsupportedVersion.logged()
+            }
+            let fm = FileManager.default
+            try fm.createDirectory(at: self.libraryRoot, withIntermediateDirectories: true)
+            for entry in catalog.books {
+                guard entry.path == "Books/\(entry.id.uuidString)" else { throw DiaryEditorError.invalidDocument.logged() }
+                let marker = self.libraryRoot.appendingPathComponent(".initial-\(entry.id).installed")
+                if fm.fileExists(atPath: marker.path) { continue }
+                let destination = self.libraryRoot.appendingPathComponent(entry.id.uuidString)
+                let trashed = self.trashRoot.appendingPathComponent(entry.id.uuidString)
+                if !fm.fileExists(atPath: destination.path), !fm.fileExists(atPath: trashed.path) {
+                    let staging = self.libraryRoot.appendingPathComponent(".initial-\(entry.id).staging")
+                    if fm.fileExists(atPath: staging.path) { try fm.removeItem(at: staging) }
+                    defer { try? fm.removeItem(at: staging) }
+                    try fm.copyItem(at: resourceURL.appendingPathComponent(entry.path), to: staging)
+                    let book = try JSONDecoder().decode(DiaryBook.self,
+                        from: Data(contentsOf: staging.appendingPathComponent("book.json")))
+                    guard book.id == entry.id, book.format == "TravelDiary.Book", book.schemaVersion == 1 else {
+                        throw DiaryEditorError.invalidDocument.logged()
+                    }
+                    try fm.moveItem(at: staging, to: destination)
+                }
+                // 标记独立于书籍目录，用户删除后也不重新安装。
+                try Data().write(to: marker, options: .atomic)
+            }
+        }
+    }
+
     /// 书架只扫描小型目录文件，不读取各页图层和照片。
     nonisolated func listBooks() async throws -> [DiaryBook] {
         try await run {

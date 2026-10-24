@@ -140,8 +140,8 @@ struct FeedbackPhotoRows: View {
 struct FeedbackEnvironmentSheet: View {
     @Environment(\.dismiss) private var dismiss
     private var fields: [(String, String)] {
-        [("应用版本", AppVersionInformation.title), ("系统版本", "iOS \(UIDevice.current.systemVersion)"),
-         ("设备类型", UIDevice.current.model), ("语言", Locale.preferredLanguages.first ?? "zh-Hans")]
+        [("应用版本", AppVersionInformation.title), ("系统版本", "iOS \(AppleDeviceInfo.systemVersion)"),
+         ("设备类型", AppleDeviceInfo.modelName), ("语言", Locale.preferredLanguages.first ?? "zh-Hans")]
     }
     var body: some View {
         NavigationStack {

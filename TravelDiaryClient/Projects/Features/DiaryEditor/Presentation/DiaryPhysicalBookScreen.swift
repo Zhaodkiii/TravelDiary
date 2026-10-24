@@ -13,6 +13,7 @@ struct DiaryPhysicalBookScreen: View {
     @State private var immersionDismissed = false
     @State private var showingPreviewExit = false
     private var isImmersive: Bool { isLandscape && !immersionDismissed }
+    private var usesPlainPaper: Bool { isImmersive && AppleDeviceInfo.isDuo }
     private var readerSpreadCount: Int { isImmersive ? contentSpreadCount : spreadCount }
     @State private var opened = false
     @State private var spread = 0
@@ -75,6 +76,7 @@ struct DiaryPhysicalBookScreen: View {
                     }.disabled(turningCover)
                 }
             }
+            .ignoresSafeArea(.container, edges: usesPlainPaper ? .all : [])
             .onGeometryChange(for: Bool.self) { geometry in
                 // Include system insets so hiding the navigation bar cannot flip the classification.
                 geometry.size.width + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing >
@@ -179,12 +181,13 @@ struct DiaryPhysicalBookScreen: View {
     private var bookViewport: some View {
         GeometryReader { geometry in
             if isImmersive {
-                // Keep UIKit's interactive page curl directly under the finger.
-                // Only the black side margins handle exit taps; no overlay covers the paper.
+                let size = usesPlainPaper
+                    ? DiaryBookStageLayout.paperSize(viewport: geometry.size, paperRatio: paperRatio)
+                    : DiaryBookStageLayout.openSize(viewport: geometry.size, paperRatio: paperRatio)
+                // Keep the original direct UIKit gesture path in immersive reading.
                 bookStage(viewport: geometry.size)
                     .allowsHitTesting(!turningCover)
                     .overlay {
-                        let size = DiaryBookStageLayout.openSize(viewport: geometry.size, paperRatio: paperRatio)
                         HStack(spacing: 0) {
                             previewExitMargin
                             Spacer(minLength: 0).frame(width: size.width).allowsHitTesting(false)
@@ -227,15 +230,27 @@ struct DiaryPhysicalBookScreen: View {
         }
     }
 
-    private func bookStage(viewport: CGSize) -> some View {
-        DiaryBookOpeningStage(progress: opened ? 1 : 0, viewport: viewport,
-                              paperRatio: paperRatio, cover: book.shell,
-                              firstPage: innerPages.first, store: store) {
-            DiaryCurlBook(pages: innerPages, store: store, spreadCount: readerSpreadCount, spread: $spread,
-                allowsEditing: !isImmersive, reduceMotion: reduceMotion, onSelectPage: openEditor, onAddPage: handleAdd)
-                .id(book.catalogRevision)
+    @ViewBuilder private func bookStage(viewport: CGSize) -> some View {
+        if usesPlainPaper {
+            let size = DiaryBookStageLayout.paperSize(viewport: viewport, paperRatio: paperRatio)
+            curlBook
+                .frame(width: size.width, height: size.height)
+                .frame(width: viewport.width, height: viewport.height)
+        } else {
+            DiaryBookOpeningStage(progress: opened ? 1 : 0, viewport: viewport,
+                                  paperRatio: paperRatio, cover: book.shell,
+                                  firstPage: innerPages.first, store: store) {
+                curlBook
+            }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.85), value: opened)
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.85), value: opened)
+    }
+
+    private var curlBook: some View {
+        DiaryCurlBook(pages: innerPages, store: store, spreadCount: readerSpreadCount, spread: $spread,
+            allowsEditing: !isImmersive, reduceMotion: reduceMotion, plainPaper: usesPlainPaper,
+            onSelectPage: openEditor, onAddPage: handleAdd)
+            .id(book.catalogRevision)
     }
 
     private var previewExitMargin: some View {
@@ -358,8 +373,9 @@ struct DiaryPhysicalBookScreen: View {
     }
     private func setOpened(_ value: Bool) {
         guard opened != value else { return }
-        turningCover = !reduceMotion
+        turningCover = !reduceMotion && !usesPlainPaper
         opened = value
+        guard turningCover else { return }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(900))
             turningCover = false
@@ -373,7 +389,7 @@ struct DiaryBindingRings: View {
         GeometryReader { geometry in
             // 九扣按三组三枚排列；固定在书脊，翻页时不跟随纸张旋转。
             ForEach(0..<9) { index in
-                let fraction = 0.10 + Double(index / 3) * 0.31 + Double(index % 3) * 0.075
+                let fraction = DiaryBookSpine.ringPositions[index]
                 Image("DiaryBookRing").resizable().scaledToFit()
                     .frame(width: min(geometry.size.width * 0.075, 56))
                     .position(x: geometry.size.width / 2, y: geometry.size.height * fraction)
@@ -394,13 +410,14 @@ private struct DiaryCurlBook: View {
     @Binding var spread: Int
     let allowsEditing: Bool
     let reduceMotion: Bool
+    let plainPaper: Bool
     let onSelectPage: (DiaryPageEntry) -> Void
     let onAddPage: (DiaryReaderAddAction) -> Void
 
     var body: some View {
-        DiaryPageCurlReader(spreadCount: spreadCount, spread: $spread, reduceMotion: reduceMotion, allowsPageActions: allowsEditing) { index, canSelect in
+        DiaryPageCurlReader(spreadCount: spreadCount, spread: $spread, reduceMotion: reduceMotion, allowsPageActions: allowsEditing, showsBinding: true) { index, canSelect in
             DiaryPaperController(index: index, page: pages.indices.contains(index - 1) ? pages[index - 1] : nil,
-                store: store, showsAddPlaceholder: allowsEditing, canSelect: canSelect, onAdd: { if canSelect() { onAddPage($0) } },
+                store: store, plainPaper: plainPaper, showsAddPlaceholder: allowsEditing, canSelect: canSelect, onAdd: { if canSelect() { onAddPage($0) } },
                 onSelect: { if canSelect() { onSelectPage($0) } })
         }
     }
@@ -425,6 +442,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
     @Binding var spread: Int
     let reduceMotion: Bool
     var allowsPageActions = true
+    var showsBinding = true
     let makePaper: (Int, @escaping () -> Bool) -> UIViewController
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -448,6 +466,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
     }
     func updateUIViewController(_ controller: UIPageViewController, context: Context) {
         context.coordinator.parent = self
+        context.coordinator.updateBindingVisibility()
         context.coordinator.updateMotionPolicy(in: controller)
         context.coordinator.show(spread, in: controller, animated: !reduceMotion)
     }
@@ -512,13 +531,18 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
             rings.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             controller.view.addSubview(rings.view)
             rings.didMove(toParent: controller)
+            updateBindingVisibility()
+        }
+
+        func updateBindingVisibility() {
+            setRingsVisible(!transitioning, animated: false)
         }
 
         private func setRingsVisible(_ visible: Bool, animated: Bool) {
             // 直接修改独立装订层，不触发 SwiftUI 更新或重建卷页控制器。
             UIView.animate(withDuration: animated ? (visible ? 0.18 : 0.08) : 0,
                            delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
-                self.rings.view.alpha = visible ? 1 : 0
+                self.rings.view.alpha = visible && self.parent.showsBinding ? 1 : 0
             }
         }
         init(_ parent: DiaryPageCurlReader) {
@@ -536,7 +560,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
         }
         func show(_ requested: Int, in controller: UIPageViewController, animated: Bool) {
             guard !transitioning else { return }
-            let countChanged = pageSource.spreadCount != parent.spreadCount || pageSource.allowsPageActions != parent.allowsPageActions
+            let countChanged = pageSource.spreadCount != parent.spreadCount || pageSource.allowsPageActions != parent.allowsPageActions || pageSource.showsBinding != parent.showsBinding
             pageSource = parent
             if countChanged { papers.removeAll() }
             let target = min(max(requested, 0), max(1, pageSource.spreadCount) - 1)
@@ -619,13 +643,13 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
     private let selectedPage: DiaryPageEntry?
     private let onSelect: (DiaryPageEntry) -> Void
     private let onAdd: (DiaryReaderAddAction) -> Void
-    init(index: Int, page: DiaryPageEntry?, store: DiaryDocumentStore, showsAddPlaceholder: Bool, canSelect: @escaping () -> Bool, onAdd: @escaping (DiaryReaderAddAction) -> Void, onSelect: @escaping (DiaryPageEntry) -> Void) {
+    init(index: Int, page: DiaryPageEntry?, store: DiaryDocumentStore, plainPaper: Bool, showsAddPlaceholder: Bool, canSelect: @escaping () -> Bool, onAdd: @escaping (DiaryReaderAddAction) -> Void, onSelect: @escaping (DiaryPageEntry) -> Void) {
         self.index = index
         self.canSelect = canSelect
         self.selectedPage = page
         self.onSelect = onSelect
         self.onAdd = onAdd
-        super.init(rootView: DiaryBookPaper(page: page, store: store, left: index.isMultiple(of: 2), insideCover: index == 0, showsAddPlaceholder: showsAddPlaceholder))
+        super.init(rootView: DiaryBookPaper(page: page, store: store, left: index.isMultiple(of: 2), insideCover: index == 0, showsAddPlaceholder: showsAddPlaceholder, plainPaper: plainPaper))
         view.backgroundColor = .clear
         safeAreaRegions = []
         if showsAddPlaceholder && (page != nil || index > 0) {
@@ -674,6 +698,7 @@ private struct DiaryBookPaper: View {
     let left: Bool
     let insideCover: Bool
     let showsAddPlaceholder: Bool
+    let plainPaper: Bool
     var body: some View {
         GeometryReader { geometry in
         ZStack {
@@ -688,14 +713,20 @@ private struct DiaryBookPaper: View {
             }
             HStack(spacing: 0) {
                 if left { Spacer(minLength: 0) }
-                LinearGradient(colors: [.black.opacity(0.16), .clear], startPoint: left ? .trailing : .leading, endPoint: left ? .leading : .trailing)
-                    .frame(width: 18)
+                LinearGradient(colors: [.black.opacity(plainPaper ? 0.10 : 0.16), .clear], startPoint: left ? .trailing : .leading, endPoint: left ? .leading : .trailing)
+                    .frame(width: plainPaper ? 8 : 18)
                 if !left { Spacer(minLength: 0) }
             }.allowsHitTesting(false)
         }
         .frame(width: geometry.size.width * (1 - DiaryBookSpine.halfGapFraction), height: geometry.size.height)
-        .clipped()
-        .shadow(color: .black.opacity(0.35), radius: 1.5, x: left ? 1.5 : -1.5)
+        // 只裁每张纸的外侧两角；卷页容器不加蒙版，保留 UIKit 卷曲与投影。
+        .clipShape(UnevenRoundedRectangle(
+            topLeadingRadius: plainPaper && left ? DiaryBookStageLayout.paperCornerRadius : 0,
+            bottomLeadingRadius: plainPaper && left ? DiaryBookStageLayout.paperCornerRadius : 0,
+            bottomTrailingRadius: plainPaper && !left ? DiaryBookStageLayout.paperCornerRadius : 0,
+            topTrailingRadius: plainPaper && !left ? DiaryBookStageLayout.paperCornerRadius : 0,
+            style: .continuous))
+        .shadow(color: .black.opacity(plainPaper ? 0 : 0.35), radius: 1.5, x: left ? 1.5 : -1.5)
         .frame(width: geometry.size.width, height: geometry.size.height, alignment: left ? .leading : .trailing)
         }
     }

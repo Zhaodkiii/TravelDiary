@@ -107,10 +107,22 @@ private struct DiaryBookBackingHalf: View {
 /// 每张纸在书脊侧留出 1.8% 宽度，左右合成一条可见的装订缝。
 nonisolated enum DiaryBookSpine {
     static let halfGapFraction: CGFloat = 0.018
+    // 屏幕展示采用三组三孔：组内等距、组间等距，中心孔在 50%，上下镜像。
+    // 不作为实体印刷打孔尺寸；不同装订器的九孔规格并不相同。
+    static let ringPositions: [CGFloat] = [0.115, 0.190, 0.265, 0.425, 0.500, 0.575, 0.735, 0.810, 0.885]
 }
 
 /// Shared fitted bounds for rendering and the immersive background hit area.
 nonisolated enum DiaryBookStageLayout {
+    static let paperCornerRadius: CGFloat = 24
+
+    /// Duo 横屏纯纸面：尺寸包含装订缝，扣除缝隙后每张纸保持内容比例。
+    static func paperSize(viewport: CGSize, paperRatio: CGFloat) -> CGSize {
+        let ratio = max(paperRatio, 0.01) * 2 / (1 - DiaryBookSpine.halfGapFraction)
+        let width = min(max(viewport.width - 16, 1), max(viewport.height - 16, 1) * ratio)
+        return CGSize(width: width, height: width / ratio)
+    }
+
     static func openSize(viewport: CGSize, paperRatio: CGFloat) -> CGSize {
         let rimFraction: CGFloat = 0.045
         let heightPerHalfWidth = (1 - rimFraction) * (1 - DiaryBookSpine.halfGapFraction) / paperRatio + 2 * rimFraction

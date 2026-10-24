@@ -5,6 +5,7 @@ import UIKit
 struct DiaryBookZoomViewport<Content: View>: UIViewControllerRepresentable {
     let contentSize: CGSize
     let resetToken: Int
+    var focusSpreadSize: CGSize? = nil
     @ViewBuilder let content: () -> Content
 
     func makeUIViewController(context: Context) -> DiaryBookZoomController<Content> {
@@ -12,7 +13,7 @@ struct DiaryBookZoomViewport<Content: View>: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: DiaryBookZoomController<Content>, context: Context) {
-        controller.update(content: content(), size: contentSize, token: resetToken)
+        controller.update(content: content(), size: contentSize, token: resetToken, focusSpreadSize: focusSpreadSize)
     }
 }
 
@@ -21,6 +22,8 @@ final class DiaryBookZoomController<Content: View>: UIViewController, UIScrollVi
     private let host: UIHostingController<Content>
     private var size = CGSize.zero
     private var token: Int?
+    private var focusSpreadSize: CGSize?
+    private lazy var doubleTap = UITapGestureRecognizer(target: self, action: #selector(focusPage(_:)))
     private var needsCenter = true
     private var suspended: [DiaryCurlPageViewController] = []
 
@@ -42,6 +45,9 @@ final class DiaryBookZoomController<Content: View>: UIViewController, UIScrollVi
         scroll.showsHorizontalScrollIndicator = false
         scroll.showsVerticalScrollIndicator = false
         scroll.panGestureRecognizer.minimumNumberOfTouches = 2
+        doubleTap.numberOfTapsRequired = 2
+        doubleTap.isEnabled = false
+        scroll.addGestureRecognizer(doubleTap)
         view.addSubview(scroll)
         addChild(host)
         host.safeAreaRegions = []
@@ -50,8 +56,10 @@ final class DiaryBookZoomController<Content: View>: UIViewController, UIScrollVi
         host.didMove(toParent: self)
     }
 
-    func update(content: Content, size: CGSize, token: Int) {
+    func update(content: Content, size: CGSize, token: Int, focusSpreadSize: CGSize? = nil) {
         loadViewIfNeeded()
+        self.focusSpreadSize = focusSpreadSize
+        doubleTap.isEnabled = focusSpreadSize != nil
         host.rootView = content
         guard self.size != size || self.token != token else { return }
         suspendPageGestures(false)
@@ -84,6 +92,21 @@ final class DiaryBookZoomController<Content: View>: UIViewController, UIScrollVi
         let enlarged = scale > 1.001
         scroll.panGestureRecognizer.minimumNumberOfTouches = enlarged ? 1 : 2
         suspendPageGestures(enlarged)
+    }
+
+    @objc private func focusPage(_ gesture: UITapGestureRecognizer) {
+        guard let focusSpreadSize else { return }
+        let animated = !UIAccessibility.isReduceMotionEnabled
+        if scroll.zoomScale > 1.001 {
+            scroll.setZoomScale(1, animated: animated)
+            if !animated { scrollViewDidEndZooming(scroll, with: host.view, atScale: 1) }
+            return
+        }
+        guard let rect = DiaryBookFocusLayout.rect(viewport: size, spread: focusSpreadSize,
+                                                   point: gesture.location(in: host.view)) else { return }
+        suspendPageGestures(true)
+        scroll.zoom(to: rect, animated: animated)
+        if !animated { scrollViewDidEndZooming(scroll, with: host.view, atScale: scroll.zoomScale) }
     }
 
     private func center() {
@@ -133,5 +156,22 @@ struct DiaryBookLining: View {
         }
         .overlay(LinearGradient(colors: [.black.opacity(0.08), .clear, .black.opacity(0.18)], startPoint: .leading, endPoint: .trailing))
         .accessibilityLabel("绒面内衬")
+    }
+}
+
+/// 单页按宽度聚焦；纵向保留点击位置，边界处不露出书本外的空白。
+nonisolated enum DiaryBookFocusLayout {
+    static func rect(viewport: CGSize, spread: CGSize, point: CGPoint) -> CGRect? {
+        guard viewport.width > 0, viewport.height > 0, spread.width > 0, spread.height > 0 else { return nil }
+        let book = CGRect(x: (viewport.width - spread.width) / 2,
+                          y: (viewport.height - spread.height) / 2,
+                          width: spread.width, height: spread.height)
+        guard book.contains(point) else { return nil }
+        let scale = min(2.5, max(1.5, viewport.width / (spread.width / 2)))
+        let width = viewport.width / scale, height = viewport.height / scale
+        let centerX = book.midX + (point.x < book.midX ? -spread.width / 4 : spread.width / 4)
+        return CGRect(x: min(max(centerX - width / 2, book.minX), book.maxX - width),
+                      y: min(max(point.y - height / 2, book.minY), max(book.minY, book.maxY - height)),
+                      width: width, height: height)
     }
 }
