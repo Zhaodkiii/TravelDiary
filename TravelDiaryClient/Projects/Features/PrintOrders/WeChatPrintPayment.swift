@@ -31,7 +31,9 @@ final class WeChatPrintPayment: NSObject, WXApiDelegate {
     func handle(_ activity: NSUserActivity) { _ = try? checkAvailability(); _ = WXApi.handleOpenUniversalLink(activity, delegate: self) }
     nonisolated func onResp(_ resp: BaseResp) {
         // SDK 返回不改变付款结果；订单页回到前台后向服务端查单。
-        Task { @MainActor in NotificationCenter.default.post(name: .printPaymentReturned, object: nil) }
+        guard resp is PayResp else { return }
+        let outcome: PrintPaymentReturn = resp.errCode == -2 ? .cancelled : resp.errCode == 0 ? .returned : .failed
+        Task { @MainActor in NotificationCenter.default.post(name: .printPaymentReturned, object: nil, userInfo: ["outcome": outcome.rawValue]) }
     }
 }
 extension Notification.Name { static let printPaymentReturned = Notification.Name("PrintPaymentReturned") }

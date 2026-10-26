@@ -14,6 +14,7 @@ struct PrintCheckoutScreen: View {
     @State private var productID = ""
     @State private var prepared: PrintPrepared?
     @State private var address = PrintAddress()
+    @State private var editingAddress = false
     @State private var quantity = 1
     @State private var quote: PrintQuote?
     @State private var confirmed = false
@@ -59,9 +60,7 @@ struct PrintCheckoutScreen: View {
                         checkout.navigationTitle("确认订单")
                             .navigationBarBackButtonHidden(busy)
                             .safeAreaInset(edge: .bottom) {
-                                action(submitTitle, disabled: !confirmed || !address.complete || quote == nil || busy || jobID != nil) {
-                                    if let prepared { submit(prepared) }
-                                }
+                                checkoutFooter
                             }
                             .task(id: quoteKey) { await calculate() }
                     case .submission(let id):
@@ -73,6 +72,11 @@ struct PrintCheckoutScreen: View {
         }
         .tint(ink)
         .interactiveDismissDisabled(busy)
+        .sheet(isPresented: $editingAddress) {
+            PrintAddressEditor(address: address, regions: product?.regions ?? []) { value in
+                address = value; confirmed = false
+            }
+        }
         .sheet(item: $preview) { PrintPDFPreview(item: $0) }
         .sheet(item: $progressivePreview) { PrintProgressivePreview(item: $0) }
         .sheet(item: $reviseSelection) { PrintCheckoutScreen(book: book, store: store, revisionOrder: $0) }
@@ -212,17 +216,32 @@ struct PrintCheckoutScreen: View {
         Form {
             Section { steps(3) }
             Section("收货地址") {
-                TextField("收件人", text: $address.name).textContentType(.name).onChange(of: address.name) { _, _ in confirmed = false }
-                TextField("手机号", text: $address.phone).keyboardType(.phonePad).textContentType(.telephoneNumber).onChange(of: address.phone) { _, _ in confirmed = false }
-                Picker("配送地区", selection: $address.region) {
-                    Text("请选择").tag("")
-                    ForEach(product?.regions ?? [], id: \.self) { Text($0).tag($0) }
-                }
-                TextField("街道、门牌号等详细地址", text: $address.detail, axis: .vertical).textContentType(.fullStreetAddress).onChange(of: address.detail) { _, _ in confirmed = false }
-            }.disabled(revisionOrder != nil)
+                Button { editingAddress = true } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "mappin.and.ellipse").foregroundStyle(ink)
+                        VStack(alignment: .leading, spacing: 8) {
+                            if address.complete {
+                                Text("\(address.name) · \(address.phone)").font(.headline)
+                                Text(address.region + " " + address.detail).font(.subheadline).foregroundStyle(.secondary)
+                            } else { Text("添加收货地址").font(.headline) }
+                        }
+                        Spacer()
+                        if revisionOrder == nil { Image(systemName: "chevron.right").foregroundStyle(.secondary) }
+                    }.foregroundStyle(.primary).padding(.vertical, 8)
+                }.disabled(revisionOrder != nil)
+            }
             if let product, let prepared {
                 Section("印制内容") {
-                    LabeledContent("作品", value: book.title)
+                    HStack(alignment: .top, spacing: 16) {
+                        if let page = book.shell ?? book.contentPages.first, let url = previewPages[page.id] {
+                            PrintPreparedThumbnail(url: url).frame(width: 76, height: 108).background(.white).clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(book.title).font(.headline)
+                            Text("\(product.title) · \(quantity) 份").font(.subheadline).foregroundStyle(.secondary)
+                            Text("\(prepared.pageCount) 面内页").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.padding(.vertical, 6)
                     LabeledContent("规格", value: "\(product.title) · \(product.width_mm) × \(product.height_mm) mm")
                     LabeledContent("纸张 / 装订", value: "\(product.paper) / \(product.binding)")
                     LabeledContent("数量", value: "\(quantity) 份")
@@ -232,8 +251,10 @@ struct PrintCheckoutScreen: View {
                 }
                 Section("费用") {
                     if let quote {
-                        LabeledContent("印制费", value: PrintText.money(quote.production_fen))
-                        LabeledContent("运费", value: PrintText.money(quote.shipping_fen))
+                        if revisionOrder == nil || revisionOrder?.hasFeeBreakdown == true {
+                            LabeledContent("印制费", value: PrintText.money(quote.production_fen))
+                            LabeledContent("运费", value: PrintText.money(quote.shipping_fen))
+                        }
                         LabeledContent("实付", value: quote.total_fen == 0 ? "免费 · ¥0.00" : PrintText.money(quote.total_fen)).font(.headline)
                     } else if busy { ProgressView("正在确认费用…") }
                     else { Text("请选择配送地区，以确认费用。").foregroundStyle(.secondary) }
@@ -243,15 +264,33 @@ struct PrintCheckoutScreen: View {
                 Section("购买与售后") {
                     Text(product.terms).font(.footnote).foregroundStyle(.secondary)
                     Toggle("我已检查成品预览，并同意购买及售后说明", isOn: $confirmed)
-                    Text(revisionOrder != nil ? "新稿替换当前生产稿，保留原订单及付款信息。" : "上传完成后，免费订单直接进入人工审核；收费订单需完成微信支付。").font(.footnote).foregroundStyle(.secondary)
+                    Text(revisionOrder != nil ? "新稿替换当前生产稿，保留原订单及付款信息。" : "上传完成后，免费订单直接进入人工审核；收费订单需选择支付方式并完成付款。").font(.footnote).foregroundStyle(.secondary)
                 }
             }
         }
     }
-    private var submitTitle: String {
-        if revisionOrder != nil { return "替换生产稿并重新提交" }
-        guard let quote else { return "确认配送地区后提交" }
-        return quote.total_fen == 0 ? "提交免费印制订单" : "提交订单 · \(PrintText.money(quote.total_fen))"
+    private var checkoutFooter: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let reason = checkoutBlockReason { Text(reason).font(.caption).foregroundStyle(.secondary) }
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("实付金额").font(.caption).foregroundStyle(.secondary)
+                    Text(quote.map { PrintText.money($0.total_fen) } ?? "待确认").font(.title3.bold())
+                }
+                Spacer()
+                Button { if let prepared { submit(prepared) } } label: {
+                    Text(revisionOrder != nil ? "提交修改稿" : quote?.total_fen == 0 ? "提交免费订单" : "提交订单")
+                        .font(.headline).padding(.vertical, 8)
+                }.buttonStyle(.borderedProminent).disabled(checkoutBlockReason != nil || jobID != nil)
+            }
+        }.padding().background(.regularMaterial)
+    }
+    private var checkoutBlockReason: String? {
+        if busy { return "正在确认订单信息…" }
+        if !address.complete { return "请先添加完整的收货地址" }
+        if quote == nil { return "请先确认配送地区与费用" }
+        if !confirmed { return "请检查成品预览，并同意购买及售后说明" }
+        return nil
     }
     private func steps(_ current: Int) -> some View {
         HStack(spacing: 8) {
@@ -322,7 +361,7 @@ struct PrintCheckoutScreen: View {
         do {
             let result: PrintQuote
             if let revisionOrder {
-                result = PrintQuote(total_fen: revisionOrder.total_fen, production_fen: revisionOrder.total_fen - product.shipping_fen, shipping_fen: product.shipping_fen, page_count: prepared.pageCount, sheets: product.duplex ? prepared.pageCount/2 : prepared.pageCount, product_revision: product.revision)
+                result = PrintQuote(total_fen: revisionOrder.total_fen, production_fen: revisionOrder.production_fen ?? revisionOrder.total_fen, shipping_fen: revisionOrder.shipping_fen ?? 0, page_count: prepared.pageCount, sheets: product.duplex ? prepared.pageCount/2 : prepared.pageCount, product_revision: product.revision)
             } else { result = try await service.quote(product: product, pages: prepared.pageCount, quantity: quantity, address: address, owner: store.ownerID) }
             try Task.checkCancellation()
             guard key == quoteKey else { return }
@@ -517,60 +556,99 @@ struct PrintUploadScreen: View {
     let owner: String
     var onClose: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var service = PrintOrderService.shared
     @State private var latestOrder: PrintOrder?
     @State private var refreshError: String?
+    @State private var showingDetails = false
+    @State private var showingPayment = false
+    @State private var didOfferPayment = false
+    @State private var visible = false
     private var job: PrintLocalJob? { service.jobs.first { $0.id == id && $0.owner == owner } }
-    private func close() {
-        if let onClose { onClose() } else { dismiss() }
+    private var title: String {
+        if let order = latestOrder {
+            if order.payment_state == "paid" { return "付款已确认" }
+            if order.canPay { return "订单待支付" }
+            if order.file_state == "checking" { return "正在校验生产文件" }
+            if order.file_state == "failed" { return "生产文件需要处理" }
+            if order.state == "cancelled" { return "订单已取消" }
+            if order.file_state == "ready" { return order.statusText }
+        }
+        return job?.state == "已上传" ? "文件已上传，正在确认订单" : "正在提交印制"
     }
+    private func close() { if let onClose { onClose() } else { dismiss() } }
     var body: some View {
         List {
             if let job {
                 Section {
-                    Label(job.state == "已上传" ? "订单已提交" : "正在提交印制", systemImage: job.state == "已上传" ? "checkmark.circle.fill" : "arrow.up.doc").font(.headline)
-                    HStack {
-                        Label("文件已准备", systemImage: "checkmark.circle.fill")
-                        Image(systemName: "chevron.right")
-                        Text(job.state == "已上传" ? "上传完成" : "上传文件")
-                        Image(systemName: "chevron.right")
-                        Text("提交完成").foregroundStyle(job.state == "已上传" ? .primary : .secondary)
-                    }.font(.caption)
-                    Text(job.submission.title).font(.headline); Text(job.state)
-                    if let latestOrder, job.state == "已上传" { Text(latestOrder.statusText).foregroundStyle(.secondary) }
-                    if let latestOrder, !latestOrder.production_error.isEmpty { Text(latestOrder.production_error).foregroundStyle(.red) }
+                    Label(title, systemImage: latestOrder?.canPay == true ? "creditcard" : "doc.text")
+                        .font(.headline)
+                    Text(job.submission.title).font(.headline)
+                    if job.state != "已上传" {
+                        Text(job.state)
+                        if let progress = service.progress[id] {
+                            ProgressView(value: progress); Text("上传 \(Int(progress * 100))%").font(.caption)
+                        }
+                    }
+                    Text("文件上传、文件校验与付款分别确认。收费订单完成付款后进入印前审核。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    if let order = latestOrder, !order.production_error.isEmpty { Text(order.production_error).foregroundStyle(.red) }
                     if let refreshError { Text(refreshError).foregroundStyle(.red) }
-                    if let progress = service.progress[id] { ProgressView(value: progress); Text("\(Int(progress*100))%").font(.caption) }
                     if let error = job.error { Text(error).foregroundStyle(.red) }
                     if service.isRunning(id) { Button("暂停上传") { service.pause(id) } }
-                    else if job.state != "已上传" || latestOrder?.file_state == "failed" { Button(latestOrder?.file_state == "failed" ? "重新上传生产稿" : "继续上传") { latestOrder = nil; service.resume(id) } }
-//                    Text("可以离开此页面，订单与上传记录已保存。系统中断后，可从“我的印制订单”继续。").font(.footnote).foregroundStyle(.secondary)
+                    else if job.state != "已上传" || latestOrder?.file_state == "failed" {
+                        Button("继续上传生产文件") { service.resume(id) }
+                    }
+                    Text("可关闭页面，稍后从“我的印制订单”恢复。切换到后台后上传可能暂停。")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
-                if let orderID = job.orderID { Section { NavigationLink(job.submission.quote_total_fen == 0 ? "查看免费印制订单" : "查看订单 / 微信支付") { PrintOrderDetailScreen(id: orderID, owner: owner) } } }
+                if let orderID = job.orderID {
+                    Section {
+                        NavigationLink("查看订单详情") { PrintOrderDetailScreen(id: orderID, owner: owner) }
+                        Button("刷新订单状态") { Task { await refresh() } }
+                    }
+                }
             } else { Text("此账号下没有该上传任务") }
         }.navigationTitle("提交印制")
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button(job?.state == "已上传" ? "完成" : "关闭", action: close)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("关闭", action: close) } }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 10) {
+                    if let order = latestOrder, order.canPay {
+                        Button("去支付 · \(PrintText.money(order.total_fen))") { didOfferPayment = true; showingPayment = true }
+                            .buttonStyle(.borderedProminent)
+                        Button("稍后支付", action: close).font(.footnote)
+                    } else if let orderID = job?.orderID, job?.state == "已上传" {
+                        NavigationLink("查看订单") { PrintOrderDetailScreen(id: orderID, owner: owner) }
+                            .buttonStyle(.borderedProminent)
+                    } else { Button("关闭页面", action: close).buttonStyle(.bordered) }
+                }.frame(maxWidth: .infinity).padding().background(.regularMaterial)
             }
-        }
-        .safeAreaInset(edge: .bottom) {
-            Button(action: close) {
-                Text(job?.state == "已上传" ? "完成并关闭" : "关闭页面")
-                    .font(.headline).frame(maxWidth: .infinity).padding(12)
+            .sheet(isPresented: $showingPayment, onDismiss: { Task { await refresh() } }) {
+                if let order = latestOrder { PrintPaymentSheet(order: order, owner: owner, onViewOrder: { showingDetails = true }) }
             }
-            .buttonStyle(.borderedProminent)
-            .padding().background(.regularMaterial)
-        }
-        .task {
-            while !Task.isCancelled {
-                if let orderID = job?.orderID, !service.isRunning(id) {
-                    do { latestOrder = try await service.order(orderID, owner: owner); refreshError = nil }
-                    catch { refreshError = error.localizedDescription }
+            .navigationDestination(isPresented: $showingDetails) {
+                if let orderID = job?.orderID { PrintOrderDetailScreen(id: orderID, owner: owner) }
+            }
+            .onAppear { visible = true }
+            .onDisappear { visible = false }
+            .task(id: job?.state) {
+                while !Task.isCancelled {
+                    if scenePhase == .active && !showingPayment { await refresh() }
+                    do { try await Task.sleep(for: .seconds(5)) } catch { return }
                 }
-                do { try await Task.sleep(for: .seconds(10)) } catch { return }
             }
-        }
+    }
+    private func refresh() async {
+        guard let orderID = job?.orderID else { return }
+        do {
+            let value = try await service.order(orderID, owner: owner)
+            try Task.checkCancellation()
+            latestOrder = value; refreshError = nil
+            if visible && scenePhase == .active && !didOfferPayment && value.canPay && job?.state == "已上传" {
+                didOfferPayment = true; showingPayment = true
+            }
+        } catch is CancellationError { }
+        catch { refreshError = error.localizedDescription }
     }
 }
 
@@ -699,6 +777,13 @@ struct PrintOrdersScreen: View {
 }
 
 struct PrintOrderDetailScreen: View {
+    @State private var showingPayment = false
+    @StateObject private var payment: PrintPaymentCoordinator
+    init(id: String, owner: String) {
+        self.id = id; self.owner = owner
+        _payment = StateObject(wrappedValue: PrintOrderService.shared.paymentCoordinator(id: id, owner: owner))
+    }
+
     let id: String
     let owner: String
     @Environment(\.scenePhase) private var scenePhase
@@ -737,7 +822,7 @@ struct PrintOrderDetailScreen: View {
                             if !order.after_sale_resolution.isEmpty { infoRow("处理结果", value: order.after_sale_resolution) }
                         }
                     }
-                    if order.refund_state == "exception" {
+                    if ["exception", "blocked", "unknown"].contains(order.refund_state) {
                         noticeCard(title: "退款处理中", message: "退款暂未完成，工作人员正在核对。可通过售后联系处理。", symbol: "clock", tone: .orange)
                     }
                     detailCard(title: "印制规格", symbol: "book.closed") {
@@ -746,6 +831,12 @@ struct PrintOrderDetailScreen: View {
                         infoRow("内页", value: "\(order.page_count) 面")
                         if let covers = order.cover_page_count, covers > 0 { infoRow("封面", value: "\(covers) 面") }
                         infoRow("付款状态", value: PrintText.label(order.payment_state))
+                        if let paid = order.payments?.first(where: { $0.state == "succeeded" }) {
+                            infoRow("付款方式", value: paid.channel == "alipay" ? "支付宝" : "微信支付")
+                        }
+                        ForEach(order.refunds ?? []) { refund in
+                            infoRow("原路退款", value: "\(PrintText.money(refund.amount)) · \(refund.state == "success" ? "已完成" : ["blocked", "exception"].contains(refund.state) ? "待工作人员处理" : refund.state == "unknown" ? "结果核对中" : "处理中")")
+                        }
                     }
                     detailCard(title: "收货与物流", symbol: "shippingbox") {
                         VStack(alignment: .leading, spacing: 5) {
@@ -809,7 +900,12 @@ struct PrintOrderDetailScreen: View {
         }
         .refreshable { await load() }
         .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await load(payment: true) } } }
-        .onReceive(NotificationCenter.default.publisher(for: .printPaymentReturned)) { _ in Task { await load(payment: true) } }
+        .sheet(isPresented: $showingPayment, onDismiss: { Task { await load(payment: true) } }) {
+            if let order { PrintPaymentSheet(order: order, owner: owner) }
+        }
+        .onReceive(payment.$order) { value in
+            if let value, value.id == id, value.revision >= (order?.revision ?? 0) { order = value }
+        }
         .sheet(item: $revisionContext, onDismiss: { Task { await load() } }) { context in
             PrintCheckoutScreen(book: context.book, store: context.store, revisionOrder: context.order)
         }
@@ -881,8 +977,8 @@ struct PrintOrderDetailScreen: View {
         if (order.allowed_actions.contains("upload") && local != nil) || order.allowed_actions.contains("pay") || order.allowed_actions.contains("cancel") || order.allowed_actions.contains("receive") {
             VStack(spacing: 10) {
                 if order.allowed_actions.contains("pay") {
-                    Button { Task { await pay() } } label: {
-                        HStack { Image(systemName: "creditcard"); Text("微信支付 · \(PrintText.money(order.total_fen))") }
+                    Button { showingPayment = true } label: {
+                        HStack { Image(systemName: "creditcard"); Text("继续支付 · \(PrintText.money(order.total_fen))") }
                             .font(.headline).frame(maxWidth: .infinity).padding(14)
                     }.buttonStyle(.borderedProminent)
                 }
@@ -969,13 +1065,16 @@ struct PrintOrderDetailScreen: View {
         } catch { self.error = "无法打开本机原作品，请在保有该作品的设备上修改重提。" }
     }
     private func load(payment: Bool = false) async {
-        guard !busy else { return }; busy = true; error = nil; defer { busy = false }
-        do { order = payment ? try await service.refreshPayment(id, owner: owner) : try await service.order(id, owner: owner) }
-        catch { self.error = error.localizedDescription }
-    }
-    private func pay() async {
+        if busy { if payment { self.payment.requestRefresh() }; return }
         busy = true; error = nil; defer { busy = false }
-        do { try await service.pay(id, owner: owner) } catch { self.error = error.localizedDescription }
+        if payment || self.payment.hasPendingPayment || order?.payment_state == "unpaid" || order == nil {
+            await self.payment.refresh()
+            if let value = self.payment.order { order = value }
+            error = self.payment.error
+        } else {
+            do { order = try await service.order(id, owner: owner) }
+            catch { self.error = error.localizedDescription }
+        }
     }
     private func act(_ action: String) async {
         guard let order, !busy else { return }; busy = true; error = nil; defer { busy = false }

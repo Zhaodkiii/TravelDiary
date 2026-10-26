@@ -2,8 +2,26 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>AlipayURLScheme</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER).alipay</string>
 	<key>CFBundleURLTypes</key>
 	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>payment-test</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>traveldiary-paytest</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>alipay</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(PRODUCT_BUNDLE_IDENTIFIER).alipay</string>
+			</array>
+		</dict>
 		<dict>
 			<key>CFBundleURLName</key>
 			<string>wechat</string>
@@ -15,6 +33,8 @@
 	</array>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
+		<string>alipay</string>
+		<string>alipays</string>
 		<string>weixin</string>
 		<string>weixinULAPI</string>
 		<string>weixinURLParamsAPI</string>

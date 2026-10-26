@@ -16,7 +16,7 @@ nonisolated struct PrintLocalJob: Codable, Identifiable, Sendable {
 }
 
 @MainActor
-final class PrintOrderService: ObservableObject {
+final class PrintOrderService: ObservableObject, PrintPaymentClient {
     static let shared = PrintOrderService()
     @Published private(set) var jobs: [PrintLocalJob] = []
     @Published private(set) var progress: [UUID: Double] = [:]
@@ -25,6 +25,8 @@ final class PrintOrderService: ObservableObject {
     private var boundAccount = false
     private var subscription: AnyCancellable?
     private var tasks: [UUID: Task<Void, Never>] = [:]
+    private var payments: [String: PrintPaymentCoordinator] = [:]
+    private var paymentRecoveryTask: Task<Void, Never>?
     private let root = StoragePaths.system.accounts
 
     func configure(engine: SupportNetworkEngine, sessions: AppSessionStore) {
@@ -35,10 +37,31 @@ final class PrintOrderService: ObservableObject {
             if case let .signedIn(session) = state { id = String(session.accountID); boundAccount = !session.isDeviceAccount }
             else { id = nil; boundAccount = false }
             guard id != owner else { return }
+            paymentRecoveryTask?.cancel(); paymentRecoveryTask = nil
+            payments.values.forEach { $0.invalidate() }; payments.removeAll()
             tasks.values.forEach { $0.cancel() }; tasks.removeAll(); progress = [:]; jobs = []; owner = id
             if let id, let data = try? Data(contentsOf: index(id)), let saved = try? JSONDecoder().decode([PrintLocalJob].self, from: data) {
                 jobs = saved.filter { $0.owner == id }
                 for i in jobs.indices where jobs[i].state == "正在上传" { jobs[i].state = "上传已暂停" }
+            }
+            if let id { restorePayments(owner: id) }
+        }
+    }
+    private func restorePayments(owner: String) {
+        let folder = StoragePaths.system.printOrders(owner)
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        let pending = files.filter { $0.lastPathComponent.hasPrefix("payment-") && $0.pathExtension == "json" }
+            .compactMap { url -> PrintPaymentContext? in
+                guard let data = try? Data(contentsOf: url), let value = try? JSONDecoder().decode(PrintPaymentContext.self, from: data),
+                      value.owner == owner else { return nil }
+                return value
+            }
+            .map { paymentCoordinator(id: $0.orderID, owner: owner) }
+        paymentRecoveryTask = Task {
+            // Recover serially to avoid a burst of provider queries at login.
+            for value in pending {
+                guard !Task.isCancelled else { return }
+                await value.refresh()
             }
         }
     }
@@ -79,11 +102,42 @@ final class PrintOrderService: ObservableObject {
     func refreshPayment(_ id: String, owner: String) async throws -> PrintOrder {
         try await request("orders/\(id)/refresh-payment/", owner: owner, body: json([:]))
     }
-    func pay(_ id: String, owner: String) async throws {
-        try WeChatPrintPayment.shared.checkAvailability()
-        let params: WeChatPaymentParameters = try await request("orders/\(id)/payments/", owner: owner, body: json([:]))
+    func paymentMethods(owner: String) async throws -> [PrintPaymentMethod] {
+        try await request("payment-methods/", owner: owner)
+    }
+    func paymentCoordinator(id: String, owner: String) -> PrintPaymentCoordinator {
+        let key = "\(owner)/\(id)"
+        if let existing = payments[key] { return existing }
+        // Hash the remote identifier rather than treating it as a filesystem path.
+        let name = SHA256.hash(data: Data(id.utf8)).map { String(format: "%02x", $0) }.joined()
+        let url = StoragePaths.system.printOrders(owner).appendingPathComponent("payment-\(name).json")
+        let value = PrintPaymentCoordinator(id: id, owner: owner, client: self, storageURL: url)
+        payments[key] = value
+        return value
+    }
+    func paymentReturned(_ outcome: PrintPaymentReturn) {
+        for value in payments.values where value.hasPendingPayment { value.returned(outcome) }
+    }
+    func resumePayments() {
+        for value in payments.values where value.hasPendingPayment { value.requestRefresh(poll: true) }
+    }
+    func checkPaymentAvailability(_ channel: String) throws {
+        if channel == "wechat" { try WeChatPrintPayment.shared.checkAvailability() }
+        else if channel == "alipay" { try AlipayPrintPayment.shared.checkAvailability() }
+        else { throw PrintFailure("支付方式无效") }
+    }
+    func createPayment(_ id: String, owner: String, channel: String, key: UUID) async throws -> PrintPaymentLaunch {
         try requireOwner(owner)
-        try await WeChatPrintPayment.shared.pay(params)
+        return try await request("orders/\(id)/payments/", owner: owner,
+            body: json(["channel":channel,"key":key.uuidString]))
+    }
+    func launchPayment(_ launch: PrintPaymentLaunch, owner: String) async throws {
+        try requireOwner(owner)
+        if launch.channel == "wechat" { try await WeChatPrintPayment.shared.pay(launch.parameters.wechat()) }
+        else if launch.channel == "alipay" {
+            guard let value = launch.parameters.order_string, !value.isEmpty else { throw PrintFailure("支付宝支付参数为空") }
+            try AlipayPrintPayment.shared.pay(value)
+        } else { throw PrintFailure("支付方式无效") }
     }
     func enqueue(_ submission: PrintSubmission, directory: URL, owner: String) throws -> UUID {
         try requireOwner(owner, bound: true)

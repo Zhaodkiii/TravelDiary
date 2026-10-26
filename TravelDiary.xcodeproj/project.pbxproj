@@ -12,6 +12,8 @@
 		A1OSS0032FFB252D00137E68 /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A1OSS0132FFB252D00137E68 /* libresolv.tbd */; };
 		A1TEST0D2FFB401000137E68 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1TEST0C2FFB401000137E68 /* XCTest.framework */; };
 		C0DE00100000000000000001 /* Vendor/WeChat/WechatOpenSDK.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0DE00100000000000000002 /* Vendor/WeChat/WechatOpenSDK.xcframework */; };
+		C0DE00200000000000000001 /* Vendor/Alipay/AlipaySDK.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0DE00200000000000000002 /* Vendor/Alipay/AlipaySDK.xcframework */; };
+		C0DE00200000000000000003 /* Vendor/Alipay/AlipaySDK.bundle in Resources */ = {isa = PBXBuildFile; fileRef = C0DE00200000000000000004 /* Vendor/Alipay/AlipaySDK.bundle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -32,6 +34,8 @@
 		A1TEST012FFB401000137E68 /* TravelDiaryTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TravelDiaryTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1TEST0C2FFB401000137E68 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/iPhoneOS.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
 		C0DE00100000000000000002 /* Vendor/WeChat/WechatOpenSDK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Vendor/WeChat/WechatOpenSDK.xcframework; sourceTree = SOURCE_ROOT; };
+		C0DE00200000000000000002 /* Vendor/Alipay/AlipaySDK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Vendor/Alipay/AlipaySDK.xcframework; sourceTree = SOURCE_ROOT; };
+		C0DE00200000000000000004 /* Vendor/Alipay/AlipaySDK.bundle */ = {isa = PBXFileReference; lastKnownFileType = wrapper.cfbundle; path = Vendor/Alipay/AlipaySDK.bundle; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -218,6 +222,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C0DE00100000000000000001 /* Vendor/WeChat/WechatOpenSDK.xcframework in Frameworks */,
+				C0DE00200000000000000001 /* Vendor/Alipay/AlipaySDK.xcframework in Frameworks */,
 				A1OSS0022FFB252D00137E68 /* SystemConfiguration.framework in Frameworks */,
 				A1OSS0012FFB252D00137E68 /* CoreTelephony.framework in Frameworks */,
 				A1OSS0032FFB252D00137E68 /* libresolv.tbd in Frameworks */,
@@ -258,6 +263,8 @@
 			isa = PBXGroup;
 			children = (
 				C0DE00100000000000000002 /* Vendor/WeChat/WechatOpenSDK.xcframework */,
+				C0DE00200000000000000002 /* Vendor/Alipay/AlipaySDK.xcframework */,
+				C0DE00200000000000000004 /* Vendor/Alipay/AlipaySDK.bundle */,
 				A1OSS0132FFB252D00137E68 /* libresolv.tbd */,
 				A1OSS0122FFB252D00137E68 /* SystemConfiguration.framework */,
 				A1OSS0112FFB252D00137E68 /* CoreTelephony.framework */,
@@ -361,6 +368,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0DE00200000000000000003 /* Vendor/Alipay/AlipaySDK.bundle in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -561,9 +569,15 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.2;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+					"-lc++",
+					"-lz",
+				);
 				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/PureLayout/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/AliyunOSSSDK/module.modulemap";
-				PRODUCT_BUNDLE_IDENTIFIER = cn.Zhaodk.Mybook;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.zhaodk.MyBook;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -621,9 +635,15 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.2;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+					"-lc++",
+					"-lz",
+				);
 				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/PureLayout/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/AliyunOSSSDK/module.modulemap";
-				PRODUCT_BUNDLE_IDENTIFIER = cn.Zhaodk.Mybook;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.zhaodk.MyBook;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -651,6 +671,12 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+					"-lc++",
+					"-lz",
+				);
 				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/PureLayout/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/AliyunOSSSDK/module.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = cn.zhaodk.TravelDiaryTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -673,6 +699,12 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+					"-lc++",
+					"-lz",
+				);
 				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/PureLayout/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/AliyunOSSSDK/module.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = cn.zhaodk.TravelDiaryTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";

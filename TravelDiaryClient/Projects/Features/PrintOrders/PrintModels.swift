@@ -22,7 +22,7 @@ nonisolated struct PrintProduct: Codable, Identifiable, Equatable, Sendable {
     let lead_time: String
     let terms: String
 }
-nonisolated struct PrintAddress: Codable, Sendable {
+nonisolated struct PrintAddress: Codable, Equatable, Sendable {
     var name = ""
     var phone = ""
     var region = ""
@@ -33,11 +33,16 @@ nonisolated struct PrintAddress: Codable, Sendable {
                      region: region.trimmingCharacters(in: .whitespacesAndNewlines),
                      detail: detail.trimmingCharacters(in: .whitespacesAndNewlines))
     }
+    var phoneValid: Bool {
+        let value = trimmed.phone
+        return value.range(of: #"^\+?[0-9][0-9 -]{5,18}[0-9]$"#, options: .regularExpression) != nil
+            && value.filter(\.isNumber).count >= 7
+    }
     var complete: Bool {
         let value = trimmed
         return !value.name.isEmpty && value.name.count <= 60 && !value.region.isEmpty &&
             !value.detail.isEmpty && value.detail.count <= 240 &&
-            value.phone.range(of: #"^\+?[0-9 -]{7,20}$"#, options: .regularExpression) != nil
+            value.phoneValid
     }
 }
 nonisolated struct PrintFile: Codable, Sendable {
@@ -77,6 +82,11 @@ nonisolated struct PrintQuote: Decodable, Sendable {
     let product_revision: Int
 }
 nonisolated struct PrintOrder: Decodable, Identifiable, Sendable {
+    var production_fen: Int? = nil
+    var shipping_fen: Int? = nil
+    var payment_expires_at: String?
+    var payments: [PrintPaymentRecord]?
+    var refunds: [PrintRefundRecord]?
     struct Event: Decodable, Identifiable, Sendable { let id: Int; let action: String; let message: String; let created_at: String }
     struct Shipment: Decodable, Identifiable, Sendable { let id: Int; let carrier: String; let tracking_number: String; let created_at: String; let kind: String }
     let id: String
@@ -105,6 +115,13 @@ nonisolated struct PrintOrder: Decodable, Identifiable, Sendable {
     let checks: [String]
     let events: [Event]
     let shipments: [Shipment]
+    var hasFeeBreakdown: Bool {
+        guard let production_fen, let shipping_fen, production_fen >= 0, shipping_fen >= 0,
+              production_fen <= total_fen, shipping_fen <= total_fen else { return false }
+        return production_fen == total_fen - shipping_fen
+    }
+    var canPay: Bool { total_fen > 0 && payment_state == "unpaid" && state != "cancelled" && allowed_actions.contains("pay") }
+    var paymentDeadline: Date? { payment_expires_at.flatMap(PrintText.date) }
     var statusText: String {
         if state == "draft" { return file_state == "ready" ? (payment_state == "unpaid" ? "待支付" : "等待审核") : PrintText.label(file_state) }
         return PrintText.label(state)
@@ -126,6 +143,11 @@ nonisolated struct WeChatPaymentParameters: Decodable, Sendable {
     let package: String; let noncestr: String; let timestamp: UInt32; let sign: String
 }
 nonisolated enum PrintText {
+    static func date(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
     static func money(_ fen: Int) -> String { String(format: "¥%.2f", Double(fen) / 100) }
     static func label(_ value: String) -> String {
         ["draft":"准备中", "uploading":"待上传生产稿", "checking":"正在校验生产稿", "ready":"文件已就绪", "failed":"文件处理失败",
@@ -138,4 +160,32 @@ nonisolated struct PrintFailure: LocalizedError, Sendable {
     let message: String
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
+}
+
+nonisolated struct PrintPaymentMethod: Decodable, Identifiable, Sendable {
+    let id: String
+    let title: String
+}
+nonisolated struct PrintPaymentLaunch: Decodable, Sendable {
+    let attempt_id: String
+    let channel: String
+    let expires_at: String
+    let parameters: Parameters
+    struct Parameters: Decodable, Sendable {
+        let order_string: String?
+        let appid: String?; let partnerid: String?; let prepayid: String?
+        let package: String?; let noncestr: String?; let timestamp: UInt32?; let sign: String?
+        func wechat() throws -> WeChatPaymentParameters {
+            guard let appid, let partnerid, let prepayid, let package, let noncestr, let timestamp, let sign else { throw PrintFailure("支付参数不完整，请重试") }
+            return WeChatPaymentParameters(appid: appid, partnerid: partnerid, prepayid: prepayid, package: package, noncestr: noncestr, timestamp: timestamp, sign: sign)
+        }
+    }
+}
+
+nonisolated struct PrintPaymentRecord: Decodable, Identifiable, Sendable {
+    let id: String; let channel: String; let amount: Int; let state: String
+    let paid_at: String?; let provider_id: String?
+}
+nonisolated struct PrintRefundRecord: Decodable, Identifiable, Sendable {
+    let id: String; let channel: String; let amount: Int; let state: String; let reason: String
 }
