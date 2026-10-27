@@ -107,6 +107,7 @@ final class PresetDownloadManager: ObservableObject {
     private var browseRequests: [String: Task<RemotePresetBrowse, Error>] = [:]
     private var owner: String?
     private let root: URL
+    private var materialCacheClearing = false
     private let chunkSize = 8 * 1024 * 1024
 
     init(directory: URL? = nil) {
@@ -152,6 +153,7 @@ final class PresetDownloadManager: ObservableObject {
     }
     func deactivate() {
         for job in jobs where running[job.id] != nil { pause(job.id) }
+        MaterialCatalogRepository.shared.activate("")
         owner = nil; signedURLs.removeAll(); browseCache.removeAll(); rebuildAvailability()
     }
     func activate(owner: String) {
@@ -440,8 +442,45 @@ final class PresetDownloadManager: ObservableObject {
             }
         }
     }
+    func materialCacheFiles() -> [URL] {
+        let registry = root.appendingPathComponent("material-hashes.json")
+        let hashes = (try? JSONDecoder().decode([String].self, from: Data(contentsOf: registry))) ?? []
+        let protected = Set(jobs.flatMap { job in
+            (try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData).files.map(\.sha256)) ?? []
+        }).union(lockedHashes)
+        return hashes.filter { $0.count == 64 && $0.allSatisfy(\.isHexDigit) && !protected.contains($0) }
+            .flatMap { hash in [root.appendingPathComponent("blobs/" + hash), root.appendingPathComponent("blobs/" + hash + ".parts")] }
+    }
+    func clearMaterialCache() async throws {
+        materialCacheClearing = true; defer { materialCacheClearing = false }
+        let files = materialCacheFiles()
+        try await Task.detached(priority: .utility) {
+            for file in files where FileManager.default.fileExists(atPath:file.path) { try FileManager.default.removeItem(at:file) }
+        }.value
+    }
+
     /// Material and preset imports share hash locks, cached bytes, range resume and URL refresh.
     func materialData(_ item: CloudMaterial, progress: @escaping @MainActor @Sendable (Double) -> Void) async throws -> Data {
+        guard !materialCacheClearing, item.availability != "unavailable" else { throw URLError(.resourceUnavailable) }
+        let registry = root.appendingPathComponent("material-hashes.json")
+        var hashes = Set((try? JSONDecoder().decode([String].self, from: Data(contentsOf: registry))) ?? [])
+        hashes.insert(item.sha256)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try? JSONEncoder().encode(Array(hashes)).write(to: registry, options: .atomic)
+        let materialKey = "material-\(item.revision)"
+        if item.library_id != nil {
+            do {
+                let plan = try await MaterialCatalogRepository.shared.downloadPlan(item)
+                guard plan.sha256 == item.sha256, plan.byte_size == item.byte_size else { throw DiaryEditorError.invalidDocument }
+                signedURLs[materialKey] = (Date(), [item.sha256: plan.url])
+            } catch let error as URLError where [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotConnectToHost].contains(error.code) {
+                // Only complete, hash-verified cached bytes can be used offline.
+                let path = root.appendingPathComponent("blobs").appendingPathComponent(item.sha256)
+                if let data = try? Data(contentsOf: path), data.count == item.byte_size,
+                   SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == item.sha256 { progress(1); return data }
+                throw error
+            }
+        }
         if let data = await MaterialThumbnailCache.shared.cachedOriginal(item) {
             try Task.checkCancellation()
             progress(1)
@@ -449,13 +488,13 @@ final class PresetDownloadManager: ObservableObject {
         }
         let key = "material-\(item.revision)"
         let file = PresetManifest.FileRecord(path: item.sha256, byteCount: item.byte_size, sha256: item.sha256)
-        let url = try await download(file, plan: key, paths: [], materialRevision: item.revision) { count in
+        let url = try await download(file, plan: key, paths: [], materialRevision: item.revision, material: item) { count in
             progress(Double(count) / Double(max(1, item.byte_size)))
         }
         return try await Task.detached(priority: .utility) { try Data(contentsOf: url) }.value
     }
 
-    private func download(_ file: PresetManifest.FileRecord, plan: String, paths: [String], materialRevision: Int? = nil, progress: @escaping @MainActor @Sendable (Int) -> Void) async throws -> URL {
+    private func download(_ file: PresetManifest.FileRecord, plan: String, paths: [String], materialRevision: Int? = nil, material: CloudMaterial? = nil, progress: @escaping @MainActor @Sendable (Int) -> Void) async throws -> URL {
         guard file.sha256.count == 64, file.sha256.allSatisfy({ $0.isHexDigit }), file.byteCount >= 0, file.byteCount <= 100_000_000 else { throw DiaryEditorError.invalidDocument }
         while lockedHashes.contains(file.sha256) { try await Task.sleep(for: .milliseconds(150)) }
         try Task.checkCancellation()
@@ -491,7 +530,9 @@ final class PresetDownloadManager: ObservableObject {
                         if signedURLs[plan].map({ Date().timeIntervalSince($0.0) < 600 && $0.1[file.path] != nil }) != true {
                             let urls: [String: String]
                             if let materialRevision {
-                                let result: MaterialDownload = try await MaterialCatalogRepository.shared.request("revisions/\(materialRevision)/download/", method: .post)
+                                let result: MaterialDownload
+                                if let material, material.library_id != nil { result = try await MaterialCatalogRepository.shared.downloadPlan(material) }
+                                else { result = try await MaterialCatalogRepository.shared.request("revisions/\(materialRevision)/download/", method: .post) }
                                 guard result.sha256 == file.sha256, result.byte_size == file.byteCount else { throw DiaryEditorError.invalidDocument }
                                 urls = [file.path: result.url]
                             } else {

@@ -25,6 +25,13 @@ nonisolated struct DiaryDocument: Codable, Equatable, Sendable {
     var root: DiaryObjectContent { objects[rootContentID]! }
 }
 
+nonisolated struct DiaryMaterialSource: Codable, Equatable, Sendable {
+    let materialID: String
+    let revision: Int
+    let libraryID: String?
+    let libraryVersion: Int?
+}
+
 nonisolated struct DiaryAsset: Codable, Equatable, Sendable {
     let id: UUID
     let path: String
@@ -98,6 +105,7 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
     var subcategory: String? = nil
     var renderType: String? = nil
     var assetID: UUID?
+    var materialSource: DiaryMaterialSource? = nil
     var contentID: UUID?
     var frameTargetID: UUID?
     var frameColor: DiaryColor?

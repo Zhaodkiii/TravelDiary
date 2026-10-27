@@ -12,7 +12,7 @@ args = parser.parse_args()
 root = Path(__file__).resolve().parent.parent
 # -only-testing limits execution, but Xcode still compiles every test source.
 # The older XCTest classes do not compile under this target's default MainActor setting.
-keep = {'PrintPaymentCoordinatorTests.swift', 'PrintProbeLinkTests.swift', 'DiaryBookPrintExportTests.swift'}
+keep = {'PrintPaymentCoordinatorTests.swift', 'PrintProbeLinkTests.swift', 'DiaryBookPrintExportTests.swift', 'RegionTests.swift'}
 excluded = sorted({p.name for p in (root / 'TravelDiaryTests').rglob('*.swift') if p.name not in keep})
 command = [
     'xcodebuild', '-project', 'TravelDiary.xcodeproj', '-scheme', 'TravelDiary',
@@ -20,6 +20,7 @@ command = [
     'CODE_SIGNING_ALLOWED=NO', 'EXCLUDED_SOURCE_FILE_NAMES=' + ' '.join(excluded),
     # Alipay's static framework is also autolinked into the hosted test bundle.
     'OTHER_LDFLAGS=$(inherited) -framework CoreTelephony -framework SystemConfiguration',
+    '-only-testing:TravelDiaryTests/RegionTests',
     '-only-testing:TravelDiaryTests/PrintPaymentCoordinatorTests',
     '-only-testing:TravelDiaryTests/PrintWorkflowContractTests',
     '-only-testing:TravelDiaryTests/PrintProbeLinkTests',

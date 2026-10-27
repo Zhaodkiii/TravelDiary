@@ -8,6 +8,9 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     struct Snapshot: Equatable {
         var document: DiaryDocument
     }
+    func acceptsMaterialInsertion(documentID: UUID, contentID: UUID, replacingID: UUID?) -> Bool {
+        !closing && !childOpen && document.id == documentID && self.contentID == contentID && document.objects[contentID] != nil && (replacingID == nil || document.layer(replacingID!) != nil)
+    }
     let id = UUID()
     let contentID: UUID
     let baseRevision: Int
@@ -798,7 +801,8 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
 
     func importPhoto(_ data: Data, replacing: UUID? = nil, asSticker: Bool = false, stickerName: String = "贴纸",
                      semanticKind: DiaryLayerSemanticKind? = nil, subcategory: String? = nil,
-                     renderType: String? = nil) async -> Bool {
+                     renderType: String? = nil, materialSource: DiaryMaterialSource? = nil,
+                     canCommit: (() -> Bool)? = nil) async -> Bool {
         if replacing == nil && !asSticker { return await importPhotos([data]) }
         guard !busy else { return false }
         busy = true
@@ -813,6 +817,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             if let replacing, let layer = editableLayer(replacing), layer.isContentPhoto {
                 slot = try await store.photoSlot(for: layer, document: document)
             } else { slot = nil }
+            guard !Task.isCancelled, !closing, canCommit?() != false else { return false }
             images[asset.id] = image
             edit {
                 document.assets[asset.id] = asset
@@ -834,6 +839,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                     sticker.semanticKind = semanticKind
                     sticker.subcategory = subcategory
                     sticker.renderType = renderType
+                    sticker.materialSource = materialSource
                     if semanticKind == .text { sticker.category = .textImage }
                     document.appendObject(containing: sticker, to: contentID); selectedID = sticker.id
                 }

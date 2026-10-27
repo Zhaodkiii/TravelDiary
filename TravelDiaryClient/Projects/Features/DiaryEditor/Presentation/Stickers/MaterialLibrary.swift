@@ -1,9 +1,10 @@
 import SwiftUI
 import CryptoKit
+import Combine
 
 nonisolated struct CloudMaterialLibrary: Codable, Identifiable {
     let id: String
-    let template_id: String
+    let template_id: String?
     let title: String
     let type: String
     let series: String
@@ -11,6 +12,11 @@ nonisolated struct CloudMaterialLibrary: Codable, Identifiable {
     let count: Int
     var favorite_count: Int
     var is_favorited: Bool
+    var description: String? = nil
+    var cover: MaterialImageResource? = nil
+    var previews: [MaterialImageResource]? = nil
+    var tags: [String]? = nil
+    var availability: String? = nil
 }
 nonisolated struct CloudMaterial: Codable, Identifiable {
     let id: String
@@ -26,6 +32,9 @@ nonisolated struct CloudMaterial: Codable, Identifiable {
     let byte_size: Int
     var favorite_count: Int
     var is_favorited: Bool
+    var library_id: String? = nil
+    var library_version: Int? = nil
+    var availability: String? = nil
 }
 nonisolated struct MaterialCategory: Decodable {
     struct Subcategory: Decodable, Identifiable { let id: String; let title: String }
@@ -38,11 +47,23 @@ nonisolated struct MaterialDownload: Decodable { let url: String; let sha256: St
 nonisolated struct MaterialFavoriteResult: Decodable { let is_favorited: Bool; let favorite_count: Int }
 
 @MainActor
-final class MaterialCatalogRepository {
+final class MaterialCatalogRepository: ObservableObject {
+    @Published var changeID = UUID()
+    struct PickerState {
+        var source: String
+        var library: CloudMaterialLibrary?
+        var query: String
+        var kind: String
+        var subcategory: String
+        var scrollID: String?
+    }
+    var pickerStates: [UUID:PickerState] = [:]
+    @Published var pendingLibrary: CloudMaterialLibrary?
+    @Published var isOffline = false
     static let shared = MaterialCatalogRepository()
     var engine: SupportNetworkEngine?
-    private(set) var owner = ""
-    func activate(_ owner: String) { self.owner = owner }
+    @Published private(set) var owner = ""
+    func activate(_ owner: String) { if self.owner != owner { pickerStates = [:]; pendingLibrary = nil; changeID = UUID(); isOffline = false }; self.owner = owner }
     static func networkRequest(_ path: String, body: [String: Bool]? = nil, method: SupportHTTPMethod? = nil) throws -> SupportNetworkRequest {
         guard let parts = URLComponents(string: path), parts.scheme == nil, parts.host == nil, parts.fragment == nil else { throw URLError(.badURL) }
         return SupportNetworkRequest(method: method ?? (body == nil ? .get : .post),
@@ -50,6 +71,45 @@ final class MaterialCatalogRepository {
             body: body.map { .json(AnyEncodable($0)) } ?? .none,
             strategy: NetworkStrategy(requiresAuth: true))
     }
+    func favoriteLibraries() async throws -> [CloudMaterialLibrary] {
+        var result:[CloudMaterialLibrary]=[]
+        var cursor:String?
+        repeat {
+            try Task.checkCancellation()
+            var params=["schema":"2","type":"sticker","favorites":"1","sort":"added","limit":"100"]
+            if let cursor { params["cursor"]=cursor }
+            let page:MaterialListPage<CloudMaterialLibrary>=try await request(MaterialRoutes.path("libraries/",params))
+            result += page.items;cursor=page.next_cursor
+        } while cursor != nil
+        return result
+    }
+
+    func refreshPreview(resourceID: String, libraryID: String, version: Int) async throws -> MaterialImageResource {
+        struct Entry: Encodable { let resource_id: String; let library_id: String; let version: Int }
+        struct Body: Encodable { let resources: [Entry] }
+        guard let engine else { throw URLError(.userAuthenticationRequired) }
+        let captured = owner
+        let request = SupportNetworkRequest(method: .post, path: "/api/v1/materials/previews/resolve/",
+            body: .json(AnyEncodable(Body(resources: [Entry(resource_id:resourceID,library_id:libraryID,version:version)]))),strategy: NetworkStrategy(requiresAuth:true))
+        let response = try await engine.sendRaw(request)
+        guard owner == captured else { throw CancellationError() }
+        guard let resource = try JSONDecoder().decode([MaterialImageResource].self,from:response.data).first else { throw URLError(.badServerResponse) }
+        return resource
+    }
+
+    func downloadPlan(_ item: CloudMaterial) async throws -> MaterialDownload {
+        guard let engine else { throw URLError(.userAuthenticationRequired) }
+        struct Context: Encodable { let library_id: String?; let library_version: Int? }
+        let account = owner
+        let request = SupportNetworkRequest(method: .post, path: "/api/v1/materials/revisions/\(item.revision)/download/",
+            queryItems: [URLQueryItem(name: "schema", value: "2")],
+            body: .json(AnyEncodable(Context(library_id: item.library_id, library_version: item.library_version))),
+            strategy: NetworkStrategy(requiresAuth: true))
+        let data = try await engine.sendRaw(request)
+        guard owner == account else { throw CancellationError() }
+        return try JSONDecoder().decode(MaterialDownload.self, from: data.data)
+    }
+
     func request<T: Decodable>(_ path: String, body: [String: Bool]? = nil, method: SupportHTTPMethod? = nil) async throws -> T {
         guard let engine else { throw URLError(.userAuthenticationRequired) }
         let cacheable = (method ?? (body == nil ? .get : .post)) == .get
@@ -65,9 +125,12 @@ final class MaterialCatalogRepository {
                 try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
                 try? response.data.write(to: cache, options: .atomic)
             }
+            isOffline = false
+            if !cacheable { changeID = UUID() }
             return result
         } catch let error as URLError where cacheable && [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotConnectToHost].contains(error.code) {
             guard owner == capturedOwner, let data = try? Data(contentsOf: cache) else { throw error }
+            isOffline = true
             return try JSONDecoder().decode(T.self, from: data)
         }
     }
@@ -79,12 +142,24 @@ struct MaterialLibraryBrowser: View {
     var templateID: String? = nil
     var templateVersion: Int? = nil
     var type = "sticker"
+    var initialLibrary: CloudMaterialLibrary? = nil
     @Environment(\.dismiss) private var dismiss
     /// The editor keeps its native sheet open for consecutive additions.
     var keepsOpenAfterAdding = false
     static let compactHeight: CGFloat = 260
     static let compactDetent: PresentationDetent = .height(compactHeight)
     @State private var sheetDetent: PresentationDetent = compactDetent
+    @ObservedObject private var catalog = MaterialCatalogRepository.shared
+    @State private var source = "最近"
+    @State private var selectedLibrary: CloudMaterialLibrary?
+    @State private var myLibraries: [CloudMaterialLibrary] = []
+    @State private var currentLibraries: [CloudMaterialLibrary] = []
+    @State private var nextCursor: String?
+    @State private var showGallery = false
+    @State private var showFilters = false
+    @State private var showAllPacks = false
+    @State private var searchScope = "本包"
+    @State private var scrollID: String?
     @State private var localFavorites: [String] = []
     @State private var localRecent: [String] = []
     @State private var progress: Double = 0
@@ -105,14 +180,16 @@ struct MaterialLibraryBrowser: View {
 
     init(session: DiaryEditorSession? = nil, replacingID: UUID? = nil,
          templateID: String? = nil, templateVersion: Int? = nil,
-         type: String = "sticker", keepsOpenAfterAdding: Bool = false) {
+         type: String = "sticker", keepsOpenAfterAdding: Bool = false, initialLibrary: CloudMaterialLibrary? = nil) {
         self.session = session
         self.replacingID = replacingID
         self.templateID = templateID
         self.templateVersion = templateVersion
         self.type = type
+        self.initialLibrary = initialLibrary
+        _selectedLibrary = State(initialValue: initialLibrary)
         self.keepsOpenAfterAdding = keepsOpenAfterAdding
-        _kind = State(initialValue: type == "sticker" ? "illustration" : "")
+        _kind = State(initialValue: "")
     }
 
     private var isLocal: Bool { kind == "builtin" }
@@ -124,12 +201,47 @@ struct MaterialLibraryBrowser: View {
         if type == "sticker", session != nil { result.append(("frames", "相框")); result.append(("builtin", "内置")) }
         return result
     }
-    private var filterKey: String { query + "|" + kind + "|" + subcategory }
+    private var filterKey: String { query + "|" + kind + "|" + subcategory + "|" + source + "|" + (selectedLibrary?.id ?? "") + "|" + searchScope }
 
     var body: some View {
         VStack(spacing: 6) {
+            if session != nil && type == "sticker" {
+                HStack {
+                    Picker("来源", selection: Binding(get: { source }, set: { value in
+                        source = value; kind = ""; selectedLibrary = value == "当前手帐" ? currentLibraries.first : nil
+                    })) {
+                        ForEach(["最近", "当前手帐", "我的"], id: \.self) { Text($0).tag($0) }
+                    }.pickerStyle(.segmented)
+                    Button { showGallery = true } label: { Image(systemName: "square.grid.2x2") }.accessibilityLabel("更多贴纸")
+                    Button { showFilters.toggle() } label: { Image(systemName: "line.3.horizontal.decrease") }.accessibilityLabel("分类筛选")
+                }.padding(.horizontal, 16)
+                if source != "最近" {
+                    ScrollView(.horizontal) {
+                        HStack {
+                            if source == "我的" { Button("单张收藏") { selectedLibrary = nil; kind = "" } }
+                            ForEach(source == "我的" ? myLibraries : currentLibraries) { lib in
+                                Button { selectedLibrary = lib; kind = "" } label: {
+                                    VStack(spacing: 2) {
+                                        MaterialResourceImage(resource: lib.cover).frame(width: 34, height: 34)
+                                        Text(lib.title).font(.caption2).lineLimit(1)
+                                    }.frame(width: 65).padding(3)
+                                        .background(selectedLibrary?.id == lib.id ? DiaryLibraryStyle.accent.opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                                }
+                            }
+                            if source == "我的" { Button("全部包") { showAllPacks = true } }
+                            Button("内置") { kind = "builtin"; selectedLibrary = nil }
+                        }.padding(.horizontal, 16)
+                    }
+                }
+            }
+            if source == "我的" && !query.isEmpty {
+                Picker("搜索范围", selection: $searchScope) { Text(selectedLibrary == nil ? "单张收藏" : "本包").tag("本包"); Text("我的全部贴纸").tag("我的全部") }
+                    .pickerStyle(.segmented).padding(.horizontal, 16)
+            }
+            if catalog.isOffline { Text("离线缓存").font(.caption).foregroundStyle(.secondary) }
             DiaryLibrarySearch(text: $query, prompt: "搜索\(title)")
                 .padding(.horizontal, 16).padding(.top, 8)
+            if showFilters || session == nil || type != "sticker" {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(categories, id: \.0) { entry in
@@ -148,6 +260,7 @@ struct MaterialLibraryBrowser: View {
                         }
                     }.padding(.horizontal, 16)
                 }.frame(height: 44)
+            }
             }
             if let error {
                 DiaryLibraryNotice(message: error) {
@@ -187,20 +300,22 @@ struct MaterialLibraryBrowser: View {
                                 materialCell(item)
                             }
                         }
-                    }.padding(.horizontal, 16)
+                    }.scrollTargetLayout().padding(.horizontal, 16)
                     if !isLocal {
-                        if cursor != nil {
+                        if cursor != nil || nextCursor != nil {
                             Button("加载更多") { Task { await loadItems(more: true) } }
                                 .disabled(loading).padding(.vertical, 12)
                         }
                         if loading { ProgressView().padding() }
                         if !loading && items.isEmpty {
+                            Button("搜索全部贴纸") { showGallery = true }
                             ContentUnavailableView("暂无素材", systemImage: "square.grid.2x2",
                                 description: Text("试试其他分类或搜索词"))
                         }
                     }
                 }
             }
+            .scrollPosition(id:$scrollID)
             .scrollDismissesKeyboard(.interactively)
             DiaryEditorToolFooter(title: title, onBack: { dismiss() }, onDone: { dismiss() })
         }
@@ -220,9 +335,23 @@ struct MaterialLibraryBrowser: View {
                 localFavorites = UserDefaults.standard.stringArray(forKey: session.store.stickerPreferenceKey + ".favorites") ?? []
                 localRecent = UserDefaults.standard.stringArray(forKey: session.store.stickerPreferenceKey + ".recent") ?? []
             }
+            await loadSources()
             await loadCategories()
         }
-        .onDisappear { generation = UUID(); addition?.cancel() }
+        .onChange(of: catalog.owner) { _, _ in
+            generation=UUID();addition?.cancel();items=[];myLibraries=[];currentLibraries=[];selectedLibrary=nil;localFavorites=[];localRecent=[]
+        }
+        .onChange(of: catalog.changeID) { _, _ in Task { await loadSources(refresh: true) } }
+        .sheet(isPresented: $showGallery) {
+            NavigationStack { StickerGalleryScreen(onUse: { lib in selectedLibrary = lib; source = "我的"; kind = ""; showGallery = false }, initialQuery:query, initialMode:query.isEmpty ? "包" : "单张").toolbar { ToolbarItem(placement:.topBarLeading) { Button("返回编辑器") { showGallery=false } } } }
+        }
+        .sheet(isPresented: $showAllPacks) {
+            NavigationStack { StickerGalleryScreen(mine: true, onUse: { lib in selectedLibrary = lib; kind = ""; showAllPacks = false }).toolbar { ToolbarItem(placement:.topBarLeading) { Button("返回编辑器") { showAllPacks=false } } } }
+        }
+        .onDisappear {
+            generation = UUID(); addition?.cancel()
+            if let session { catalog.pickerStates[session.id] = .init(source:source,library:selectedLibrary,query:query,kind:kind,subcategory:subcategory,scrollID:scrollID) }
+        }
         .task(id: filterKey) {
             do { try await Task.sleep(for: .milliseconds(300)); await loadItems(more: false) } catch { }
         }
@@ -243,6 +372,7 @@ struct MaterialLibraryBrowser: View {
         VStack(spacing: 6) {
             Button {
                 if session == nil { preview = item }
+                else if item.revision == 0, let local = DiaryStickerCatalog.items.first(where: { "local."+$0.id == item.id }) { addition = Task { await addLocal(local) } }
                 else { addition = Task { await add(item) } }
             } label: {
                 VStack(spacing: 6) {
@@ -266,7 +396,7 @@ struct MaterialLibraryBrowser: View {
                         }
                     Text(item.name).font(.caption2).lineLimit(1)
                 }
-            }.buttonStyle(.plain).disabled(adding)
+            }.buttonStyle(.plain).disabled(adding || item.availability == "unavailable")
             .contextMenu {
                 Button(item.is_favorited ? "取消收藏" : "收藏贴纸") { Task { await favoriteItem(item) } }
                 Button("查看详情") { preview = item }
@@ -284,6 +414,28 @@ struct MaterialLibraryBrowser: View {
         }
     }
 
+    private func loadSources(refresh: Bool = false) async {
+        guard type == "sticker" else { return }
+        do {
+            myLibraries = try await catalog.favoriteLibraries()
+            if let session, let book = try? await session.store.loadBook(),
+               let entry = book.pages.first(where: { $0.id == session.document.id }), let origin = entry.presetSource {
+                let current: MaterialListPage<CloudMaterialLibrary> = try await catalog.request(MaterialRoutes.path("libraries/", ["schema":"2", "type":"sticker", "template":origin.bookID, "template_version":String(origin.version)]))
+                currentLibraries = current.items
+            }
+            if !refresh {
+                if let initialLibrary { selectedLibrary = initialLibrary; source = "我的" }
+                else if let pending = catalog.pendingLibrary { source = "我的"; selectedLibrary = pending; catalog.pendingLibrary = nil }
+                else if let session, let saved=catalog.pickerStates[session.id] {
+                    source=saved.source;selectedLibrary=saved.library;query=saved.query;kind=saved.kind;subcategory=saved.subcategory;scrollID=saved.scrollID
+                }
+                else if let first = currentLibraries.first { source = "当前手帐"; selectedLibrary = first }
+                else if MaterialRecentStore.items(owner: catalog.owner).isEmpty { kind = "builtin" }
+            }
+            await loadItems(more: false)
+        } catch { self.error = error.localizedDescription }
+    }
+
     private func loadCategories() async {
         do {
             taxonomy = try await MaterialCatalogRepository.shared.request("categories/")
@@ -291,6 +443,9 @@ struct MaterialLibraryBrowser: View {
     }
     private func loadItems(more: Bool) async {
         guard !isLocal && kind != "frames" else { items = []; cursor = nil; loading = false; return }
+        if type == "sticker", session != nil || selectedLibrary != nil {
+            await loadStickerItems(more: more); return
+        }
         let token = UUID(); requestID = token; loading = true
         if !more { items = []; cursor = nil }
         defer { if requestID == token { loading = false } }
@@ -306,7 +461,43 @@ struct MaterialLibraryBrowser: View {
             items = more ? items + page.items : page.items; cursor = page.next; error = nil
         } catch { if token == requestID && !Task.isCancelled { self.error = error.localizedDescription } }
     }
+    private func loadStickerItems(more: Bool) async {
+        let token = UUID(); requestID = token; loading = true
+        defer { if requestID == token { loading = false } }
+        do {
+            if source == "最近", selectedLibrary == nil {
+                var recent = MaterialRecentStore.items(owner: catalog.owner)
+                if !catalog.isOffline {
+                    for i in recent.indices where recent[i].revision != 0 {
+                        do { recent[i] = try await catalog.request("items/\(recent[i].id)/") }
+                        catch let error as URLError where [.notConnectedToInternet,.networkConnectionLost,.timedOut,.cannotConnectToHost].contains(error.code) { break }
+                        catch { recent[i].availability = "unavailable" }
+                    }
+                }
+                guard requestID == token, !Task.isCancelled else { return }
+                MaterialRecentStore.save(recent,owner:catalog.owner)
+                items = recent.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+                nextCursor = nil; error = nil; return
+            }
+            if source == "当前手帐", selectedLibrary == nil { items = []; nextCursor = nil; return }
+            var params = ["schema":"2", "type":"sticker", "q":query, "kind":kind, "subcategory":subcategory]
+            var path = "items/"
+            if searchScope == "我的全部" && source == "我的" && !query.isEmpty { params["scope"] = "my" }
+            else if let lib = selectedLibrary { path = "libraries/\(lib.id)/items/"; params["version"] = String(lib.version) }
+            else { params["favorites"] = "1" }
+            if more { params["cursor"] = nextCursor }
+            let page: MaterialListPage<CloudMaterial> = try await catalog.request(MaterialRoutes.path(path, params))
+            guard requestID == token, !Task.isCancelled else { return }
+            items = more ? items + page.items : page.items; nextCursor = page.next_cursor; cursor = nil; error = nil
+        } catch { if requestID == token && !Task.isCancelled { self.error = error.localizedDescription } }
+    }
+
     private func favoriteItem(_ item: CloudMaterial) async {
+        if item.revision == 0 {
+            let id=String(item.id.dropFirst(6))
+            if localFavorites.contains(id) { localFavorites.removeAll { $0==id } } else { localFavorites.append(id) }
+            saveLocalPreferences();return
+        }
         do {
             let r: MaterialFavoriteResult = try await MaterialCatalogRepository.shared.request("items/\(item.id)/favorite/",body:["favorite":!item.is_favorited])
             if let i = items.firstIndex(where: {$0.id == item.id}) { items[i].is_favorited = r.is_favorited; items[i].favorite_count = r.favorite_count }
@@ -323,34 +514,40 @@ struct MaterialLibraryBrowser: View {
         } else { dismiss() }
     }
     private func addLocal(_ item: DiaryStickerItem) async {
-        guard !adding, let session, let data = item.image()?.pngData() else { return }
+        guard !adding, let session, session.store.ownerID == catalog.owner, let data = item.image()?.pngData() else { return }
         adding = true; defer { adding = false }
         if await session.importPhoto(data, replacing: replacingID, asSticker: true, stickerName: item.title) {
             localRecent.removeAll { $0 == item.id }; localRecent.insert(item.id, at: 0); localRecent = Array(localRecent.prefix(30))
+            MaterialRecentStore.recordLocal(item,owner:catalog.owner)
             saveLocalPreferences(); finishAdding()
         } else { error = session.errorMessage }
     }
     private func add(_ item: CloudMaterial) async {
-        guard !adding, let session else { return }
+        guard !adding, let session, session.store.ownerID == catalog.owner else { return }
         adding = true; progress = 0; pausedItem = item; error = nil
         let intent = UUID(); generation = intent
         defer { if generation == intent { adding = false } }
         let owner = MaterialCatalogRepository.shared.owner
+        let documentID = session.document.id
+        let contentID = session.contentID
         do {
             let data = try await PresetDownloadManager.shared.materialData(item) { value in if generation == intent { progress = value } }
             try Task.checkCancellation()
-            guard generation == intent, MaterialCatalogRepository.shared.owner == owner else { throw CancellationError() }
+            guard generation == intent, MaterialCatalogRepository.shared.owner == owner, session.acceptsMaterialInsertion(documentID: documentID, contentID: contentID, replacingID: replacingID) else { throw CancellationError() }
             let imported: Bool
             if type == "background" {
                 imported = await session.importMaterialBackground(data, name: item.name)
             } else if let replacingID {
-                imported = await session.importPhoto(data, replacing: replacingID)
+                imported = await session.importPhoto(data, replacing: replacingID,
+                    canCommit: { generation == intent && catalog.owner == owner && session.acceptsMaterialInsertion(documentID: documentID, contentID: contentID, replacingID: replacingID) })
             } else {
                 imported = await session.importPhoto(data, asSticker: true, stickerName: item.name,
                     semanticKind: DiaryLayerSemanticKind(rawValue: item.kind),
-                    subcategory: item.subcategory, renderType: "image")
+                    subcategory: item.subcategory, renderType: "image",
+                    materialSource: DiaryMaterialSource(materialID: item.id, revision: item.revision, libraryID: item.library_id, libraryVersion: item.library_version),
+                    canCommit: { generation == intent && catalog.owner == owner && session.acceptsMaterialInsertion(documentID: documentID, contentID: contentID, replacingID: replacingID) })
             }
-            if imported { pausedItem = nil; finishAdding() }
+            if imported { MaterialRecentStore.record(item, owner: owner); pausedItem = nil; finishAdding() }
             else { error = session.errorMessage }
         } catch { if generation == intent && !Task.isCancelled { self.error = error.localizedDescription } }
     }
@@ -358,6 +555,12 @@ struct MaterialLibraryBrowser: View {
 
 actor MaterialThumbnailCache {
     static let shared = MaterialThumbnailCache()
+    private var generation = 0
+    func clear() throws {
+        generation += 1
+        let root = StoragePaths.system.cache("MaterialThumbnails")
+        if FileManager.default.fileExists(atPath:root.path) { try FileManager.default.removeItem(at:root) }
+    }
     func cachedOriginal(_ item: CloudMaterial) -> Data? {
         guard item.thumbnail_sha256 == item.sha256, item.sha256.count == 64,
               item.sha256.allSatisfy({ $0.isHexDigit }) else { return nil }
@@ -370,13 +573,21 @@ actor MaterialThumbnailCache {
         guard item.thumbnail_sha256.count == 64, item.thumbnail_sha256.allSatisfy({ $0.isHexDigit }) else { throw URLError(.badURL) }
         let root = StoragePaths.system.cache("MaterialThumbnails")
         let path = root.appendingPathComponent(item.thumbnail_sha256)
-        if let data = try? Data(contentsOf: path) { return data }
+        if let data = try? Data(contentsOf: path), SHA256.hash(data: data).map({String(format: "%02x", $0)}).joined() == item.thumbnail_sha256 { return data }
         guard let url = URL(string: item.thumbnail_url), url.scheme == "https", url.host?.hasSuffix(".aliyuncs.com") == true else { throw URLError(.badURL) }
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let started = generation
+        var (data, response) = try await URLSession.shared.data(from: url)
+        if (response as? HTTPURLResponse)?.statusCode == 403, let libraryID = item.library_id, let version = item.library_version {
+            let refreshed = try await MaterialCatalogRepository.shared.refreshPreview(resourceID: item.thumbnail_sha256, libraryID: libraryID, version: version)
+            guard let refreshedURL = URL(string: refreshed.url), refreshedURL.scheme == "https", refreshedURL.host?.hasSuffix(".aliyuncs.com") == true else { throw URLError(.badURL) }
+            (data, response) = try await URLSession.shared.data(from: refreshedURL)
+        }
         guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 2_000_000,
               SHA256.hash(data: data).map({String(format: "%02x", $0)}).joined() == item.thumbnail_sha256 else { throw URLError(.badServerResponse) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try data.write(to: path, options: .atomic)
+        if started == generation {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try data.write(to: path, options: .atomic)
+        }
         return data
     }
 }
@@ -390,7 +601,10 @@ struct MaterialThumbnail: View {
             if let image { Image(uiImage: image).resizable().scaledToFit() }
             else if failed { Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary) }
             else { ProgressView() }
-        }.task(id: item.thumbnail_sha256) {
+        }.task(id: item.id + item.thumbnail_sha256) {
+            image=nil;failed=false
+            if item.revision == 0, let local=DiaryStickerCatalog.items.first(where:{"local."+$0.id == item.id}) { image=local.image();return }
+            if item.availability == "unavailable" { failed=true;return }
             do {
                 let data = try await MaterialThumbnailCache.shared.load(item)
                 try Task.checkCancellation()
@@ -405,24 +619,34 @@ struct MaterialThumbnail: View {
 struct PresetMaterialLibraryLinks: View {
     let templateID: String
     let templateVersion: Int
-    private enum LibraryType: String, Identifiable {
-        case sticker, background
-        var id: String { rawValue }
-    }
-    @State private var selection: LibraryType?
+    @State private var libraries: [CloudMaterialLibrary] = []
+    @State private var error: String?
+    @State private var selected: CloudMaterialLibrary?
     var body: some View {
-        HStack {
-            Button("贴纸库") { selection = .sticker }
-            Button("背景库") { selection = .background }
-        }.padding(.top)
-        .sheet(item: $selection) { type in
-            if UUID(uuidString: templateID) != nil {
-                MaterialLibraryBrowser(templateID: templateID, templateVersion: templateVersion, type: type.rawValue)
-            } else {
-                ContentUnavailableView("暂无关联素材库", systemImage: "square.grid.2x2",
-                    description: Text("这本内置模板尚未关联云端素材库。"))
-                    .presentationDetents([.medium])
+        VStack {
+            if let error { DiaryLibraryNotice(message: error) { Task { await load() } } }
+            ForEach(libraries) { library in
+                Button { selected = library } label: {
+                    HStack {
+                        Text(library.type == "sticker" ? "配套贴纸" : "配套背景")
+                        Spacer(); Text("\(library.count) 张"); Image(systemName: "chevron.right")
+                    }
+                }.padding(.vertical, 6)
+            }
+        }.padding(.horizontal)
+        .task { await load() }
+        .sheet(item: $selected) { library in
+            NavigationStack {
+                if library.type == "sticker" { StickerPackDetailScreen(library: library) }
+                else { MaterialLibraryBrowser(templateID: templateID, templateVersion: templateVersion, type: "background") }
             }
         }
+    }
+    private func load() async {
+        guard UUID(uuidString: templateID) != nil else { return }
+        do {
+            let page: MaterialListPage<CloudMaterialLibrary> = try await MaterialCatalogRepository.shared.request(MaterialRoutes.path("libraries/",["schema":"2","template":templateID,"template_version":String(templateVersion)]))
+            libraries = page.items; error = nil
+        } catch { self.error = error.localizedDescription }
     }
 }

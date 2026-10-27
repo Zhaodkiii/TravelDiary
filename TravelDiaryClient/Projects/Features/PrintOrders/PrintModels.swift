@@ -27,11 +27,50 @@ nonisolated struct PrintAddress: Codable, Equatable, Sendable {
     var phone = ""
     var region = ""
     var detail = ""
+    var region_version: String? = nil
+    var province_code: String? = nil
+    var city_code: String? = nil
+    var district_code: String? = nil
+    var province_name: String? = nil
+    var city_name: String? = nil
+    var district_name: String? = nil
+    var formatted_address: String? = nil
+    var regionDisplayName: String { [province_name,city_name,district_name].compactMap { $0 }.joined(separator:" ") }
+    var fullAddress: String {
+        if let formatted_address, !formatted_address.isEmpty { return formatted_address }
+        return (regionDisplayName.isEmpty ? region : regionDisplayName) + " " + detail
+    }
+    var hasAdministrativeRegion: Bool { region_version != nil && province_code != nil && (city_code != nil || district_code != nil) }
+    func regionExists(in dataset: RegionDataset) -> Bool {
+        guard hasAdministrativeRegion else { return false }
+        let index=Dictionary(uniqueKeysWithValues:dataset.regions.map { ($0.code,$0) })
+        var parent: String? = nil
+        for (level, code) in [("province",province_code),("city",city_code),("district",district_code)] {
+            guard let code else { continue }
+            guard let node=index[code],node.level==level,node.parent_code==parent else { return false }
+            parent=code
+        }
+        return parent.flatMap { index[$0]?.selectable_leaf } == true
+    }
+    var regionQuoteKey: String { [region,region_version ?? "",province_code ?? "",city_code ?? "",district_code ?? ""].joined(separator:"|") }
+    mutating func select(_ value: RegionSelection, shippingRegions: [String]) {
+        region_version=value.version;province_code=value.province.code;city_code=value.city?.code;district_code=value.district?.code
+        province_name=value.province.name;city_name=value.city?.name;district_name=value.district?.name;formatted_address=nil
+        let names=[value.province.name,value.city?.name,value.district?.name].compactMap { $0 }
+        let aliases=Set(names + names.filter { $0.hasSuffix("省") || $0.hasSuffix("市") }.map { String($0.dropLast()) })
+        region=shippingRegions.contains("中国大陆") ? "中国大陆" : shippingRegions.first(where:{aliases.contains($0)}) ?? ""
+    }
     var trimmed: PrintAddress {
-        PrintAddress(name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-                     phone: phone.trimmingCharacters(in: .whitespacesAndNewlines),
-                     region: region.trimmingCharacters(in: .whitespacesAndNewlines),
-                     detail: detail.trimmingCharacters(in: .whitespacesAndNewlines))
+        var copy=self
+        copy.name=name.trimmingCharacters(in:.whitespacesAndNewlines)
+        copy.phone=phone.trimmingCharacters(in:.whitespacesAndNewlines)
+        copy.region=region.trimmingCharacters(in:.whitespacesAndNewlines)
+        copy.detail=detail.trimmingCharacters(in:.whitespacesAndNewlines)
+        return copy
+    }
+    func submissionAddress(structured: Bool) -> PrintAddress {
+        guard !structured && hasAdministrativeRegion else { return trimmed }
+        return PrintAddress(name:trimmed.name,phone:trimmed.phone,region:region,detail:regionDisplayName + " " + trimmed.detail)
     }
     var phoneValid: Bool {
         let value = trimmed.phone

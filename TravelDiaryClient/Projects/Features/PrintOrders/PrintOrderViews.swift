@@ -31,7 +31,7 @@ struct PrintCheckoutScreen: View {
     private let service = PrintOrderService.shared
     private let ink = Color(red: 0.23, green: 0.36, blue: 0.31)
     private var product: PrintProduct? { products.first { $0.id == productID } }
-    private var quoteKey: String { "\(productID)|\(quantity)|\(address.region)|\(prepared?.directory.lastPathComponent ?? "")" }
+    private var quoteKey: String { "\(productID)|\(quantity)|\(address.regionQuoteKey)|\(address.name)|\(address.phone)|\(address.detail)|\(prepared?.directory.lastPathComponent ?? "")" }
     private var mappingError: String? {
         guard let product else { return nil }
         do { _ = try DiaryBookPrintExporter.mapping(book: book, product: product); return nil }
@@ -74,7 +74,10 @@ struct PrintCheckoutScreen: View {
         .interactiveDismissDisabled(busy)
         .sheet(isPresented: $editingAddress) {
             PrintAddressEditor(address: address, regions: product?.regions ?? []) { value in
-                address = value; confirmed = false
+                if address.regionQuoteKey != value.regionQuoteKey || address.name != value.name || address.phone != value.phone || address.detail != value.detail {
+                    quote = nil; confirmed = false
+                }
+                address = value
             }
         }
         .sheet(item: $preview) { PrintPDFPreview(item: $0) }
@@ -87,7 +90,7 @@ struct PrintCheckoutScreen: View {
         }
         .onChange(of: path) { _, _ in error = nil }
         .onChange(of: quantity) { _, _ in quote = nil; confirmed = false }
-        .onChange(of: address.region) { _, _ in quote = nil; confirmed = false }
+        .onChange(of: address.regionQuoteKey) { _, _ in quote = nil; confirmed = false }
         .onDisappear { if jobID == nil { invalidate() } }
     }
 
@@ -222,7 +225,7 @@ struct PrintCheckoutScreen: View {
                         VStack(alignment: .leading, spacing: 8) {
                             if address.complete {
                                 Text("\(address.name) · \(address.phone)").font(.headline)
-                                Text(address.region + " " + address.detail).font(.subheadline).foregroundStyle(.secondary)
+                                Text(address.fullAddress).font(.subheadline).foregroundStyle(.secondary)
                             } else { Text("添加收货地址").font(.headline) }
                         }
                         Spacer()
@@ -288,6 +291,7 @@ struct PrintCheckoutScreen: View {
     private var checkoutBlockReason: String? {
         if busy { return "正在确认订单信息…" }
         if !address.complete { return "请先添加完整的收货地址" }
+        if revisionOrder == nil && !address.hasAdministrativeRegion { return "请补选收货地址的省、市、区" }
         if quote == nil { return "请先确认配送地区与费用" }
         if !confirmed { return "请检查成品预览，并同意购买及售后说明" }
         return nil
@@ -373,7 +377,8 @@ struct PrintCheckoutScreen: View {
         guard let product, let quote, confirmed, address.complete, jobID == nil else { return }
         do {
             let submission = PrintSubmission(key: submissionKey, product_id: product.id, product_revision: product.revision,
-                title: book.title, quantity: quantity, page_count: prepared.pageCount, address: address.trimmed,
+                title: book.title, quantity: quantity, page_count: prepared.pageCount,
+                address: revisionOrder != nil ? address.trimmed : address.submissionAddress(structured:RegionRepository.shared.supportsStructuredAddress),
                 snapshot: prepared.snapshot, files: prepared.files, confirmed: true, quote_total_fen: quote.total_fen, revise_order_id: revisionOrder?.id, order_revision: revisionOrder?.revision)
             let id = try service.enqueue(submission, directory: prepared.directory, owner: store.ownerID)
             jobID = id; path.append(.submission(id))
@@ -841,7 +846,7 @@ struct PrintOrderDetailScreen: View {
                     detailCard(title: "收货与物流", symbol: "shippingbox") {
                         VStack(alignment: .leading, spacing: 5) {
                             Text("\(order.address.name) · \(order.address.phone)").font(.subheadline.weight(.medium)).foregroundStyle(DiaryLibraryStyle.ink)
-                            Text(order.address.region + " " + order.address.detail).font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary).textSelection(.enabled)
+                            Text(order.address.fullAddress).font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary).textSelection(.enabled)
                         }.padding(.vertical, 4)
                         if !order.shipments.isEmpty {
                             ForEach(order.shipments) { shipment in

@@ -31,6 +31,7 @@ final class PrintOrderService: ObservableObject, PrintPaymentClient {
 
     func configure(engine: SupportNetworkEngine, sessions: AppSessionStore) {
         self.engine = engine
+        RegionRepository.shared.configure(baseURL:engine.serviceBaseURL)
         subscription = sessions.$state.sink { [weak self] state in
             guard let self else { return }
             let id: String?
@@ -73,9 +74,22 @@ final class PrintOrderService: ObservableObject, PrintPaymentClient {
         try requireOwner(expected)
         guard let engine else { throw PrintFailure("服务尚未初始化") }
         let components = URLComponents(string: path)
-        let response = try await engine.sendRaw(SupportNetworkRequest(method: body == nil ? .get : .post,
-            path: "/api/v1/print/" + (components?.path ?? path), queryItems: components?.queryItems, body: body.map { .raw($0, contentType: "application/json") } ?? .none,
-            strategy: NetworkStrategy(requiresAuth: true, allowETag: false)))
+        let response: SupportNetworkResponse
+        do {
+            response = try await engine.sendRaw(SupportNetworkRequest(method: body == nil ? .get : .post,
+                path: "/api/v1/print/" + (components?.path ?? path), queryItems: components?.queryItems, body: body.map { .raw($0, contentType: "application/json") } ?? .none,
+                strategy: NetworkStrategy(requiresAuth: true, allowETag: false)))
+        } catch {
+            if case SupportNetworkError.http(_, _, let data) = error,
+               let value = try? JSONSerialization.jsonObject(with:data) as? [String:Any],
+               let details = value["data"] as? [String:Any], let code = details["region_error"] as? String {
+                if ["REGION_RESELECT_REQUIRED","REGION_DATA_UPDATE_REQUIRED","REGION_INVALID_PATH"].contains(code) {
+                    await RegionRepository.shared.checkForUpdates(force:true)
+                }
+                throw PrintFailure(value["msg"] as? String ?? "请重新确认收货地区")
+            }
+            throw error
+        }
         try Task.checkCancellation(); try requireOwner(expected)
         return try JSONDecoder().decode(T.self, from: response.data)
     }
@@ -93,7 +107,9 @@ final class PrintOrderService: ObservableObject, PrintPaymentClient {
     }
     func order(_ id: String, owner: String) async throws -> PrintOrder { try await request("orders/\(id)/", owner: owner) }
     func quote(product: PrintProduct, pages: Int, quantity: Int, address: PrintAddress, owner: String) async throws -> PrintQuote {
-        try await request("quotes/", owner: owner, body: json(["product_id":product.id,"page_count":pages,"quantity":quantity,"region":address.region]))
+        let wire=address.submissionAddress(structured:RegionRepository.shared.supportsStructuredAddress)
+        let encoded=try JSONSerialization.jsonObject(with:JSONEncoder().encode(wire))
+        return try await request("quotes/", owner: owner, body: json(["product_id":product.id,"page_count":pages,"quantity":quantity,"region":wire.region,"address":encoded]))
     }
     func action(_ action: String, order: PrintOrder, owner: String, message: String = "", key: UUID) async throws -> PrintOrder {
         try await request("orders/\(order.id)/actions/", owner: owner,

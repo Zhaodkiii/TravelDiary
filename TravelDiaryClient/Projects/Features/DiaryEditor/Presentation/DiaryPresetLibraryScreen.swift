@@ -14,6 +14,7 @@ struct DiaryPresetLibraryScreen: View {
     var catalogLoader: @MainActor () async throws -> RemotePresetCatalog = { try await PresetDownloadManager.shared.catalog() }
     private let downloads = PresetDownloadManager.shared
     @ObservedObject private var availability = PresetDownloadManager.shared.availability
+    @State private var catalogTab = "模板"
     @State private var remote: RemotePresetCatalog?
     @State private var pending: DiaryPresetImportIntent?
     @State private var resuming: DiaryPresetImportIntent?
@@ -45,6 +46,19 @@ struct DiaryPresetLibraryScreen: View {
     }
 
     var body: some View {
+        if !singlePageOnly && fixedSeriesID == nil {
+            VStack(spacing: 0) {
+                Picker("素材类型", selection: $catalogTab) { Text("模板").tag("模板"); Text("贴纸").tag("贴纸") }
+                    .pickerStyle(.segmented).padding(.horizontal).padding(.vertical, 8)
+                TabView(selection: $catalogTab) {
+                    templateBody.tag("模板")
+                    StickerGalleryScreen().tag("贴纸")
+                }.tabViewStyle(.page(indexDisplayMode: .never))
+            }
+        } else { templateBody }
+    }
+
+    @ViewBuilder private var templateBody: some View {
         if showsInlineSearch {
             content.searchable(text: $search, isPresented: $isSearching,
                                placement: .navigationBarDrawer(displayMode: .automatic),
@@ -384,7 +398,7 @@ private struct DiaryPresetReaderDestination: View {
     @State private var reading = true
     var body: some View {
         VStack(spacing: 0) {
-//            PresetMaterialLibraryLinks(templateID: package.id, templateVersion: package.manifest.packageVersion) // 展示隐藏
+            PresetMaterialLibraryLinks(templateID: package.id, templateVersion: package.manifest.packageVersion)
             Picker("展示方式", selection: $reading) {
                 Text("翻阅").tag(true)
                 Text("总览").tag(false)

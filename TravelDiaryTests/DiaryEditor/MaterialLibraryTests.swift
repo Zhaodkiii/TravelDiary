@@ -37,6 +37,45 @@ struct MaterialLibraryTests {
         #expect(result == data)
         #expect(await MaterialThumbnailCache.shared.cachedOriginal(item) == nil)
     }
+    @Test func independentPackDecodesWithoutTemplateAndRoutesEscapeQueries() throws {
+        let json = #"{"id":"pack","template_id":null,"title":"出游","type":"sticker","series":"","version":1,"count":2,"favorite_count":0,"is_favorited":false,"availability":"published","previews":[]}"#
+        let pack = try JSONDecoder().decode(CloudMaterialLibrary.self,from:Data(json.utf8))
+        #expect(pack.template_id == nil)
+        let path = MaterialRoutes.path("items/",["schema":"2","q":"花草 & 胶带","scope":"my"])
+        let request = try MaterialCatalogRepository.networkRequest(path)
+        #expect(request.path == "/api/v1/materials/items/")
+        #expect(request.queryItems?.first(where:{$0.name=="q"})?.value == "花草 & 胶带")
+    }
+    @Test func recentItemsAreAccountScopedAndDedupeByIdentity() {
+        let owner = "recent-test-" + UUID().uuidString
+        defer { UserDefaults.standard.removeObject(forKey:"material.recent.\(owner)") }
+        let item = CloudMaterial(id:"flower",revision:1,name:"花",keywords:[],aliases:[],kind:"illustration",subcategory:"botanical",thumbnail_sha256:String(repeating:"a",count:64),thumbnail_url:"",sha256:String(repeating:"a",count:64),byte_size:1,favorite_count:0,is_favorited:false)
+        MaterialRecentStore.record(item,owner:owner)
+        MaterialRecentStore.record(item,owner:owner)
+        #expect(MaterialRecentStore.items(owner:owner).count == 1)
+        #expect(MaterialRecentStore.items(owner:owner + "-other").isEmpty)
+    }
+    @Test func cancelledMaterialCommitDoesNotAddLayer() async throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let session=DiaryEditorSession(document:DiaryDocument(),images:[:],store:DiaryDocumentStore(ownerID:"intent-test",baseDirectory:root))
+        #expect(await session.importPhoto(try png(.red),asSticker:true,canCommit:{false}) == false)
+        #expect(session.content.layers.isEmpty)
+        #expect(session.undoStack.isEmpty)
+    }
+    @Test func materialSourceSurvivesSaveAndReopen() async throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let store=DiaryDocumentStore(ownerID:"source-test",baseDirectory:root)
+        let session=DiaryEditorSession(document:DiaryDocument(),images:[:],store:store)
+        let source=DiaryMaterialSource(materialID:"flower",revision:8,libraryID:"spring",libraryVersion:2)
+        #expect(await session.importPhoto(try png(.red),asSticker:true,materialSource:source))
+        #expect(session.document.objects.values.flatMap(\.layers).contains(where:{$0.materialSource==source}))
+        try await session.save()
+        let loaded=try await store.load(session.document.id)
+        #expect(loaded.document.objects.values.flatMap(\.layers).contains(where:{$0.materialSource==source}))
+    }
+
     private func png(_ color: UIColor) throws -> Data {
         let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 60)).image { context in
             color.setFill(); context.fill(CGRect(x: 0, y: 0, width: 40, height: 60))

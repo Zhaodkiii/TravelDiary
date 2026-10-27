@@ -20,7 +20,10 @@ struct TravelDiaryApp: App {
                     PrintOrderService.shared.paymentReturned(outcome)
                 }
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active { PrintOrderService.shared.resumePayments() }
+                    if phase == .active {
+                        PrintOrderService.shared.resumePayments()
+                        Task { await RegionRepository.shared.checkForUpdates() }
+                    }
                 }
                 .sheet(item: $paymentProbe) { PrintProbeScreen(link: $0) }
                 .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { WeChatPrintPayment.shared.handle($0) }

@@ -44,7 +44,7 @@ struct RemotePresetReaderDestination: View {
     @State private var reading = true
     var body: some View {
         VStack(spacing: 0) {
-//            PresetMaterialLibraryLinks(templateID: book.id, templateVersion: book.version) // 零时隐藏
+            PresetMaterialLibraryLinks(templateID: book.id, templateVersion: book.version)
             Picker("展示方式", selection: $reading) { Text("翻阅").tag(true); Text("总览").tag(false) }
                 .pickerStyle(.segmented).padding()
             if reading { readerContent }

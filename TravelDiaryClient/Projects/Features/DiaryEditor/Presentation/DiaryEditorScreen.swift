@@ -64,6 +64,7 @@ struct DiaryEditorScreen: View {
                 Button("重新保存") { Task { try? await session.save() } }
             } message: { Text(session.errorMessage ?? "") }
             .task(id: session.id) {
+                if MaterialCatalogRepository.shared.pendingLibrary != nil { showStickers = true }
                 if session.isRoot, let bookID = session.document.bookID {
                     DiaryBookAccessStore(ownerID: session.store.ownerID)
                         .record(bookID: bookID, pageID: session.document.id)
