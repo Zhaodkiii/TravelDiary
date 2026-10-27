@@ -44,6 +44,8 @@ nonisolated struct PresetNode: Decodable, Sendable {
     let contentID: String?
     let assetID: String?
     let text: String?
+    let textAlignment: DiaryTextAlignment?
+    let textColor: DiaryColor?
     let fontSize: Double?
     let font: DiaryFontReference?
     let frameTargetID: String?
@@ -162,6 +164,7 @@ nonisolated struct PresetManifest: Decodable, Sendable {
     var readingUnits: [PresetReadingUnit]? = nil
     var pageMetadata: [String: PresetPageMetadata]? = nil
     var metadata: PresetBookMetadata? = nil
+    var contentKind: String? = nil
     nonisolated struct PageReference: Decodable, Sendable { let id: String; let title: String; let path: String }
     nonisolated struct Asset: Decodable, Sendable { let id: String; let path: String; let pixelSize: PresetSize; let sha256: String; let byteCount: Int }
     nonisolated struct FileRecord: Decodable, Sendable { let path: String; let byteCount: Int; let sha256: String }
@@ -322,6 +325,8 @@ nonisolated struct DiaryPresetPackage: Identifiable, Sendable {
                 layer.semanticKind = node.semanticKind
                 layer.subcategory = node.subcategory
                 layer.font = node.font
+                layer.textColor = node.textColor
+                layer.textAlignment = node.textAlignment
                 layer.blendMode = node.blendMode
                 if let slot = node.photoSlot {
                     let maskID: UUID?

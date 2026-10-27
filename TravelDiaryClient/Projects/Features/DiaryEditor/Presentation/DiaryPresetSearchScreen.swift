@@ -7,6 +7,7 @@ struct DiaryPresetSearchScreen: View {
     @Binding var searchText: String
     var initialCatalog: RemotePresetCatalog? = nil
     var fixedSeriesID: String? = nil
+    var contentKind = "journal"
     var catalogLoader: @MainActor () async throws -> RemotePresetCatalog = { try await PresetDownloadManager.shared.catalog() }
     var showsSearchField = true
     var onBookOpened: ((DiaryBook) -> Void)? = nil
@@ -28,10 +29,11 @@ struct DiaryPresetSearchScreen: View {
     @State private var reload = 0
     @State private var clearsSeriesScope = false
     @State private var positions: [String: String] = [:]
+    private var materialName: String { contentKind == "album" ? "相册" : "模板" }
     private var activeSeries: String? { clearsSeriesScope ? nil : fixedSeriesID }
     private let downloads = PresetDownloadManager.shared
     private var queryKey: String {
-        "\(ownerID)|\(kind)|\(searchText)|\(onlyDownloaded)|\(activeSeries ?? "")|\(filters.keys.sorted().map { $0 + (filters[$0] ?? []).sorted().joined(separator: ",") }.joined())|\(reload)"
+        "\(contentKind)|\(ownerID)|\(kind)|\(searchText)|\(onlyDownloaded)|\(activeSeries ?? "")|\(filters.keys.sorted().map { $0 + (filters[$0] ?? []).sorted().joined(separator: ",") }.joined())|\(reload)"
     }
     private var taxonomyURL: URL {
         StoragePaths.system.cacheAccount(ownerID).appendingPathComponent("Catalog/taxonomy.json")
@@ -45,7 +47,7 @@ struct DiaryPresetSearchScreen: View {
     }
     @ViewBuilder private var searchBody: some View {
         if showsSearchField {
-            content.searchable(text: $searchText, isPresented: $searchPresented, placement: .navigationBarDrawer(displayMode: .always), prompt: kind == "spread" ? "搜索地点、景点或主题" : "搜索模板名称")
+            content.searchable(text: $searchText, isPresented: $searchPresented, placement: .navigationBarDrawer(displayMode: .always), prompt: kind == "spread" ? "搜索地点、景点或主题" : "搜索\(materialName)名称")
         } else {
             content
         }
@@ -63,7 +65,7 @@ struct DiaryPresetSearchScreen: View {
                 }
                 if let error { DiaryLibraryNotice(message: error) { reload += 1 } }
                 HStack {
-                    Text("\(total) \(kind == "spread" ? "个跨页" : "本模板")").font(.subheadline).foregroundStyle(.secondary)
+                    Text("\(total) \(kind == "spread" ? "个跨页" : "本\(materialName)")").font(.subheadline).foregroundStyle(.secondary)
                     Spacer()
                     if !searchText.isEmpty || onlyDownloaded || filters.values.contains(where: { !$0.isEmpty }) {
                         Button("清空条件") { searchText = ""; filters = [:]; onlyDownloaded = false }
@@ -71,7 +73,7 @@ struct DiaryPresetSearchScreen: View {
                 }
                 if loading { ProgressView("正在搜索…").frame(maxWidth: .infinity).padding(40) }
                 else if entries.isEmpty && error == nil {
-                    ContentUnavailableView(kind == "spread" ? "暂无匹配跨页" : "暂无匹配模板", systemImage: "magnifyingglass",
+                    ContentUnavailableView(kind == "spread" ? "暂无匹配跨页" : "暂无匹配\(materialName)", systemImage: "magnifyingglass",
                         description: Text(offline ? "本机没有符合条件的完整离线内容。" : "试试其他关键词或清空筛选条件。"))
                 }
                 if kind == "spread" {
@@ -87,7 +89,7 @@ struct DiaryPresetSearchScreen: View {
             }.padding(20).frame(maxWidth: 1200).frame(maxWidth: .infinity)
         }
         .background(DiaryLibraryStyle.background).tint(DiaryLibraryStyle.accent)
-        .navigationTitle("搜索模板")
+        .navigationTitle("搜索\(materialName)")
         .scrollDismissesKeyboard(.interactively)
         .scrollPosition(id: Binding(get: { positions[kind] }, set: { positions[kind] = $0 }))
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -101,7 +103,7 @@ struct DiaryPresetSearchScreen: View {
             .background(DiaryLibraryStyle.background)
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) { Button { showingFilters = true } label: { Image(systemName: "line.3.horizontal.decrease.circle") }.accessibilityLabel("筛选模板") }
+            ToolbarItem(placement: .topBarTrailing) { Button { showingFilters = true } label: { Image(systemName: "line.3.horizontal.decrease.circle") }.accessibilityLabel("筛选\(materialName)") }
             ToolbarItem(placement: .topBarTrailing) { NavigationLink { PresetDownloadCenter(ownerID: ownerID) } label: { Image(systemName: "arrow.down.circle") }.accessibilityLabel("下载管理") }
         }
         .sheet(isPresented: $showingFilters) { filterSheet }
@@ -193,12 +195,12 @@ struct DiaryPresetSearchScreen: View {
                     }
                 }
                 Button("重置") { filters = [:]; onlyDownloaded = false }
-            }.navigationTitle("筛选模板").toolbar { Button("完成") { showingFilters = false } }
+            }.navigationTitle("筛选\(materialName)").toolbar { Button("完成") { showingFilters = false } }
         }
     }
     private func localResults() -> [PresetSearchEntry] {
         let local = downloads.offlineSearchEntries(ownerID: ownerID, taxonomy: taxonomy).filter {
-            $0.entity_type == kind && (activeSeries == nil || $0.series == activeSeries) && PresetSearchMatcher.matches($0, query: searchText, taxonomy: taxonomy, filters: filters)
+            ($0.content_kind ?? "journal") == contentKind && $0.entity_type == kind && (activeSeries == nil || $0.series == activeSeries) && PresetSearchMatcher.matches($0, query: searchText, taxonomy: taxonomy, filters: filters)
         }
         return local.sorted { a, b in
             let left = PresetSearchMatcher.score(a, query: searchText, taxonomy: taxonomy, filters: filters) ?? (9, 0)
@@ -222,7 +224,7 @@ struct DiaryPresetSearchScreen: View {
             guard key == queryKey else { return }
             if onlyDownloaded { entries = localResults(); total = entries.count }
             else {
-                let value = try await downloads.search(kind: kind, query: searchText, filters: filters, seriesID: activeSeries)
+                let value = try await downloads.search(kind: kind, query: searchText, filters: filters, seriesID: activeSeries, contentKind: contentKind)
                 try Task.checkCancellation()
                 guard key == queryKey else { return }
                 entries = value.entries; total = value.total; cursor = value.next_cursor
@@ -247,7 +249,7 @@ struct DiaryPresetSearchScreen: View {
         let key = queryKey; paging = true
         defer { paging = false }
         do {
-            let value = try await downloads.search(kind: kind, query: searchText, filters: filters, cursor: cursor, seriesID: activeSeries)
+            let value = try await downloads.search(kind: kind, query: searchText, filters: filters, cursor: cursor, seriesID: activeSeries, contentKind: contentKind)
             try Task.checkCancellation()
             guard key == queryKey else { return }
             let known = Set(entries.map(\.id))

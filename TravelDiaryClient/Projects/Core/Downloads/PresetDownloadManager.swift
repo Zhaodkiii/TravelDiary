@@ -14,6 +14,8 @@ nonisolated struct RemotePresetBook: Codable, Identifiable, Sendable {
     var content_page_count: Int? = nil
     var style_tags: [String]? = nil
     var usage_tags: [String]? = nil
+    var content_kind: String? = nil
+    var contentKind: String { content_kind ?? "journal" }
 }
 nonisolated struct RemotePresetCatalog: Codable, Sendable {
     struct Series: Codable, Sendable { let slug: String; let title: String }
@@ -201,7 +203,7 @@ final class PresetDownloadManager: ObservableObject {
         if let catalogRequest { return try await catalogRequest.value }
         let generation = catalogGeneration
         let task = Task {
-            try JSONDecoder().decode(RemotePresetCatalog.self, from: await request("catalog/", queryItems: [URLQueryItem(name: "schema_max", value: "2")]))
+            try JSONDecoder().decode(RemotePresetCatalog.self, from: await request("catalog/", queryItems: [URLQueryItem(name: "schema_max", value: "2"), URLQueryItem(name: "content_kind", value: "all")]))
         }
         catalogRequest = task
         defer { if generation == catalogGeneration { catalogRequest = nil } }

@@ -44,9 +44,10 @@ nonisolated struct PresetSearchEntry: Codable, Sendable, Identifiable {
     var search_terms: [PresetSearchTerm]
     var position: Int? = nil
     var book_position: Int? = nil
+    var content_kind: String? = nil
     var book: RemotePresetBook {
         RemotePresetBook(id: template_id, title: book_title, series: series, version: version,
-            page_count: book_page_count, cover_url: previews.first?["thumbnailPath"]?.url ?? "")
+            page_count: book_page_count, cover_url: previews.first?["thumbnailPath"]?.url ?? "", content_kind: content_kind)
     }
     var previewPages: [RemotePresetPage] {
         page_ids.enumerated().map { index, id in
@@ -128,8 +129,8 @@ extension PresetDownloadManager {
         }
         return result
     }
-    func search(kind: String, query: String, filters: [String: Set<String>], cursor: String? = nil, seriesID: String? = nil) async throws -> PresetSearchResponse {
-        var items = [URLQueryItem(name: "kind", value: kind), URLQueryItem(name: "q", value: query)]
+    func search(kind: String, query: String, filters: [String: Set<String>], cursor: String? = nil, seriesID: String? = nil, contentKind: String = "journal") async throws -> PresetSearchResponse {
+        var items = [URLQueryItem(name: "kind", value: kind), URLQueryItem(name: "q", value: query), URLQueryItem(name: "content_kind", value: contentKind)]
         for (dimension, ids) in filters where !ids.isEmpty {
             items.append(URLQueryItem(name: "\(dimension)_ids", value: ids.sorted().joined(separator: ",")))
         }
@@ -194,6 +195,7 @@ extension PresetDownloadManager {
                     page_count: ids.count, page_ids: ids, previews: images, tags: effective.filter { $0.dimension != "location" }.map(\.name), matched_fields: [], search_fields: fields, search_terms: effective)
                 result[key]?.position = m.readingUnits?.first(where: { $0.id == unit })?.position ?? 0
                 result[key]?.book_position = m.sortOrder ?? 0
+                result[key]?.content_kind = m.contentKind ?? "journal"
             }
         }
         let latest = Dictionary(grouping: result.values, by: \.template_id).mapValues { $0.map(\.version).max() ?? 0 }
