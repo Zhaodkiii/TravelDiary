@@ -60,6 +60,47 @@ struct DiaryNativeSearchTabTests {
         #expect(search.searchBar.text?.isEmpty != false)
     }
 
+    @Test func createSheetKeepsNativeSearchHostWithoutCatalogContent() async throws {
+        let scene = try #require(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let previous = scene.keyWindow
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        let presenter = UIViewController()
+        window.rootViewController = presenter
+        window.windowLevel = .alert + 1
+        window.makeKeyAndVisible()
+        let host = UIHostingController(rootView: DiaryCreateBookSheet(ownerID: "create-search-test",
+            initialCatalog: RemotePresetCatalog(series: [], books: [])) { _ in })
+        defer { window.isHidden = true; previous?.makeKey() }
+        presenter.present(host, animated: false)
+        try await Task.sleep(for: .milliseconds(500))
+
+        #expect(findView(UISegmentedControl.self, in: window) != nil)
+        // 搜索宿主必须在紧凑面板和空目录中就存在，不能等待展开列表才创建。
+        let search = try #require(findSearchController(in: host))
+        let navigation = try #require(findController(UINavigationController.self, in: host))
+        navigation.setNavigationBarHidden(false, animated: false)
+        for _ in 0..<3 {
+            host.sheetPresentationController?.animateChanges {
+                host.sheetPresentationController?.selectedDetentIdentifier = .large
+            }
+            try await Task.sleep(for: .milliseconds(400))
+            #expect(findSearchController(in: host) === search)
+            search.isActive = true
+            search.searchBar.searchTextField.becomeFirstResponder()
+            try await Task.sleep(for: .milliseconds(400))
+            #expect(search.isActive)
+            #expect(findView(UISearchTextField.self, in: window) != nil)
+            #expect(findView(UISegmentedControl.self, in: window) == nil)
+            // 走原生取消按钮的 delegate 路径，让 SwiftUI 同步 isPresented。
+            search.searchBar.delegate?.searchBarCancelButtonClicked?(search.searchBar)
+            try await Task.sleep(for: .milliseconds(400))
+            #expect(!search.isActive)
+            #expect(findView(UISegmentedControl.self, in: window) != nil)
+        }
+        presenter.dismiss(animated: false)
+    }
+
     private func findSearchController(in controller: UIViewController) -> UISearchController? {
         controller.navigationItem.searchController
             ?? controller.children.lazy.compactMap { findSearchController(in: $0) }.first

@@ -159,6 +159,8 @@ struct MaterialLibraryBrowser: View {
     @State private var myLibraries: [CloudMaterialLibrary] = []
     @State private var currentLibraries: [CloudMaterialLibrary] = []
     @State private var nextCursor: String?
+    @State private var paginationFilter = ""
+    @State private var selectedGalleryItem: CloudMaterial?
     @State private var showGallery = false
     @State private var showFilters = false
     @State private var showAllPacks = false
@@ -307,8 +309,7 @@ struct MaterialLibraryBrowser: View {
                     }.scrollTargetLayout().padding(.horizontal, 16)
                     if !isLocal {
                         if cursor != nil || nextCursor != nil {
-                            Button("加载更多") { Task { await loadItems(more: true) } }
-                                .disabled(loading).padding(.vertical, 12)
+                            DiaryPaginationFooter(token: filterKey + "|" + (nextCursor ?? cursor.map(String.init) ?? ""), loading: loading, error: error) { await loadItems(more: true) }
                         }
                         if loading { ProgressView().padding() }
                         if !loading && items.isEmpty {
@@ -346,11 +347,11 @@ struct MaterialLibraryBrowser: View {
             generation=UUID();addition?.cancel();items=[];myLibraries=[];currentLibraries=[];selectedLibrary=nil;localFavorites=[];localRecent=[]
         }
         .onChange(of: catalog.changeID) { _, _ in Task { await loadSources(refresh: true) } }
-        .sheet(isPresented: $showGallery) {
-            NavigationStack { StickerGalleryScreen(onUse: { lib in selectedLibrary = lib; source = "我的"; kind = ""; showGallery = false }, initialQuery:query, initialMode:query.isEmpty ? "包" : "单张").toolbar { ToolbarItem(placement:.topBarLeading) { Button("返回编辑器") { showGallery=false } } } }
+        .sheet(isPresented: $showGallery, onDismiss: useSelectedGalleryItem) {
+            NavigationStack { StickerGalleryScreen(onUse: { lib in selectedLibrary = lib; source = "我的"; kind = ""; showGallery = false }, onUseItem: { item in selectedGalleryItem = item; showGallery = false }, initialQuery:query, initialMode:query.isEmpty ? "包" : "单张").toolbar { ToolbarItem(placement:.topBarLeading) { Button("返回编辑器") { showGallery=false } } } }
         }
-        .sheet(isPresented: $showAllPacks) {
-            NavigationStack { StickerGalleryScreen(mine: true, onUse: { lib in selectedLibrary = lib; kind = ""; showAllPacks = false }).toolbar { ToolbarItem(placement:.topBarLeading) { Button("返回编辑器") { showAllPacks=false } } } }
+        .sheet(isPresented: $showAllPacks, onDismiss: useSelectedGalleryItem) {
+            NavigationStack { StickerGalleryScreen(mine: true, onUse: { lib in selectedLibrary = lib; kind = ""; showAllPacks = false }, onUseItem: { item in selectedGalleryItem = item; showAllPacks = false }).toolbar { ToolbarItem(placement:.topBarLeading) { Button("返回编辑器") { showAllPacks=false } } } }
         }
         .onDisappear {
             generation = UUID(); addition?.cancel()
@@ -446,10 +447,15 @@ struct MaterialLibraryBrowser: View {
         } catch { self.error = error.localizedDescription }
     }
     private func loadItems(more: Bool) async {
+        if more { guard !loading, paginationFilter == filterKey, cursor != nil || nextCursor != nil else { return } }
+        else { paginationFilter = filterKey }
+        if !more { cursor = nil; nextCursor = nil }
         guard !isLocal && kind != "frames" else { items = []; cursor = nil; loading = false; return }
         if type == "sticker", session != nil || selectedLibrary != nil {
             await loadStickerItems(more: more); return
         }
+        let activeFilter = filterKey
+        let previousCursor = more ? cursor : nil
         let token = UUID(); requestID = token; loading = true
         if !more { items = []; cursor = nil }
         defer { if requestID == token { loading = false } }
@@ -461,11 +467,13 @@ struct MaterialLibraryBrowser: View {
             let path = "items/?"
             let page: MaterialPage = try await MaterialCatalogRepository.shared.request(path + (components.percentEncodedQuery ?? ""))
             try Task.checkCancellation()
-            guard token == requestID else { return }
-            items = more ? items + page.items : page.items; cursor = page.next; error = nil
+            guard token == requestID, activeFilter == filterKey else { return }
+            items = more ? items.appendingUnique(page.items) : page.items; cursor = page.next == previousCursor ? nil : page.next; error = nil
         } catch { if token == requestID && !Task.isCancelled { self.error = error.localizedDescription } }
     }
     private func loadStickerItems(more: Bool) async {
+        let activeFilter = filterKey
+        let previousCursor = more ? nextCursor : nil
         let token = UUID(); requestID = token; loading = true
         defer { if requestID == token { loading = false } }
         do {
@@ -478,7 +486,7 @@ struct MaterialLibraryBrowser: View {
                         catch { recent[i].availability = "unavailable" }
                     }
                 }
-                guard requestID == token, !Task.isCancelled else { return }
+                guard requestID == token, activeFilter == filterKey, !Task.isCancelled else { return }
                 MaterialRecentStore.save(recent,owner:catalog.owner)
                 items = recent.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
                 nextCursor = nil; error = nil; return
@@ -491,8 +499,8 @@ struct MaterialLibraryBrowser: View {
             else { params["favorites"] = "1" }
             if more { params["cursor"] = nextCursor }
             let page: MaterialListPage<CloudMaterial> = try await catalog.request(MaterialRoutes.path(path, params))
-            guard requestID == token, !Task.isCancelled else { return }
-            items = more ? items + page.items : page.items; nextCursor = page.next_cursor; cursor = nil; error = nil
+            guard requestID == token, activeFilter == filterKey, !Task.isCancelled else { return }
+            items = more ? items.appendingUnique(page.items) : page.items; nextCursor = page.next_cursor == previousCursor ? nil : page.next_cursor; cursor = nil; error = nil
         } catch { if requestID == token && !Task.isCancelled { self.error = error.localizedDescription } }
     }
 
@@ -516,6 +524,11 @@ struct MaterialLibraryBrowser: View {
         if keepsOpenAfterAdding {
             withAnimation { sheetDetent = Self.compactDetent }
         } else { dismiss() }
+    }
+    private func useSelectedGalleryItem() {
+        guard let item = selectedGalleryItem else { return }
+        selectedGalleryItem = nil
+        addition = Task { await add(item) }
     }
     private func addLocal(_ item: DiaryStickerItem) async {
         guard !adding, let session, session.store.ownerID == catalog.owner, let data = item.image()?.pngData() else { return }

@@ -20,7 +20,7 @@ struct FeedbackRelatedPicker: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                LazyVStack(alignment: .leading, spacing: 20) {
                     Text("关联相关记录，方便我们更快了解情况。")
                         .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
                     Picker("记录类型", selection: $kind) { Text("印制订单").tag("order"); Text("专属定制").tag("customization") }.pickerStyle(.segmented)
@@ -39,16 +39,18 @@ struct FeedbackRelatedPicker: View {
                     if let error { FeedbackInlineNotice(message: error, symbol: "wifi.exclamationmark", actionTitle: "重试") { Task { await load() } } }
                     if busy { ProgressView("正在加载…").frame(maxWidth: .infinity) }
                     else if values.isEmpty && error == nil { ContentUnavailableView("暂无可关联记录", systemImage: "tray", description: Text("不关联记录也可以直接提交反馈。")) }
-                    if hasMore && !busy && error == nil { Button("加载更多") { Task { await load() } }.frame(maxWidth: .infinity) }
+                    if hasMore { DiaryPaginationFooter(token: kind + "|\(next)", loading: busy, error: error) { await load() } }
                 }.padding(20)
             }
             .background(DiaryLibraryStyle.background).foregroundStyle(DiaryLibraryStyle.ink)
             .navigationTitle("选择关联记录").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("取消") { dismiss() } } }
-            .task(id: kind) { generation = UUID(); values = []; next = kind == "order" ? 0 : 1; hasMore = true; await load() }
+            .task(id: kind) { generation = UUID(); busy = false; values = []; next = kind == "order" ? 0 : 1; hasMore = true; await load() }
         }.tint(DiaryLibraryStyle.accent)
     }
     private func load() async {
+        guard !busy, hasMore else { return }
+        let requested = next
         let stamp = generation
         let selected = kind
         busy = true; error = nil
@@ -66,8 +68,8 @@ struct FeedbackRelatedPicker: View {
                 following = page.next_page
             }
             guard stamp == generation else { return }
-            values += records
-            hasMore = following != nil
+            values = values.appendingUnique(records)
+            hasMore = following != nil && following != requested
             if let following { next = following }
         } catch is CancellationError { }
         catch { if stamp == generation { self.error = error.localizedDescription } }

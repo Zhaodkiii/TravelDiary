@@ -510,3 +510,74 @@ private struct PresetCategoryDownloadFeedback: View {
         }
     }
 }
+
+/// Compact whole-book reader embedded above the overview grid.
+struct DiaryPresetOverviewBook: View {
+    let pages: [DiaryPresetBookReader<EmptyView>.Page]
+    let pageSize: CGSize
+    @State private var spread = 0
+    @State private var interacted = false
+    @State private var visible = false
+    @StateObject private var previews = PresetPreviewWindow()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var spreadCount: Int { (pages.count + 2) / 2 }
+    private var urls: [URL] { PresetPreviewWindow.urls(content: pages.map(\.url), spread: spread) }
+    private var heightPerWidth: CGFloat {
+        (0.955 * (1 - DiaryBookSpine.halfGapFraction) / (max(1, pageSize.width) / max(1, pageSize.height)) + 0.09) / 2
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            GeometryReader { geometry in
+                ZStack {
+                    Image("DiaryBookLeather").resizable()
+                    DiaryPageCurlReader(spreadCount: spreadCount, spread: Binding(get: { spread }, set: { interacted = true; spread = $0 }),
+                        reduceMotion: reduceMotion, allowsPageActions: false) { index, _ in
+                        DiaryPresetPaperController(index: index,
+                            url: pages.indices.contains(index - 1) ? pages[index - 1].url : nil,
+                            thumbnailURL: pages.indices.contains(index - 1) ? pages[index - 1].thumbnailURL : nil,
+                            previews: previews)
+                    }
+                    .id(pages.map(\.id))
+                    .padding(geometry.size.width * 0.0225)
+
+                }
+            }
+            .aspectRatio(1 / heightPerWidth, contentMode: .fit)
+            HStack {
+                Button { interacted = true; spread = max(0, spread - 1) } label: { Image(systemName: "chevron.left") }
+                    .disabled(spread == 0).accessibilityLabel("上一跨页")
+                Spacer()
+                Text("\(spread + 1) / \(spreadCount) · 左右滑动翻阅")
+                    .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                Spacer()
+                Button { interacted = true; spread = min(spreadCount - 1, spread + 1) } label: { Image(systemName: "chevron.right") }
+                    .disabled(spread >= spreadCount - 1).accessibilityLabel("下一跨页")
+            }.frame(minHeight: 44)
+        }
+        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in stopAutomaticPaging() })
+        .onScrollPhaseChange { _, phase in if phase != .idle { stopAutomaticPaging() } }
+        .onScrollVisibilityChange(threshold: 0.7) { visible = $0 }
+        .task(id: visible && !interacted && !reduceMotion) {
+            guard visible, !interacted, !reduceMotion, let first = pages.first, spreadCount > 1 else { return }
+            do {
+                _ = try await PreviewImagePipeline.shared.load(
+                    PreviewImagePipeline.shared.request(url: first.url, maxPixelSize: 2048))
+                while spread < spreadCount - 1 {
+                    try await Task.sleep(for: .milliseconds(800))
+                    try Task.checkCancellation()
+                    guard visible, !interacted, !reduceMotion else { return }
+                    spread += 1
+                }
+            } catch { /* Leaving the screen or interacting ends automatic paging. */ }
+        }
+        .onAppear { previews.update(urls) }
+        .onChange(of: urls) { _, value in previews.update(value) }
+        .onDisappear { previews.update([]) }
+    }
+
+    private func stopAutomaticPaging() {
+        interacted = true
+    }
+}

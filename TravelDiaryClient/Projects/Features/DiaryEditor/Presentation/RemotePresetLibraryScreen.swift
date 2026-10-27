@@ -41,7 +41,7 @@ struct RemotePresetReaderDestination: View {
     @State private var retry = 0
     @State private var selection: RemotePresetSelection?
 
-    @State private var reading = true
+    @State private var reading = false
     var body: some View {
         VStack(spacing: 0) {
             PresetMaterialLibraryLinks(templateID: book.id, templateVersion: book.version)
@@ -115,17 +115,18 @@ struct RemotePresetDetailScreen: View {
     @State private var browse: RemotePresetBrowse?
     @State private var error: String?
     @State private var retry = 0
-    @State private var previewID: String?
-    @State private var showingPreview = false
+    @State private var preview: DiaryTemplatePreviewSelection?
+    @State private var pendingPreviewImport: String?
     @State private var selection: RemotePresetSelection?
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if let browse {
-                    if let cover = overviewSpreads.first {
-                        overviewThumbnail(cover, size: browse.page_size.cg).frame(maxWidth: .infinity).frame(height: 260)
-                        .padding(20).background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 16))
-                    }
+                    DiaryPresetOverviewBook(pages: pages.filter { $0.id != browse.shell_page_id }.compactMap { page in
+                        guard let url = URL(string: page.preview_url) else { return nil }
+                        return .init(id: page.id, url: url, size: browse.page_size.cg,
+                                     thumbnailURL: URL(string: page.thumbnail_url))
+                    }, pageSize: browse.page_size.cg)
                     Text(book.title).font(.title2.weight(.semibold))
                     HStack {
                         Text("\(pages.filter { $0.id != browse.shell_page_id }.count) 页")
@@ -134,7 +135,7 @@ struct RemotePresetDetailScreen: View {
                     Text("页面总览").font(.headline)
                     DiaryPresetOverviewGrid(spreads: overviewSpreads) { spread in
                         VStack(alignment: .leading, spacing: 8) {
-                            Button { previewID = spread.pages.first?.id; showingPreview = true } label: {
+                            Button { if let id = spread.pages.first?.id { preview = DiaryTemplatePreviewSelection(id: id) } } label: {
                                 overviewThumbnail(spread, size: browse.page_size.cg)
                             }
                             Text(spread.pages.map(\.title).joined(separator: " · ")).font(.caption)
@@ -165,25 +166,19 @@ struct RemotePresetDetailScreen: View {
             }
         }
         .task(id: retry) { await load() }
-        .fullScreenCover(isPresented: $showingPreview) {
-            NavigationStack {
-                TabView(selection: $previewID) {
-                    ForEach(pages) { page in
-                        VStack {
-                            if abs((pages.firstIndex { $0.id == page.id } ?? 0) - (pages.firstIndex { $0.id == previewID } ?? 0)) <= 1 {
-                                remoteImage(page.preview_url, size: browse?.page_size.cg ?? CGSize(width: 1, height: 1.4))
-                            } else { Color.clear }
-                            Text(page.title)
-                        }.padding().tag(Optional(page.id))
-                    }
-                }.tabViewStyle(.page)
-                    .navigationTitle("\((pages.firstIndex { $0.id == previewID } ?? 0) + 1) / \(pages.count)")
-                    .toolbar { Button("完成") { showingPreview = false } }
-                    .safeAreaInset(edge: .bottom) {
-                        Button("使用这一页") {
-                            if let previewID { showingPreview = false; selection = RemotePresetSelection(pageIDs: [previewID], wholeBook: false) }
-                        }.buttonStyle(.borderedProminent).padding()
-                    }
+        .fullScreenCover(item: $preview, onDismiss: {
+            if let id = pendingPreviewImport {
+                pendingPreviewImport = nil
+                selection = RemotePresetSelection(pageIDs: [id], wholeBook: false)
+            }
+        }) { value in
+            DiaryTemplatePagePreview(initialPageID: value.id, pages: pages.map { page in
+                DiaryTemplatePreviewPage(id: page.id, title: page.title,
+                    size: browse?.page_size.cg ?? CGSize(width: 1, height: 1.4),
+                    request: PreviewImagePipeline.shared.request(url: URL(string: page.preview_url), maxPixelSize: 1800))
+            }) { id in
+                pendingPreviewImport = id
+                preview = nil
             }
         }
         .sheet(item: $selection) { value in

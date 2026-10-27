@@ -44,9 +44,7 @@ struct CustomizationHomeView: View {
                     }
                     ForEach(remaining) { row in requestCard(row) }
                     if let nextPage {
-                        Button { Task { await load(page: nextPage) } } label: {
-                            HStack { if loading { ProgressView() }; Text("加载更多") }.frame(maxWidth: .infinity, minHeight: 44)
-                        }.disabled(loading)
+                        DiaryPaginationFooter(token: String(nextPage), loading: loading, error: error) { await load(page: nextPage) }
                     }
                 }
                 Label("资料仅用于本次制作与交付，默认不公开。", systemImage: "lock")
@@ -127,7 +125,7 @@ struct CustomizationHomeView: View {
                 var ids = Set(rows.map(\.id))
                 rows += result.results.filter { ids.insert($0.id).inserted }
             }
-            nextPage = result.next_page; error = nil; loaded = true
+            nextPage = result.next_page == page ? nil : result.next_page; error = nil; loaded = true
             await service.refreshUnread(owner: owner)
         } catch is CancellationError { }
         catch { self.error = "定制记录暂时无法刷新：" + error.localizedDescription; loaded = true }

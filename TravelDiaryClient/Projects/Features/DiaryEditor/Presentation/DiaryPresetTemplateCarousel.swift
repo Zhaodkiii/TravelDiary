@@ -57,32 +57,20 @@ struct DiaryPresetTemplateCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: expanded ? 12 : 10) {
             DiaryPresetMagazinePreview(item: item, ownerID: ownerID)
-            HStack(spacing: 6){
-                Text(item.title)
-                    .font(expanded ? .title3.weight(.semibold) : .subheadline.weight(.semibold))
-                    .lineLimit(2, reservesSpace: !expanded)
-                Spacer(minLength: 0)
-                if let remote = item.remote {
-                    PresetBookAvailabilityBadge(downloadedCount: min(remote.page_count, downloadedCount), totalCount: remote.page_count)
+            Text(item.title)
+                .font(expanded ? .title3.weight(.semibold) : .subheadline.weight(.semibold))
+                .lineLimit(2, reservesSpace: !expanded)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 8) {
+                    metadata
+                    Spacer(minLength: 0)
+                    availabilityBadge
                 }
-
+                VStack(alignment: .leading, spacing: 4) {
+                    metadata
+                    availabilityBadge
+                }
             }
-
-//            HStack(spacing: 6) {
-//                Text(expanded ? [seriesTitle, item.pageLabel].compactMap { $0 }.joined(separator: " · ") : item.pageLabel)
-//                    .font(expanded ? .caption : .caption2).foregroundStyle(DiaryLibraryStyle.secondary)
-//                Spacer(minLength: 0)
-//                if item.local != nil {
-//                    if expanded {
-//                        Label("内置可用", systemImage: "checkmark.circle").font(.caption)
-//                    } else {
-//                        Image(systemName: "checkmark.circle").font(.caption2).accessibilityLabel("内置可用")
-//                    }
-//                } else if let remote = item.remote {
-//                    PresetBookAvailabilityBadge(downloadedCount: min(remote.page_count, downloadedCount), totalCount: remote.page_count)
-//                }
-//                if !expanded { Image(systemName: "arrow.up.right").font(.caption2.weight(.medium)) }
-//            }.foregroundStyle(DiaryLibraryStyle.secondary)
             if expanded {
                 HStack(spacing: 8) { Text("翻看这本模板"); Image(systemName: "arrow.right") }
                     .font(.subheadline.weight(.medium)).foregroundStyle(DiaryLibraryStyle.accent)
@@ -94,4 +82,14 @@ struct DiaryPresetTemplateCard: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
+    private var metadata: some View {
+        Text([item.pageLabel, seriesTitle].compactMap { $0 }.joined(separator: " · "))
+            .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+    }
+    @ViewBuilder private var availabilityBadge: some View {
+        if let remote = item.remote {
+            PresetBookAvailabilityBadge(downloadedCount: min(remote.page_count, downloadedCount), totalCount: remote.page_count)
+        }
+    }
+
 }

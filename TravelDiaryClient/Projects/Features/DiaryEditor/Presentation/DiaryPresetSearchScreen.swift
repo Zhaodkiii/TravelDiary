@@ -11,6 +11,7 @@ struct DiaryPresetSearchScreen: View {
     var showsSearchField = true
     var onBookOpened: ((DiaryBook) -> Void)? = nil
     @AppStorage("preset.search.kind") private var kind = "book"
+    @State private var searchPresented = true
     @State private var entries: [PresetSearchEntry] = []
     @State private var total = 0
     @State private var cursor: String?
@@ -44,7 +45,7 @@ struct DiaryPresetSearchScreen: View {
     }
     @ViewBuilder private var searchBody: some View {
         if showsSearchField {
-            content.searchable(text: $searchText, prompt: kind == "spread" ? "搜索地点、景点或主题" : "搜索模板名称")
+            content.searchable(text: $searchText, isPresented: $searchPresented, placement: .navigationBarDrawer(displayMode: .always), prompt: kind == "spread" ? "搜索地点、景点或主题" : "搜索模板名称")
         } else {
             content
         }
@@ -80,10 +81,8 @@ struct DiaryPresetSearchScreen: View {
                 } else {
                     ForEach(entries) { entry in resultLink(entry).id(entry.id) }
                 }
-                if cursor != nil {
-                    Button { Task { await loadMore() } } label: {
-                        if paging { ProgressView() } else { Text("加载更多") }
-                    }.disabled(paging).frame(maxWidth: .infinity, minHeight: 44)
+                if let cursor {
+                    DiaryPaginationFooter(token: queryKey + "|" + cursor, loading: loading || paging, error: error) { await loadMore() }
                 }
             }.padding(20).frame(maxWidth: 1200).frame(maxWidth: .infinity)
         }
@@ -244,7 +243,7 @@ struct DiaryPresetSearchScreen: View {
         return UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).contains(where: marked)
     }
     private func loadMore() async {
-        guard let cursor, !paging else { return }
+        guard let cursor, !paging, !loading else { return }
         let key = queryKey; paging = true
         defer { paging = false }
         do {
@@ -252,7 +251,7 @@ struct DiaryPresetSearchScreen: View {
             try Task.checkCancellation()
             guard key == queryKey else { return }
             let known = Set(entries.map(\.id))
-            entries += value.entries.filter { !known.contains($0.id) }; self.cursor = value.next_cursor; total = value.total; error = nil
+            entries += value.entries.filter { !known.contains($0.id) }; self.cursor = value.next_cursor == cursor ? nil : value.next_cursor; total = value.total; error = nil
         } catch {
             guard key == queryKey else { return }
             if case let SupportNetworkError.http(statusCode: code, backend: _, data: _) = error, code == 409 {

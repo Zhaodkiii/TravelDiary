@@ -39,17 +39,18 @@ struct DiaryPresetOverviewThumbnail<Page: Identifiable, Paper: View>: View {
     private var ratio: CGFloat { max(pageSize.width, 1) / max(pageSize.height, 1) }
     var body: some View {
         DiaryBoundSpread {
-            leaf(spread.left)
+            leaf(spread.left, lining: spread.left == nil)
         } right: {
-            leaf(spread.right)
+            leaf(spread.right, lining: false)
         }
         .aspectRatio(2 / (0.955 * (1 - DiaryBookSpine.halfGapFraction) / ratio + 0.09), contentMode: .fit)
         .shadow(color: .black.opacity(0.10), radius: 3, y: 2)
     }
 
-    @ViewBuilder private func leaf(_ page: Page?) -> some View {
+    @ViewBuilder private func leaf(_ page: Page?, lining: Bool) -> some View {
         if let page { paper(page) }
-        else { Color.clear }
+        else if lining { DiaryBookLining() }
+        else { Color(red: 0.96, green: 0.92, blue: 0.82) }
     }
 }
 

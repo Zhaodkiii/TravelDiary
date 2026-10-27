@@ -705,11 +705,7 @@ struct PrintOrdersScreen: View {
                     }
                     ForEach(orders) { order in orderCard(order) }
                     if next != nil {
-                        Button { Task { await load(more: true) } } label: {
-                            HStack { Spacer(); if busy { ProgressView().controlSize(.small) }; Text(busy ? "正在加载…" : "加载更多订单"); Spacer() }
-                                .font(.subheadline.weight(.semibold)).foregroundStyle(DiaryLibraryStyle.accent).padding(14)
-                                .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 16))
-                        }.buttonStyle(.plain).disabled(busy)
+                        DiaryPaginationFooter(token: String(next ?? 0), loading: busy, error: error) { await load(more: true) }
                     }
                 }
                 if busy && orders.isEmpty { ProgressView("正在读取订单…").frame(maxWidth: .infinity).padding() }
@@ -775,8 +771,8 @@ struct PrintOrdersScreen: View {
         }
     }
     private func load(more: Bool = false) async {
-        guard !busy else { return }; busy = true; error = nil; defer { busy = false }
-        do { let page = try await service.orders(owner: owner, offset: more ? next ?? 0 : 0); orders = more ? orders + page.results : page.results; next = page.next_offset }
+        guard !busy, !more || next != nil else { return }; let previousOffset = more ? next : nil; busy = true; error = nil; defer { busy = false }
+        do { let page = try await service.orders(owner: owner, offset: more ? next ?? 0 : 0); orders = more ? orders.appendingUnique(page.results) : page.results; next = page.next_offset == previousOffset ? nil : page.next_offset }
         catch { self.error = error.localizedDescription }
     }
 }

@@ -436,6 +436,25 @@ final class DiaryCurlPageViewController: UIPageViewController {
     }
 }
 
+/// Keep UIKit's own gesture decisions while preventing new curls during updates.
+@MainActor private final class DiaryCurlGestureGate: NSObject, UIGestureRecognizerDelegate {
+    nonisolated(unsafe) weak var original: (any UIGestureRecognizerDelegate)?
+    var allowsNavigation: () -> Bool = { true }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        allowsNavigation() && (original?.gestureRecognizerShouldBegin?(gestureRecognizer) ?? true)
+    }
+
+    nonisolated override func responds(to selector: Selector!) -> Bool {
+        super.responds(to: selector) || (original?.responds(to: selector) ?? false)
+    }
+
+    nonisolated override func forwardingTarget(for selector: Selector!) -> Any? {
+        if original?.responds(to: selector) == true { return original }
+        return super.forwardingTarget(for: selector)
+    }
+}
+
 /// Shared native curl engine for saved diaries and read-only preset previews.
 struct DiaryPageCurlReader: UIViewControllerRepresentable {
     let spreadCount: Int
@@ -479,6 +498,42 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
         private var pageSource: DiaryPageCurlReader
         private var papers: [Int: UIViewController] = [:]
         private var reducedMotionSwipes: [UISwipeGestureRecognizer] = []
+        private weak var navigationController: UIPageViewController?
+        private var navigationGates: [DiaryCurlGestureGate] = []
+
+        private func hasActiveGesture(in controller: UIPageViewController) -> Bool {
+            controller.gestureRecognizers.contains { $0.state == .began || $0.state == .changed }
+        }
+
+        func installNavigationGates(in controller: UIPageViewController) {
+            guard navigationController !== controller else { return }
+            navigationController = controller
+            for gesture in controller.gestureRecognizers {
+                let gate = DiaryCurlGestureGate()
+                gate.original = gesture.delegate
+                gate.allowsNavigation = { [weak self] in
+                    guard let self else { return false }
+                    return !self.transitioning && !self.zoomSuspended && !self.parent.reduceMotion
+                }
+                navigationGates.append(gate)
+                gesture.delegate = gate
+                if let pan = gesture as? UIPanGestureRecognizer {
+                    pan.maximumNumberOfTouches = 1
+                    pan.addTarget(self, action: #selector(nativePanChanged(_:)))
+                }
+                if gesture is UITapGestureRecognizer { gesture.isEnabled = false }
+            }
+        }
+
+        @objc private func nativePanChanged(_ gesture: UIPanGestureRecognizer) {
+            guard [.ended, .cancelled, .failed].contains(gesture.state),
+                  let controller = navigationController else { return }
+            // Boundary pans may end without any page-transition delegate callback.
+            DispatchQueue.main.async { [weak self, weak controller] in
+                guard let self, let controller, !self.transitioning else { return }
+                self.show(self.parent.spread, in: controller, animated: !self.parent.reduceMotion)
+            }
+        }
 
         func installReducedMotionSwipes(in controller: UIPageViewController) {
             for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
@@ -498,20 +553,12 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
         }
 
         func updateMotionPolicy(in controller: UIPageViewController) {
-            // UIKit owns curl gesture state, including disabled boundary recognizers.
-            // A nil data source disables native navigation without disabling page taps.
-            // Never change the data source during an interactive transition.
-            guard !transitioning else { return }
-            reducedMotionSwipes.forEach { $0.isEnabled = parent.reduceMotion && !zoomSuspended }
-            if parent.reduceMotion || zoomSuspended {
-                if controller.dataSource != nil { controller.dataSource = nil }
-            } else if controller.dataSource !== self {
-                controller.dataSource = self
-                // 单指卷页，双指捏合留给外层缩放手势。
-                for case let pan as UIPanGestureRecognizer in controller.gestureRecognizers {
-                    pan.maximumNumberOfTouches = 1
-                }
-                controller.gestureRecognizers.compactMap { $0 as? UITapGestureRecognizer }.forEach { $0.isEnabled = false }
+            // Keep the data source stable even while UIKit is preparing a pan.
+            // Navigation gates reject new gestures without cancelling an active curl.
+            if controller.dataSource !== self { controller.dataSource = self }
+            installNavigationGates(in: controller)
+            reducedMotionSwipes.forEach {
+                $0.isEnabled = parent.reduceMotion && !zoomSuspended && !transitioning
             }
         }
 
@@ -559,7 +606,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
             return paper
         }
         func show(_ requested: Int, in controller: UIPageViewController, animated: Bool) {
-            guard !transitioning else { return }
+            guard !transitioning, !hasActiveGesture(in: controller) else { return }
             let countChanged = pageSource.spreadCount != parent.spreadCount || pageSource.allowsPageActions != parent.allowsPageActions || pageSource.showsBinding != parent.showsBinding
             pageSource = parent
             if countChanged { papers.removeAll() }
@@ -571,8 +618,8 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
             guard let left = page(target * 2), let right = page(target * 2 + 1) else { return }
             let direction: UIPageViewController.NavigationDirection = target >= displayed ? .forward : .reverse
             transitioning = true
-            // Prevent a pan from starting while a button-driven curl is running.
-            controller.dataSource = nil
+            // The gesture gate rejects new pans while this transition is running.
+            updateMotionPolicy(in: controller)
             // Refreshing read-only paper views during rotation is not a page turn.
             let animateTurn = animated && target != displayed
             if animateTurn { setRingsVisible(false, animated: false) }

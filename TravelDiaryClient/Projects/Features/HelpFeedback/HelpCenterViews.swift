@@ -61,7 +61,7 @@ struct HelpCenterScreen: View {
                     SupportEmptyState(symbol: "book.closed", title: query.isEmpty && category.isEmpty ? "帮助内容正在整理" : "没有找到相关答案", message: "你可以直接提交反馈，我们会在反馈详情中回复。")
                     NavigationLink { FeedbackFormScreen(owner: owner) } label: { Text("向我们提问").frame(maxWidth: .infinity) }.buttonStyle(FeedbackPrimaryButtonStyle())
                 }
-                if cursor != nil { Button("加载更多") { Task { await load(more: true) } }.disabled(loading).frame(maxWidth: .infinity) }
+                if let cursor { DiaryPaginationFooter(token: query + "|" + category + "|" + cursor, loading: loading, error: error) { await load(more: true) } }
             }
         }
         .navigationTitle("帮助与反馈")
@@ -79,19 +79,21 @@ struct HelpCenterScreen: View {
         }.buttonStyle(.plain).accessibilityAddTraits(category == code ? .isSelected : [])
     }
     private func load(more: Bool = false) async {
+        let previousCursor = more ? cursor : nil
+        if more { guard !loading, cursor != nil, loadedFilter == query + "|" + category else { return } }
         let filter = query + "|" + category
         if !more && loadedFilter != filter { articles = []; cursor = nil; offline = false; loadedFilter = filter }
         let stamp = UUID();generation = stamp;loading = true;error = nil
         defer { if stamp == generation { loading = false } }
         do {
             let values = try await service.articles(query:query,category:category,cursor:more ? cursor : nil)
-            let cats = (try? await service.categories()) ?? categories
-            guard stamp == generation else { return }
-            categories = cats; articles = more ? articles + values.results : values.results;cursor = values.next_cursor;offline = false
+            let cats = more ? categories : ((try? await service.categories()) ?? categories)
+            guard stamp == generation, filter == query + "|" + category else { return }
+            categories = cats; articles = more ? articles.appendingUnique(values.results) : values.results;cursor = values.next_cursor == previousCursor ? nil : values.next_cursor;offline = false
             if query.isEmpty && category.isEmpty { service.cache(articles,name:"articles");service.cache(cats,name:"categories");service.cache(Date(),name:"cached-at") }
         } catch is CancellationError { }
         catch {
-            guard stamp == generation else { return };self.error = error.localizedDescription;cursor = nil
+            guard stamp == generation, filter == query + "|" + category else { return };self.error = error.localizedDescription; if !more { cursor = nil }
             if articles.isEmpty && query.isEmpty && category.isEmpty { articles = service.cached([HelpArticle].self,name:"articles") ?? [];categories = service.cached([HelpCategory].self,name:"categories") ?? [];offline = !articles.isEmpty }
         }
     }
@@ -137,6 +139,7 @@ struct FeedbackListScreen: View {
     @State private var rows: [FeedbackTicket] = []
     @State private var status = ""
     @State private var cursor: String?
+    @State private var paginationStatus = ""
     @State private var busy = false
     @State private var error: String?
     @State private var generation = UUID()
@@ -154,15 +157,19 @@ struct FeedbackListScreen: View {
             else if rows.isEmpty && error == nil {
                 SupportEmptyState(symbol: "bubble.left.and.bubble.right", title: status.isEmpty ? "还没有反馈" : status == "active" ? "暂无进行中的反馈" : "暂无已结束的反馈", message: "问题、想法或建议，都可以告诉我们。提交后可在这里查看回复。")
             }
-            if cursor != nil { Button("加载更多") { Task { await load(more: true) } }.disabled(busy).frame(maxWidth: .infinity) }
+            if let cursor { DiaryPaginationFooter(token: status + "|" + cursor, loading: busy, error: error) { await load(more: true) } }
             NavigationLink { FeedbackFormScreen(owner: owner) } label: { Label("提交新反馈", systemImage: "square.and.pencil").frame(maxWidth: .infinity) }.buttonStyle(FeedbackPrimaryButtonStyle())
         }.navigationTitle("我的反馈").toolbar(.hidden, for: .tabBar)
             .task(id: status) { rows = []; cursor = nil; await load() }.refreshable { await load() }
     }
     private func load(more: Bool = false) async {
+        let previousCursor = more ? cursor : nil
+        let activeStatus = status
+        if more { guard !busy, cursor != nil, paginationStatus == status else { return } }
+        else { paginationStatus = status }
         let stamp = UUID();generation = stamp;busy = true;error = nil
         defer { if stamp == generation { busy = false } }
-        do { let p = try await HelpFeedbackService.shared.tickets(owner:owner,status:status,cursor:more ? cursor : nil);guard stamp == generation else { return };rows = more ? rows+p.results : p.results;cursor = p.next_cursor }
+        do { let p = try await HelpFeedbackService.shared.tickets(owner:owner,status:status,cursor:more ? cursor : nil);guard stamp == generation, activeStatus == status else { return };rows = more ? rows.appendingUnique(p.results) : p.results;cursor = p.next_cursor == previousCursor ? nil : p.next_cursor }
         catch is CancellationError { }
         catch { if stamp == generation { self.error = error.localizedDescription } }
     }

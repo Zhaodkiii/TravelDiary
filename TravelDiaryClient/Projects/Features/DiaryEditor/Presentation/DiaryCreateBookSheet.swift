@@ -5,11 +5,13 @@ import UIKit
 struct DiaryCreateBookSheet: View {
     let ownerID: String
     let completed: (DiaryBook) -> Void
+    private let initialCatalog: RemotePresetCatalog?
     @State private var category = "手帐"
     @State private var album: DiaryAlbumComposer
     @State private var blankPalette = "0"
-    init(ownerID: String, completed: @escaping (DiaryBook) -> Void) {
+    init(ownerID: String, initialCatalog: RemotePresetCatalog? = nil, completed: @escaping (DiaryBook) -> Void) {
         self.ownerID = ownerID; self.completed = completed
+        self.initialCatalog = initialCatalog
         _album = State(initialValue: DiaryAlbumComposer(ownerID: ownerID))
     }
     @Environment(\.dismiss) private var dismiss
@@ -27,6 +29,8 @@ struct DiaryCreateBookSheet: View {
     @State private var compactPosition: Int? = 0
     @State private var expandedCatalog = false
     @State private var search = ""
+    @State private var searchPresented = false
+    @State private var searchExpansionID: UUID?
     @State private var series: [RemotePresetCatalog.Series] = []
     @State private var loaded = false
     @State private var error: String?
@@ -39,18 +43,25 @@ struct DiaryCreateBookSheet: View {
         NavigationStack(path: $path) {
             GeometryReader { geometry in
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 12) {
-                        Button { dismiss() } label: {
-                            Image(systemName: "xmark").font(.system(size: 18, weight: .medium))
-                                .frame(width: 44, height: 44)
-                                .background(DiaryLibraryStyle.ink.opacity(0.04), in: Circle())
-                        }
-                        .accessibilityLabel("关闭新建面板")
-                        .disabled(album.busy)
-                        Picker("制作方式", selection: $category) {
-                            Text("手帐").tag("手帐"); Text("照片").tag("照片"); Text("空白").tag("空白")
-                        }.pickerStyle(.segmented)
-                    }.padding(.top, 16).padding(.bottom, 8)
+                    // isPresented 由系统搜索组件同步更新，原生取消搜索后自动恢复这一行。
+                    if !searchPresented {
+                        HStack(spacing: 12) {
+                            Button {
+                                if category == "手帐" {
+                                    beginSearch()
+                                } else { dismiss() }
+                            } label: {
+                                Image(systemName: category == "手帐" ? "magnifyingglass" : "xmark").font(.system(size: 18, weight: .medium))
+                                    .frame(width: 44, height: 44)
+                                    .background(DiaryLibraryStyle.ink.opacity(0.04), in: Circle())
+                            }
+                            .accessibilityLabel(category == "手帐" ? "搜索模板" : "关闭新建面板")
+                            .disabled(album.busy)
+                            Picker("制作方式", selection: $category) {
+                                Text("手帐").tag("手帐"); Text("照片").tag("照片"); Text("空白").tag("空白")
+                            }.pickerStyle(.segmented)
+                        }.padding(.top, 16).padding(.bottom, 8)
+                    }
                     if category == "照片" {
                         DiaryAlbumDesignPicker(model: album, contentHeightChanged: { height in
                             if abs(photoContentHeight - height) > 1 { photoContentHeight = height }
@@ -107,12 +118,26 @@ struct DiaryCreateBookSheet: View {
                     // 原生 pop（包含右滑）完成后，才恢复选择页高度。
                     withAnimation {
                         expandedCatalog = false
+                        searchPresented = false
+                        searchExpansionID = nil
                         fullHeight = false
                         detent = .height(fittedHeight)
                     }
                 }
             }
-            .toolbar(.hidden, for: .navigationBar)
+            .toolbar(expandedCatalog && category == "手帐" ? .visible : .hidden, for: .navigationBar)
+            .navigationTitle("选择手帐")
+            .navigationBarTitleDisplayMode(.inline)
+            // 搜索控制器始终归属于稳定的导航根节点，不能挂在条件创建的卡片列表内。
+            .searchable(text: $search, isPresented: $searchPresented,
+                placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索模板名称")
+            .toolbar {
+                if expandedCatalog && category == "手帐" {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("关闭", systemImage: "xmark") { dismiss() }
+                    }
+                }
+            }
             .safeAreaInset(edge: .bottom) {
                 if category != "手帐" || detent != .large {
                     DiaryImportFloatingActions {
@@ -158,21 +183,60 @@ struct DiaryCreateBookSheet: View {
             }
         }
         .tint(DiaryLibraryStyle.accent)
+        .onChange(of: category) { _, _ in cancelSearchActivation() }
+        .onChange(of: path.count) { _, count in
+            if count > 0 { cancelSearchActivation() }
+        }
+        .onDisappear { cancelSearchActivation() }
         .presentationDetents(fullHeight ? [.large] : [.height(fittedHeight), .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .task(id: detent == .large && path.isEmpty) {
             guard detent == .large, path.isEmpty else {
-                if detent != .large { expandedCatalog = false }
+                if detent != .large {
+                    expandedCatalog = false
+                    cancelSearchActivation()
+                }
                 return
             }
             do {
                 try await Task.sleep(for: .seconds(1))
                 try Task.checkCancellation()
+                guard !expandedCatalog else { return }
                 withAnimation(.easeInOut(duration: 0.2)) { expandedCatalog = true }
             } catch is CancellationError { }
             catch { }
         }
-        .task { await loadCatalog() }
+        .task {
+            if let initialCatalog {
+                update(initialCatalog)
+                loaded = true
+            } else { await loadCatalog() }
+        }
+    }
+
+    private func beginSearch() {
+        guard searchExpansionID == nil else { return }
+        if expandedCatalog && detent == .large {
+            searchPresented = true
+            return
+        }
+        let requestID = UUID()
+        searchExpansionID = requestID
+        // 先提交导航栏、列表和 detent 的变更；动画结束后才激活已有的搜索控制器。
+        withAnimation(.easeInOut(duration: 0.3), completionCriteria: .removed) {
+            detent = .large
+            expandedCatalog = true
+        } completion: {
+            guard searchExpansionID == requestID, category == "手帐", path.isEmpty,
+                  expandedCatalog, detent == .large else { return }
+            searchExpansionID = nil
+            searchPresented = true
+        }
+    }
+
+    private func cancelSearchActivation() {
+        searchExpansionID = nil
+        searchPresented = false
     }
 
     /// 测量自然内容，而不是 sheet 容器高度，避免 detent 与布局互相放大。
@@ -211,7 +275,6 @@ struct DiaryCreateBookSheet: View {
     private var expandedPresets: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
-                DiaryLibrarySearch(text: $search, prompt: "搜索模板名称")
                 if !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     let matches = items.filter {
                         $0.matches(search: search, series: "", styles: [], usages: [])

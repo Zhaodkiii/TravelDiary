@@ -19,8 +19,7 @@ struct DiaryPresetLibraryScreen: View {
     @State private var pending: DiaryPresetImportIntent?
     @State private var resuming: DiaryPresetImportIntent?
     @State private var recovered: DiaryBook?
-    @State private var search = ""
-    @State private var isSearching = false
+    @State private var searchQuery = ""
     @State private var reload = 0
     @State private var remoteError: String?
     @State private var remoteFinished = false
@@ -33,32 +32,58 @@ struct DiaryPresetLibraryScreen: View {
     @State private var showingFilters = false
     private var items: [PresetLibraryItem] { PresetLibraryItem.merge(local: [], remote: remote?.books ?? []) }
     private var results: [PresetLibraryItem] {
-        filterItems.filter { $0.matches(search: search, series: "", styles: styles, usages: usages) && (!onlyDownloaded || isAvailable($0)) }
+        filterItems.filter { $0.matches(search: "", series: "", styles: styles, usages: usages) && (!onlyDownloaded || isAvailable($0)) }
     }
     private var sections: [PresetLibrarySection] { PresetLibrarySection.group(results, series: remote?.series ?? []) }
     private var filterItems: [PresetLibraryItem] { PresetLibrarySection.scoped(items, seriesID: fixedSeriesID) }
     private var allStyles: [String] { Array(Set(filterItems.flatMap(\.styles))).sorted() }
     private var allUsages: [String] { Array(Set(filterItems.flatMap(\.usages))).sorted() }
-    private var hasFilters: Bool { !search.isEmpty || onlyDownloaded || !styles.isEmpty || !usages.isEmpty }
+    private var hasFilters: Bool { onlyDownloaded || !styles.isEmpty || !usages.isEmpty }
     private var screenTitle: String {
         if let fixedSeriesID { return (remote ?? initialCatalog)?.series.first { $0.slug == fixedSeriesID }?.title ?? "更多模板" }
-        return singlePageOnly ? "选择模板" : "旅行模板"
+        return singlePageOnly ? "选择模板" : "旅行素材"
     }
 
     var body: some View {
         ZStack {
         if !singlePageOnly && fixedSeriesID == nil {
             VStack(spacing: 0) {
-                Picker("素材类型", selection: $catalogTab) { Text("模板").tag("模板"); Text("贴纸").tag("贴纸") }
-                    .pickerStyle(.segmented).padding(.horizontal).padding(.vertical, 8)
+                DiaryMaterialTabHeader(selection: $catalogTab)
+                    .padding(.horizontal, 16)
                 TabView(selection: $catalogTab) {
                     templateBody.tag("模板")
-                    StickerGalleryScreen().tag("贴纸")
+                    StickerGalleryScreen(showsPersonalLibrary: false).tag("贴纸")
                 }.tabViewStyle(.page(indexDisplayMode: .never))
             }
         } else { templateBody }
         }
-        .background(DiaryLibraryStyle.background.ignoresSafeArea(edges: .bottom))
+        // 分页容器不具备书架 ScrollView 的顶部背景延伸，显式覆盖安全区域。
+        .background(DiaryLibraryStyle.background.ignoresSafeArea())
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar {
+            if showsInlineSearch {
+                ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink {
+                        if catalogTab == "贴纸" && !singlePageOnly && fixedSeriesID == nil {
+                            StickerGalleryScreen(isSearchPage: true).toolbar(.hidden, for: .tabBar)
+                        } else {
+                            DiaryPresetSearchScreen(ownerID: ownerID, searchText: $searchQuery,
+                                initialCatalog: remote ?? initialCatalog, fixedSeriesID: fixedSeriesID,
+                                catalogLoader: catalogLoader).toolbar(.hidden, for: .tabBar)
+                        }
+                    } label: { Image(systemName: "magnifyingglass") }
+                        .accessibilityLabel(catalogTab == "贴纸" ? "搜索贴纸" : "搜索模板")
+                }
+            }
+            if !singlePageOnly && fixedSeriesID == nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu("我的素材", systemImage: "tray") {
+                        NavigationLink { PresetDownloadCenter(ownerID: ownerID) } label: { Label("模板下载", systemImage: "arrow.down.circle") }
+                        NavigationLink { StickerGalleryScreen(mine: true) } label: { Label("贴纸收藏", systemImage: "heart") }
+                    }
+                }
+            }
+        }
         // TabView lazily creates its pages; destinations belong to this stable ancestor.
         .navigationDestination(item: Binding<UUID?>(get: { recovered?.id }, set: { if $0 == nil { recovered = nil } })) { bookID in
             DiaryBookDestination(ownerID: ownerID, bookID: bookID).toolbar(.hidden, for: .tabBar)
@@ -66,37 +91,16 @@ struct DiaryPresetLibraryScreen: View {
     }
 
     @ViewBuilder private var templateBody: some View {
-        if showsInlineSearch {
-            content.searchable(text: $search, isPresented: $isSearching,
-                               placement: .navigationBarDrawer(displayMode: .automatic),
-                               prompt: fixedSeriesID == nil ? "搜索模板名称、地点或主题" : "搜索这个系列")
-        } else {
-            content
-        }
+        content
     }
 
     private var content: some View {
-        Group {
-            if isSearching && !singlePageOnly {
-                DiaryPresetSearchScreen(ownerID: ownerID, searchText: $search,
-                    initialCatalog: remote ?? initialCatalog, fixedSeriesID: fixedSeriesID,
-                    catalogLoader: catalogLoader, showsSearchField: false, onBookOpened: { recovered = $0 })
-            } else {
-                libraryContent
-            }
-        }
+        libraryContent
         .background(DiaryLibraryStyle.background).foregroundStyle(DiaryLibraryStyle.ink).tint(DiaryLibraryStyle.accent)
         .scrollDismissesKeyboard(.interactively)
         .navigationTitle(screenTitle)
         .toolbar {
-            if showsInlineSearch && !isSearching {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { isSearching = true } label: {
-                        Image(systemName: "magnifyingglass")
-                    }.accessibilityLabel("搜索模板")
-                }
-            }
-            if !isSearching || singlePageOnly {
+            if catalogTab == "模板" || singlePageOnly || fixedSeriesID != nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         draftStyles = styles; draftUsages = usages; draftOnlyDownloaded = onlyDownloaded; showingFilters = true
@@ -104,15 +108,14 @@ struct DiaryPresetLibraryScreen: View {
                         Image(systemName: hasFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
                     }.accessibilityLabel("筛选模板")
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink { PresetDownloadCenter(ownerID: ownerID) } label: {
-                        Image(systemName: "arrow.down.circle").accessibilityLabel("下载管理")
+                if singlePageOnly || fixedSeriesID != nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        NavigationLink { PresetDownloadCenter(ownerID: ownerID) } label: {
+                            Image(systemName: "arrow.down.circle").accessibilityLabel("下载管理")
+                        }
                     }
                 }
             }
-        }
-        .onChange(of: isSearching) { _, active in
-            if !active { search = "" }
         }
         .refreshable { downloads.invalidateCatalog(); await loadRemote() }
         .sheet(isPresented: $showingFilters) { filterSheet }
@@ -145,7 +148,7 @@ struct DiaryPresetLibraryScreen: View {
 
     private var libraryContent: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 24) {
+            LazyVStack(alignment: .leading, spacing: 16) {
                 if singlePageOnly {
                     Text("为「\(targetBook?.title ?? "当前手帐")」挑选一页").font(.subheadline)
                 }
@@ -177,7 +180,7 @@ struct DiaryPresetLibraryScreen: View {
                         }
                     }
                 }
-            }.frame(maxWidth: 1200).padding(20).frame(maxWidth: .infinity)
+            }.frame(maxWidth: 1200).padding(16).frame(maxWidth: .infinity)
         }
     }
 
@@ -361,7 +364,7 @@ private struct DiaryPresetReaderDestination: View {
     @State private var retry = 0
     @State private var selection: PresetSelection?
 
-    @State private var reading = true
+    @State private var reading = false
     var body: some View {
         VStack(spacing: 0) {
             PresetMaterialLibraryLinks(templateID: package.id, templateVersion: package.manifest.packageVersion)
@@ -418,8 +421,8 @@ private struct DiaryPresetDetailScreen: View {
     var fixedTarget = false
     @State private var error: String?
     @State private var pages: [PresetPage] = []
-    @State private var previewPage: String?
-    @State private var showingPreview = false
+    @State private var preview: DiaryTemplatePreviewSelection?
+    @State private var pendingPreviewImport: String?
     @State private var selection: PresetSelection?
     let onImported: (DiaryBook) -> Void
     @State private var validated = false
@@ -428,9 +431,12 @@ private struct DiaryPresetDetailScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if let cover = overviewSpreads.first {
-                    overviewThumbnail(cover).frame(maxWidth: .infinity).frame(height: 260)
-                    .padding(20).background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 16))
+                if !pages.isEmpty {
+                    DiaryPresetOverviewBook(pages: pages.filter { $0.id != package.manifest.shellPageID }.compactMap { page in
+                        guard let url = try? package.url(page.preview.largePath) else { return nil }
+                        return .init(id: page.id, url: url, size: page.size.cg,
+                                     thumbnailURL: try? package.url(page.preview.thumbnailPath))
+                    }, pageSize: package.manifest.pageSize.cg)
                 }
                 Text(package.manifest.title).font(.title2.weight(.semibold))
                 Text("\(pages.filter { $0.id != package.manifest.shellPageID }.count) 页 · 可独立编辑的旅行手帐")
@@ -448,7 +454,7 @@ private struct DiaryPresetDetailScreen: View {
                 Text("页面总览").font(.headline)
                 DiaryPresetOverviewGrid(spreads: overviewSpreads) { spread in
                         VStack(alignment: .leading, spacing: 8) {
-                            Button { previewPage = spread.pages.first?.id; showingPreview = true } label: {
+                            Button { if let id = spread.pages.first?.id { preview = DiaryTemplatePreviewSelection(id: id) } } label: {
                                 overviewThumbnail(spread)
                             }
                             Text(spread.pages.map(\.title).joined(separator: " · ")).font(.caption)
@@ -487,24 +493,18 @@ private struct DiaryPresetDetailScreen: View {
                 }
                 catch { self.error = error.localizedDescription }
             }
-            .fullScreenCover(isPresented: $showingPreview) {
-                NavigationStack {
-                    TabView(selection: $previewPage) {
-                        ForEach(pages) { page in
-                            VStack {
-                                if abs((pages.firstIndex { $0.id == page.id } ?? 0) - (pages.firstIndex { $0.id == previewPage } ?? 0)) <= 1 {
-                                    DiaryPresetImage(package: package, path: page.preview.largePath, size: page.size.cg)
-                                } else { Color.clear }
-                                Text(page.title)
-                            }.padding().tag(Optional(page.id))
-                        }
-                    }.tabViewStyle(.page).navigationTitle("\((pages.firstIndex { $0.id == previewPage } ?? 0) + 1) / \(pages.count)")
-                        .toolbar { Button("完成") { showingPreview = false } }
-                        .safeAreaInset(edge: .bottom) {
-                            Button("使用这一页") {
-                                if let previewPage { showingPreview = false; selection = PresetSelection(pageIDs: [previewPage]) }
-                            }.buttonStyle(.borderedProminent).padding()
-                        }
+            .fullScreenCover(item: $preview, onDismiss: {
+                if let id = pendingPreviewImport {
+                    pendingPreviewImport = nil
+                    selection = PresetSelection(pageIDs: [id])
+                }
+            }) { value in
+                DiaryTemplatePagePreview(initialPageID: value.id, pages: pages.map { page in
+                    DiaryTemplatePreviewPage(id: page.id, title: page.title, size: page.size.cg,
+                        request: PreviewImagePipeline.shared.request(url: try? package.url(page.preview.largePath), maxPixelSize: 1800))
+                }) { id in
+                    pendingPreviewImport = id
+                    preview = nil
                 }
             }
             .sheet(item: $selection) { value in
@@ -926,5 +926,97 @@ struct DiaryImportFloatingActions<Content: View>: View {
             .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
+    }
+}
+
+/// 自定义导航外观，分页和横向手势仍由原生 TabView 管理。
+private struct DiaryMaterialTabHeader: View {
+    @Binding var selection: String
+    @Namespace private var indicator
+    private let tabs = ["模板", "贴纸"]
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(tabs, id: \.self) { tab in
+                Button {
+                    withAnimation(.snappy(duration: 0.25)) { selection = tab }
+                } label: {
+                    VStack(spacing: 8) {
+                        Text(tab)
+                            .font(.body.weight(selection == tab ? .semibold : .regular))
+                            .foregroundStyle(selection == tab ? DiaryLibraryStyle.accent : DiaryLibraryStyle.secondary)
+                        ZStack {
+                            Capsule().fill(.clear)
+                            if selection == tab {
+                                Capsule().fill(DiaryLibraryStyle.accent)
+                                    .matchedGeometryEffect(id: "selection", in: indicator)
+                            }
+                        }.frame(width: 28, height: 3)
+                    }
+                    .frame(maxWidth: .infinity).frame(minHeight: 48)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selection == tab ? [.isSelected] : [])
+            }
+        }
+        .padding(.bottom, 4)
+        .background(alignment: .bottom) { DiaryLibraryStyle.line.opacity(0.5).frame(height: 0.5) }
+        .animation(.snappy(duration: 0.25), value: selection)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("素材类型")
+    }
+}
+
+/// The presentation item supplies the initial page before the paging view is created.
+struct DiaryTemplatePreviewSelection: Identifiable {
+    let id: String
+}
+
+struct DiaryTemplatePreviewPage: Identifiable {
+    let id: String
+    let title: String
+    let size: CGSize
+    let request: PreviewImageRequest
+}
+
+struct DiaryTemplatePagePreview: View {
+    let pages: [DiaryTemplatePreviewPage]
+    let onUse: (String) -> Void
+    @State private var selectedPageID: String
+    @Environment(\.dismiss) private var dismiss
+
+    init(initialPageID: String, pages: [DiaryTemplatePreviewPage], onUse: @escaping (String) -> Void) {
+        self.pages = pages
+        self.onUse = onUse
+        _selectedPageID = State(initialValue: pages.contains { $0.id == initialPageID }
+            ? initialPageID : (pages.first?.id ?? initialPageID))
+    }
+
+    var body: some View {
+        NavigationStack {
+            TabView(selection: $selectedPageID) {
+                ForEach(pages) { page in
+                    VStack(spacing: 16) {
+                        CachedPreviewImage(request: page.request)
+                            .aspectRatio(page.size.width / max(1, page.size.height), contentMode: .fit)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        Text(page.title).font(.body).multilineTextAlignment(.center)
+                    }
+                    .padding()
+                    .tag(page.id)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .background(DiaryLibraryStyle.background.ignoresSafeArea())
+            .navigationTitle("\((pages.firstIndex { $0.id == selectedPageID } ?? 0) + 1) / \(pages.count)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+            .safeAreaInset(edge: .bottom) {
+                Button("使用这一页") { onUse(selectedPageID) }
+                    .buttonStyle(.borderedProminent).padding()
+                    .disabled(!pages.contains { $0.id == selectedPageID })
+            }
+        }.tint(DiaryLibraryStyle.accent)
     }
 }

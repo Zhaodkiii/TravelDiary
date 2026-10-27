@@ -40,7 +40,7 @@ struct FeedbackDetailScreen: View {
                     FeedbackMessageRow(message: item, onAttachment: { asset in Task { await openAttachment(asset.id) } }).onAppear { displayed(item) }
                 }
             }
-            if cursor != nil { Button("加载后续消息") { Task { await load(more: true) } }.disabled(loading).frame(maxWidth: .infinity) }
+            if let cursor { DiaryPaginationFooter(token: cursor + "|\(messages.count)", loading: loading, error: error) { await load(more: true) } }
             if let error { FeedbackInlineNotice(message: error, symbol: "exclamationmark.circle", actionTitle: "重新加载", action: { Task { await load() } }) }
             if let ticket, ticket.status == "closed" {
                 NavigationLink { FeedbackFormScreen(owner: owner, previousID: id) } label: {
@@ -124,7 +124,7 @@ struct FeedbackDetailScreen: View {
         do { try HelpFeedbackService.shared.save(d,owner:owner,name:draftName) } catch { self.error = "回复草稿保存失败：\(error.localizedDescription)" }
     }
     private func load(more: Bool = false) async {
-        guard !loading else { return };loading = true;defer { loading = false }
+        guard !loading, !more || cursor != nil else { return };loading = true;defer { loading = false }
         do {
             let t = try await HelpFeedbackService.shared.ticket(id,owner:owner)
             let p = try await HelpFeedbackService.shared.messages(id,owner:owner,afterSequence:messages.compactMap(\.sequence).max())

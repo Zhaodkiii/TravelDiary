@@ -98,3 +98,45 @@ struct DiarySecondaryButtonStyle: ButtonStyle {
             .contentShape(RoundedRectangle(cornerRadius: 16))
     }
 }
+
+/// Visibility follows the actual viewport, including inside non-lazy containers.
+struct DiaryPaginationFooter: View {
+    let token: String
+    let loading: Bool
+    let error: String?
+    let load: () async -> Void
+    @State private var visible = false
+    @State private var automaticLoads = 0
+
+    var body: some View {
+        Group {
+            if loading { ProgressView("正在加载…") }
+            else if error != nil {
+                Button("加载失败，点击重试") { Task { await load() } }
+            } else {
+                Button("加载更多") { Task { await load() } }
+            }
+        }
+        .font(.subheadline)
+        .frame(maxWidth: .infinity, minHeight: 52)
+        .onScrollVisibilityChange(threshold: 0.01) { value in
+            visible = value
+            if !value { automaticLoads = 0 }
+            requestIfNeeded()
+        }
+        .onChange(of: token + "|\(loading)|" + (error ?? "")) { _, _ in requestIfNeeded() }
+    }
+
+    private func requestIfNeeded() {
+        guard visible, !loading, error == nil, automaticLoads < 3 else { return }
+        automaticLoads += 1
+        Task { await load() }
+    }
+}
+
+extension Array where Element: Identifiable {
+    func appendingUnique(_ incoming: [Element]) -> [Element] {
+        var ids = Set(map(\.id))
+        return self + incoming.filter { ids.insert($0.id).inserted }
+    }
+}

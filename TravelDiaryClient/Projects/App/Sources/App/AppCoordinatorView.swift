@@ -119,7 +119,7 @@ struct SupportMainCoordinatorView: View {
                         .id(session.accountID)
                 }
             }
-            Tab("模板", systemImage: "books.vertical", value: SupportRootTab.diaryPresets) {
+            Tab("素材", systemImage: "books.vertical", value: SupportRootTab.diaryPresets) {
                 rootNavigation(path: $templatePath) {
                     DiaryPresetLibraryScreen(ownerID: String(session.accountID))
                         .id(session.accountID)
@@ -208,7 +208,7 @@ struct SupportMainCoordinatorView: View {
         case .healthHome: return L10n.tr("home.title", fallback: "首页")
         case .photoEditor: return "照片编辑"
         case .diaryEditor: return "我的手帐"
-        case .diaryPresets: return "旅行模板"
+        case .diaryPresets: return "旅行素材"
         case .templateSearch: return "搜索模板"
         case .customization: return "专属定制"
         case .secondCamera: return ""

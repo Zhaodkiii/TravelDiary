@@ -172,4 +172,50 @@ struct DiaryImmersiveReaderTests {
         }
     }
 
+    @Test func suspensionKeepsBothLeavesAndDataSourceAvailable() async throws {
+        let reader = DiaryPageCurlReader(spreadCount: 3, spread: .constant(1), reduceMotion: false) {
+            Paper(index: $0, canSelect: $1)
+        }
+        let coordinator = reader.makeCoordinator()
+        let controller = UIPageViewController(transitionStyle: .pageCurl, navigationOrientation: .horizontal,
+            options: [.spineLocation: UIPageViewController.SpineLocation.mid.rawValue])
+        controller.isDoubleSided = true
+        coordinator.installRings(in: controller)
+        coordinator.show(1, in: controller, animated: false)
+        try await Task.sleep(for: .milliseconds(100))
+        let pan = try #require(controller.gestureRecognizers.first { $0 is UIPanGestureRecognizer })
+        let gate = try #require(pan.delegate)
+
+        coordinator.setZoomSuspended(true, in: controller)
+        #expect(controller.dataSource === coordinator)
+        #expect(gate.gestureRecognizerShouldBegin?(pan) == false)
+        #expect(controller.viewControllers?.count == 2)
+        let paper = try #require(controller.viewControllers?.first)
+        #expect(controller.dataSource?.pageViewController(controller, viewControllerAfter: paper) != nil)
+
+        coordinator.setZoomSuspended(false, in: controller)
+        coordinator.parent = DiaryPageCurlReader(spreadCount: 3, spread: .constant(1), reduceMotion: true) {
+            Paper(index: $0, canSelect: $1)
+        }
+        coordinator.updateMotionPolicy(in: controller)
+        #expect(controller.dataSource === coordinator)
+        #expect(gate.gestureRecognizerShouldBegin?(pan) == false)
+
+        coordinator.pageViewController(controller, willTransitionTo: [])
+        coordinator.parent = DiaryPageCurlReader(spreadCount: 1, spread: .constant(0), reduceMotion: false) {
+            Paper(index: $0, canSelect: $1)
+        }
+        coordinator.show(0, in: controller, animated: false)
+        #expect(controller.viewControllers?.compactMap { ($0 as? Paper)?.index } == [2, 3])
+        #expect(coordinator.page(5) != nil)
+        #expect(gate.gestureRecognizerShouldBegin?(pan) == false)
+
+        coordinator.pageViewController(controller, didFinishAnimating: true,
+            previousViewControllers: [], transitionCompleted: false)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(controller.viewControllers?.compactMap { ($0 as? Paper)?.index } == [0, 1])
+        #expect(controller.dataSource === coordinator)
+        #expect(coordinator.page(5) == nil)
+    }
+
 }
