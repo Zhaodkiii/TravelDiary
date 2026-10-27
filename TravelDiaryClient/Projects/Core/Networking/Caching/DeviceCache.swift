@@ -122,6 +122,7 @@ final class DeviceCache: @unchecked Sendable {
     }
 
     func clearAllCaches() {
+        ResourceCache.shared.clear(category: "network-responses")
         clearAuthenticatedDeviceState()
         userDefaults.removeObject(forKey: Keys.lastLoggedInAccountID)
         cachedLastLoggedInAccountID.value = nil
@@ -135,6 +136,7 @@ final class DeviceCache: @unchecked Sendable {
 
     /// 删除磁盘上的 HTTP 条件请求（ETag / 304 合并用）缓存，不影响 UserDefaults 中的设备元数据或日志级别。
     func clearETagResponseCache() {
+        ResourceCache.shared.clear(category: "network-responses")
         if fileManager.fileExists(atPath: baseDirectory.path) {
             try? fileManager.removeItem(at: baseDirectory)
         }
@@ -153,16 +155,22 @@ final class DeviceCache: @unchecked Sendable {
 
 extension DeviceCache: ETagStore {
     func record(forKey key: String) -> ETagCacheRecord? {
+        let unified = ResourceETagCache(baseDirectory: baseDirectory)
+        if unified.enabled { return unified.read(key)?.record }
         let url = metadataURL(for: key)
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder.default.decode(ETagCacheRecord.self, from: data)
     }
 
     func cachedBody(forKey key: String) -> Data? {
-        try? Data(contentsOf: bodyURL(for: key))
+        let unified = ResourceETagCache(baseDirectory: baseDirectory)
+        if unified.enabled { return unified.read(key)?.body }
+        return try? Data(contentsOf: bodyURL(for: key))
     }
 
     func store(record: ETagCacheRecord, body: Data, forKey key: String) throws {
+        let unified = ResourceETagCache(baseDirectory: baseDirectory)
+        if unified.enabled { try unified.store(record: record, body: body, identity: key); return }
         if !fileManager.fileExists(atPath: baseDirectory.path) {
             try fileManager.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         }
@@ -172,6 +180,7 @@ extension DeviceCache: ETagStore {
     }
 
     func removeCache(forKey key: String) {
+        ResourceETagCache(baseDirectory: baseDirectory).remove(key)
         try? fileManager.removeItem(at: metadataURL(for: key))
         try? fileManager.removeItem(at: bodyURL(for: key))
     }

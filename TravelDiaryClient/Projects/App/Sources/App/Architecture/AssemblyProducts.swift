@@ -98,6 +98,7 @@ enum AppAssembly {
             logger: logger
         )
 
+        Task.detached(priority: .utility) { LegacyCacheMigration.run(cache: .shared) }
         let storageService = StorageService()
         let storageRegistry = StorageRegistry.live(
             storageService: storageService,

@@ -42,24 +42,40 @@ nonisolated enum MaterialRoutes {
 actor MaterialImageCache {
     static let shared = MaterialImageCache()
     private var generation = 0
+    private var pending: [String: Task<Data, Error>] = [:]
+    private func key(_ hash: String) -> ResourceCacheKey { ResourceCacheKey(scope: "shared", category: "material-images", identity: hash) }
     func clear() throws {
         generation += 1
+        for task in pending.values { task.cancel() }; pending.removeAll()
+        ResourceCache.shared.clear(category: "material-images")
         let root = StoragePaths.system.cache("MaterialImages")
         if FileManager.default.fileExists(atPath: root.path) { try FileManager.default.removeItem(at: root) }
     }
     func load(_ resource: MaterialImageResource) async throws -> Data {
+        if let task = pending[resource.sha256] { return try await task.value }
+        let task = Task { try await self.fetch(resource) }
+        pending[resource.sha256] = task
+        defer { pending[resource.sha256] = nil }
+        return try await task.value
+    }
+    private func fetch(_ resource: MaterialImageResource) async throws -> Data {
         guard resource.sha256.count == 64, resource.sha256.allSatisfy(\.isHexDigit) else { throw URLError(.badURL) }
         let root = StoragePaths.system.cache("MaterialImages")
         let path = root.appendingPathComponent(resource.sha256)
-        if let data = try? Data(contentsOf:path), SHA256.hash(data:data).map({String(format:"%02x",$0)}).joined() == resource.sha256 { return data }
+        let cacheKey = key(resource.sha256)
+        if let data = ResourceCache.shared.data(for: cacheKey), SHA256.hash(data:data).map({String(format:"%02x",$0)}).joined() == resource.sha256 { return data }
+        if let data = try? Data(contentsOf:path), SHA256.hash(data:data).map({String(format:"%02x",$0)}).joined() == resource.sha256 {
+            ResourceCache.shared.register(path, for: cacheKey); return data
+        }
         guard let url=URL(string:resource.url),url.scheme == "https", url.host?.hasSuffix(".aliyuncs.com") == true else { throw URLError(.badURL) }
         let started = generation
-        let (data,response) = try await URLSession.shared.data(from:url)
+        let cacheGeneration = ResourceCache.shared.generation(for: cacheKey)
+        let (data,response) = try await ResourceDownloadSession.shared.data(from:url)
         guard (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 15*1024*1024,
             SHA256.hash(data:data).map({String(format:"%02x",$0)}).joined() == resource.sha256 else { throw URLError(.badServerResponse) }
         if started == generation {
-            try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
-            try data.write(to:path,options:.atomic)
+            try Task.checkCancellation()
+            ResourceCache.shared.store(data, for: cacheKey, expectedGeneration: cacheGeneration)
         }
         return data
     }
@@ -70,11 +86,12 @@ struct MaterialResourceImage: View {
     var libraryID: String? = nil
     var version: Int? = nil
     @State private var bitmap: UIImage?
+    @State private var displayedID: String?
     @State private var failed = false
     @State private var retry = 0
     var body: some View {
         Group {
-            if let bitmap { Image(uiImage: bitmap).resizable().scaledToFit() }
+            if displayedID == resource?.sha256, let bitmap { Image(uiImage: bitmap).resizable().scaledToFit() }
             else {
                 RoundedRectangle(cornerRadius: 12).fill(DiaryLibraryStyle.surface)
                     .overlay {
@@ -82,9 +99,12 @@ struct MaterialResourceImage: View {
                         else { Image(systemName: "photo").foregroundStyle(.secondary) }
                     }
             }
-        }.task(id: (resource?.url ?? "") + String(retry)) {
+        }.task(id: (resource?.sha256 ?? "") + String(retry)) {
             failed = false
             guard var resource else { return }
+            if displayedID != resource.sha256 { bitmap = nil; displayedID = resource.sha256 }
+            let imageRequest = PreviewImageRequest(key: ResourceCacheKey(scope: "shared", category: "material-images", identity: resource.sha256), url: URL(string: resource.url), maxPixelSize: 2048)
+            if let image = PreviewImagePipeline.shared.cached(imageRequest) { bitmap = image; return }
             do {
                 let data: Data
                 do { data = try await MaterialImageCache.shared.load(resource) }
@@ -93,7 +113,7 @@ struct MaterialResourceImage: View {
                     resource = try await MaterialCatalogRepository.shared.refreshPreview(resourceID:resource.resource_id,libraryID:libraryID,version:version)
                     data = try await MaterialImageCache.shared.load(resource)
                 }
-                let image = await Task.detached(priority: .utility) { UIImage(data: data) }.value
+                let image = try await PreviewImagePipeline.shared.decoded(data, request: imageRequest)
                 try Task.checkCancellation(); bitmap = image
             } catch { if !Task.isCancelled { failed = true } }
         }
@@ -319,6 +339,7 @@ struct StickerPackDetailScreen: View {
         }
         .background(DiaryLibraryStyle.background)
         .navigationTitle("贴纸详情").navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Button(library.is_favorited ? "已加入 · 移除" : "加入我的贴纸") { Task { await favorite() } }.disabled(saving)
@@ -408,8 +429,10 @@ private struct MaterialCacheScreen: View {
     }
     private func measure() async {
         let files=roots()+PresetDownloadManager.shared.materialCacheFiles()
+        let scope = StoragePaths.scopeKey(MaterialCatalogRepository.shared.owner)
         bytes=await Task.detached(priority:.utility) {
-            files.reduce(0) { total,url in
+            let managed = ResourceCache.shared.entries().filter { ($0.scope == "shared" || $0.scope == scope) && $0.category.hasPrefix("material-") && StoragePaths.contains($0.url, in: ResourceCache.shared.root) }.reduce(0) { $0 + Int($1.bytes) }
+            return managed + files.reduce(0) { total,url in
                 if let enumerator=FileManager.default.enumerator(at:url,includingPropertiesForKeys:[.fileSizeKey]) {
                     return total + enumerator.compactMap { $0 as? URL }.reduce(0) { $0 + ((try? $1.resourceValues(forKeys:[.fileSizeKey]).fileSize) ?? 0) }
                 }
@@ -423,6 +446,9 @@ private struct MaterialCacheScreen: View {
             try await PresetDownloadManager.shared.clearMaterialCache()
             try await MaterialImageCache.shared.clear()
             try await MaterialThumbnailCache.shared.clear()
+            let scope = StoragePaths.scopeKey(MaterialCatalogRepository.shared.owner)
+            ResourceCache.shared.clear(scope: scope, category: "material-catalog")
+            PreviewImagePipeline.shared.clearMemory()
             let catalog=roots().last!
             try await Task.detached(priority:.utility) { if FileManager.default.fileExists(atPath:catalog.path) { try FileManager.default.removeItem(at:catalog) } }.value
             message="缓存已清理";await measure()

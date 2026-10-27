@@ -6,12 +6,13 @@ import UIKit
 #endif
 
 #if canImport(UIKit)
-struct MarkdownCachedRemoteImage {
+nonisolated struct MarkdownCachedRemoteImage: Sendable {
     let sourceURL: URL
     let image: UIImage
     let fileURL: URL
     let displayName: String
     let mimeType: String?
+    let storageLease: StorageActivity.Lease
 }
 
 struct MarkdownRemoteImageView: View {
@@ -103,7 +104,7 @@ struct MarkdownRemoteImageView: View {
 actor MarkdownRemoteImageCache {
     static let shared = MarkdownRemoteImageCache()
 
-    private let memoryCache = NSCache<NSURL, UIImage>()
+    private var pending: [String: Task<MarkdownCachedRemoteImage, Error>] = [:]
     private let fileManager = FileManager.default
     private let cacheDirectory: URL
 
@@ -113,65 +114,45 @@ actor MarkdownRemoteImageCache {
     }
 
     func image(for url: URL) async throws -> MarkdownCachedRemoteImage {
-        if let image = memoryCache.object(forKey: url as NSURL),
-           let fileURL = existingFileURL(for: url) {
-            return MarkdownCachedRemoteImage(
-                sourceURL: url,
-                image: image,
-                fileURL: fileURL,
-                displayName: displayName(for: url, fileURL: fileURL),
-                mimeType: mimeType(for: fileURL.pathExtension)
-            )
-        }
-
-        if let fileURL = existingFileURL(for: url),
-           let image = UIImage(contentsOfFile: fileURL.path) {
-            memoryCache.setObject(image, forKey: url as NSURL)
-            return MarkdownCachedRemoteImage(
-                sourceURL: url,
-                image: image,
-                fileURL: fileURL,
-                displayName: displayName(for: url, fileURL: fileURL),
-                mimeType: mimeType(for: fileURL.pathExtension)
-            )
-        }
-
-        var request = URLRequest(url: url)
-        request.cachePolicy = .returnCacheDataElseLoad
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let image = UIImage(data: data) else {
-            throw URLError(.cannotDecodeContentData)
-        }
-
-        let mimeType = (response as? HTTPURLResponse)?.mimeType
-        let fileURL = cacheFileURL(for: url, mimeType: mimeType)
-        try data.write(to: fileURL, options: [.atomic])
-        memoryCache.setObject(image, forKey: url as NSURL)
-
-        return MarkdownCachedRemoteImage(
-            sourceURL: url,
-            image: image,
-            fileURL: fileURL,
-            displayName: displayName(for: url, fileURL: fileURL),
-            mimeType: mimeType ?? self.mimeType(for: fileURL.pathExtension)
-        )
+        let owner = await PreviewImagePipeline.shared.owner
+        let key = ResourceCacheKey.account(owner, category: "markdown-images", identity: url.absoluteString)
+        if let task = pending[key.id] { return try await task.value }
+        let task = Task { try await self.fetch(url, owner: owner, key: key) }
+        pending[key.id] = task
+        defer { pending[key.id] = nil }
+        return try await task.value
     }
 
-    private func existingFileURL(for url: URL) -> URL? {
-        let key = cacheKey(for: url)
-        guard let files = try? fileManager.contentsOfDirectory(
-            at: cacheDirectory,
-            includingPropertiesForKeys: nil
-        ) else {
-            return nil
+    private func fetch(_ url: URL, owner: String, key: ResourceCacheKey) async throws -> MarkdownCachedRemoteImage {
+        let generation = ResourceCache.shared.generation(for: key)
+        let directory = StoragePaths.system.cacheAccount(owner).appendingPathComponent("MarkdownRemoteImages")
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let files = (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        var fileURL = files.first { $0.deletingPathExtension().lastPathComponent == cacheKey(for: url) }
+        var data = fileURL.flatMap { try? Data(contentsOf: $0) }
+        var type: String?
+        if data == nil {
+            var request = URLRequest(url: url)
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.urlCache = nil
+            let session = URLSession(configuration: configuration)
+            defer { session.finishTasksAndInvalidate() }
+            let result = try await session.data(for: request)
+            guard let response = result.1 as? HTTPURLResponse, (200..<300).contains(response.statusCode) else { throw URLError(.badServerResponse) }
+            data = result.0; type = response.mimeType
+            fileURL = directory.appendingPathComponent(cacheKey(for: url)).appendingPathExtension(fileExtension(for: url, mimeType: type))
         }
-        return files.first { $0.deletingPathExtension().lastPathComponent == key }
-    }
-
-    private func cacheFileURL(for url: URL, mimeType: String?) -> URL {
-        cacheDirectory
-            .appendingPathComponent(cacheKey(for: url))
-            .appendingPathExtension(fileExtension(for: url, mimeType: mimeType))
+        guard let data, let fileURL else { throw URLError(.cannotDecodeContentData) }
+        let request = PreviewImageRequest(key: key, url: url, maxPixelSize: 2048)
+        let image = try await PreviewImagePipeline.shared.decoded(data, request: request)
+        guard ResourceCache.shared.generation(for: key) == generation,
+              await PreviewImagePipeline.shared.owner == owner else { throw CancellationError() }
+        let lease = StorageActivity.shared.acquire(fileURL)
+        if !fileManager.fileExists(atPath: fileURL.path) { try data.write(to: fileURL, options: .atomic) }
+        ResourceCache.shared.register(fileURL, for: key)
+        return MarkdownCachedRemoteImage(sourceURL: url, image: image, fileURL: fileURL,
+            displayName: displayName(for: url, fileURL: fileURL), mimeType: type ?? mimeType(for: fileURL.pathExtension), storageLease: lease)
     }
 
     private func cacheKey(for url: URL) -> String {

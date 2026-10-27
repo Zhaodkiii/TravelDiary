@@ -23,6 +23,7 @@ struct DiaryPresetMagazinePreview: View {
     let item: PresetLibraryItem
     let ownerID: String
     @State private var spreads: [[Leaf]] = []
+    @State private var loadedIdentity = ""
     @State private var loading = true
     @State private var failed = false
     @State private var retry = 0
@@ -34,6 +35,22 @@ struct DiaryPresetMagazinePreview: View {
     }
     private var taskID: String { "\(ownerID):\(item.id):\(item.version):\(item.local?.root.path ?? "remote"):\(retry)" }
 
+    init(item: PresetLibraryItem, ownerID: String) {
+        self.item = item; self.ownerID = ownerID
+        _loadedIdentity = State(initialValue: "\(ownerID):\(item.id):\(item.version)")
+        if let book = item.remote, let browse = PresetPreviewRepository.shared.memoryCached(book, ownerID: ownerID) {
+            _spreads = State(initialValue: Self.leaves(browse))
+            _loading = State(initialValue: false)
+        }
+    }
+    private static func leaves(_ browse: RemotePresetBrowse) -> [[Leaf]] {
+        DiaryMagazineSpreadSelection.select(pageIDs: browse.pages.map(\.id), shellID: browse.shell_page_id, coverID: browse.cover_page_id).map { ids in
+            ids.map { id in
+                Leaf(id: id, url: browse.pages.first(where: { $0.id == id }).flatMap { URL(string: $0.thumbnail_url) }, size: browse.page_size.cg)
+            }
+        }
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let gap: CGFloat = 12
@@ -42,7 +59,7 @@ struct DiaryPresetMagazinePreview: View {
             HStack(spacing: gap) {
                 Group {
                     if let local = item.local { DiaryPresetCover(package: local) }
-                    else if let remote = item.remote { DiaryRemoteCover(url: URL(string: remote.cover_url)) }
+                    else if let remote = item.remote { CachedPreviewImage(request: PresetPreviewRepository.shared.request(book: remote, ownerID: ownerID, url: URL(string: remote.cover_url))) }
                 }
                 .frame(width: width * 0.46, height: height)
                 .shadow(color: .black.opacity(0.10), radius: 4, y: 3)
@@ -85,7 +102,12 @@ struct DiaryPresetMagazinePreview: View {
     private func previewLeaf(_ leaf: Leaf?) -> some View {
         ZStack {
             Color(red: 0.96, green: 0.92, blue: 0.82)
-            if let leaf { DiaryMagazineThumbnail(url: leaf.url) }
+            if let leaf {
+                if let remote = item.remote {
+                    CachedPreviewImage(request: PresetPreviewRepository.shared.request(book: remote, ownerID: ownerID,
+                        pageID: leaf.id, url: leaf.url))
+                } else { CachedPreviewImage(request: PreviewImagePipeline.shared.request(url: leaf.url, maxPixelSize: 640)) }
+            }
         }
     }
     @ViewBuilder private func placeholder(index: Int) -> some View {
@@ -103,8 +125,12 @@ struct DiaryPresetMagazinePreview: View {
         }
     }
     private func load() async {
-        loading = true; failed = false; spreads = []
+        let identity = "\(ownerID):\(item.id):\(item.version)"
+        if loadedIdentity != identity { spreads = []; loadedIdentity = identity }
+        loading = spreads.isEmpty; failed = false
         do {
+            await PresetDownloadManager.shared.waitUntilRestored()
+            try Task.checkCancellation()
             let loaded: [[Leaf]]
             if let package = item.local ?? item.remote.flatMap({ PresetDownloadManager.shared.completeCachedPackage(for: $0) }) {
                 loaded = try await Task.detached {
@@ -119,64 +145,14 @@ struct DiaryPresetMagazinePreview: View {
                     }
                 }.value
             } else if let remote = item.remote {
-                let browse = try await PresetDownloadManager.shared.browse(remote, ownerID: ownerID)
-                loaded = DiaryMagazineSpreadSelection.select(pageIDs: browse.pages.map(\.id),
-                    shellID: browse.shell_page_id, coverID: browse.cover_page_id).map { ids in
-                    ids.map { id in
-                        // 保留无效 URL 的页位，不 compactMap 导致左右页错位。
-                        let page = browse.pages.first { $0.id == id }
-                        return Leaf(id: id, url: page.flatMap { URL(string: $0.thumbnail_url) }, size: browse.page_size.cg)
-                    }
-                }
+                let browse: RemotePresetBrowse
+                if retry == 0, let cached = await PresetPreviewRepository.shared.cached(remote, ownerID: ownerID) { browse = cached }
+                else { browse = try await PresetDownloadManager.shared.browse(remote, ownerID: ownerID) }
+                loaded = Self.leaves(browse)
             } else { loaded = [] }
             try Task.checkCancellation()
             spreads = loaded; loading = false
         } catch is CancellationError { }
         catch { if !Task.isCancelled { loading = false; failed = true } }
-    }
-}
-
-private struct DiaryMagazineThumbnail: View {
-    let url: URL?
-    @State private var image: UIImage?
-    @State private var failed = false
-    @State private var retry = 0
-    var body: some View {
-        Group {
-            if let image { Image(uiImage: image).resizable().scaledToFit() }
-            else if failed {
-                Button { retry += 1 } label: { Image(systemName: "arrow.clockwise").frame(minWidth: 44, minHeight: 44) }
-                    .accessibilityLabel("重试内页图片")
-            } else { ProgressView().controlSize(.small) }
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            .task(id: "\(url?.absoluteString ?? "missing"):\(retry)") {
-                image = nil; failed = false
-                do {
-                    guard let url else { throw DiaryEditorError.missingResource }
-                    let data: Data
-                    if url.isFileURL { data = try await Task.detached { try Data(contentsOf: url) }.value }
-                    else {
-                        var request = URLRequest(url: url)
-                        request.cachePolicy = .returnCacheDataElseLoad
-                        let (bytes, response) = try await URLSession.shared.data(for: request)
-                        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                            throw URLError(.badServerResponse)
-                        }
-                        data = bytes
-                    }
-                    let decoded = try await Task.detached {
-                        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                                kCGImageSourceCreateThumbnailWithTransform: true,
-                                kCGImageSourceThumbnailMaxPixelSize: 640
-                              ] as CFDictionary) else { throw DiaryEditorError.invalidImage }
-                        return UIImage(cgImage: cg)
-                    }.value
-                    try Task.checkCancellation()
-                    image = decoded
-                } catch is CancellationError { }
-                catch { if !Task.isCancelled { failed = true } }
-            }
     }
 }

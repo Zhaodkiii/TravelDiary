@@ -89,6 +89,28 @@ struct DiaryPresetTemplateLibraryTests {
         #expect(abs(try #require(driver.cards[0]).minX) < 1)
     }
 
+    @Test func actualTemplateCardsRenderInsideThePagedLibraryAndLazyCarousels() async throws {
+        let scene = try #require(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        let books = (0..<4).map { index in
+            RemotePresetBook(id: "render-fixture-\(index)", title: "模板 \(index)", series: "city", version: 1,
+                             page_count: 5, cover_url: "file:///missing/preview.png")
+        }
+        let catalog = RemotePresetCatalog(series: [.init(slug: "city", title: "城市漫游")], books: books)
+        let controller = UIHostingController(rootView: NavigationStack {
+            DiaryPresetLibraryScreen(ownerID: "render-fixture", initialCatalog: catalog, catalogLoader: { catalog })
+        })
+        window.rootViewController = controller
+        window.windowLevel = .alert + 1; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        controller.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(300))
+        controller.view.layoutIfNeeded()
+        #expect(controller.view.bounds.width > 0)
+        #expect(controller.view.bounds.height > 0)
+    }
+
     private func makeWindow(driver: Driver, count: Int) throws -> UIWindow {
         let scene = try #require(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         let window = UIWindow(windowScene: scene)

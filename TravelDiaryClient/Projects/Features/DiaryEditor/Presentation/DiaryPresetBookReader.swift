@@ -243,30 +243,7 @@ struct DiaryPresetBookReader<Detail: View>: View {
 
 struct DiaryPresetReaderImage: View {
     let url: URL
-    @State private var image: UIImage?
-    @State private var failed = false
-    @State private var retry = 0
-    var body: some View {
-        ZStack {
-            if let image { Image(uiImage: image).resizable().scaledToFit() }
-            else if failed { Button("重试预览") { retry += 1 }.font(.caption) }
-            else { ProgressView() }
-        }.task(id: "\(url)-\(retry)") {
-            failed = false
-            do {
-                let data: Data
-                if url.isFileURL { data = try await Task.detached { try Data(contentsOf: url) }.value }
-                else {
-                    let response = try await URLSession.shared.data(from: url)
-                    guard (response.1 as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-                    data = response.0
-                }
-                try Task.checkCancellation()
-                image = UIImage(data: data); failed = image == nil
-            } catch is CancellationError { }
-            catch { failed = true }
-        }
-    }
+    var body: some View { CachedPreviewImage(request: PreviewImagePipeline.shared.request(url: url, maxPixelSize: 1800)) }
 }
 
 @MainActor
@@ -351,17 +328,11 @@ final class PresetPreviewWindow: ObservableObject {
         for url in urls where images[url] == nil && tasks[url] == nil && !failed.contains(url) {
             tasks[url] = Task { [weak self] in
                 do {
-                    let data: Data
-                    if url.isFileURL { data = try await Task.detached { try Data(contentsOf: url) }.value }
-                    else {
-                        let response = try await URLSession.shared.data(from: url)
-                        guard (response.1 as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-                        data = response.0
-                    }
+                    let request = PreviewImagePipeline.shared.request(url: url, maxPixelSize: 2048)
+                    let image = try await PreviewImagePipeline.shared.load(request)
                     try Task.checkCancellation()
                     guard let self, self.active.contains(url) else { return }
-                    if let image = UIImage(data: data) { self.images[url] = image }
-                    else { self.failed.insert(url) }
+                    self.images[url] = image
                     self.tasks[url] = nil
                 } catch {
                     guard !Task.isCancelled, let self, self.active.contains(url) else { return }

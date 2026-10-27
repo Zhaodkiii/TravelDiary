@@ -69,6 +69,7 @@ actor FileTransferService {
 
     @discardableResult
     func upload(_ payload: ManagedFileUploadPayload) async throws -> ManagedFileRecord {
+        let cacheNamespace = await cacheManager.accountContext()
         let fileUuid = UUID().uuidString
         let fileMD5 = FileUtilities.md5Hex(payload.data)
         let safeFileName = FileUtilities.sanitizeFileName(payload.fileName)
@@ -76,7 +77,8 @@ actor FileTransferService {
         _ = try await cacheManager.save(
             data: payload.data,
             fileUUID: fileUuid,
-            fileName: safeFileName
+            fileName: safeFileName,
+            namespace: cacheNamespace
         )
 
         let ymd = Self.dayFormatter.string(from: Date())
@@ -109,6 +111,7 @@ actor FileTransferService {
             }
         )
 
+        guard await cacheManager.accountContext() == cacheNamespace else { throw StorageFailure.accountChanged }
         let uploaded = try await api.registerFile(
             ManagedFileUploadRequest(
                 fileUUID: fileUuid,
@@ -128,7 +131,8 @@ actor FileTransferService {
         let cacheMatches = await cacheManager.validateMD5(
             fileUUID: fileUuid,
             fileName: safeFileName,
-            expectedMD5: fileMD5
+            expectedMD5: fileMD5,
+            namespace: cacheNamespace
         )
         if !cacheMatches {
             logger.warning(
@@ -137,6 +141,7 @@ actor FileTransferService {
             )
         }
 
+        await cacheManager.markRebuildable(fileUUID: fileUuid, fileName: safeFileName, namespace: cacheNamespace)
         logger.info("文件上传完成，file_id=\(uploaded.id)，uuid=\(uploaded.fileUUID)", module: .cache)
         return uploaded
     }
@@ -154,21 +159,25 @@ actor FileTransferService {
     }
 
     func download(file: ManagedFileRecord, forceRefresh: Bool = false) async throws -> URL {
+        let cacheNamespace = await cacheManager.accountContext()
         if !forceRefresh,
-           let cachedURL = await cacheManager.cachedFileURL(fileUUID: file.fileUUID, fileName: file.originalName) {
+           let cachedURL = await cacheManager.cachedFileURL(fileUUID: file.fileUUID, fileName: file.originalName, namespace: cacheNamespace) {
             if let fileMd5 = file.fileMD5 {
                 let valid = await cacheManager.validateMD5(
                     fileUUID: file.fileUUID,
                     fileName: file.originalName,
-                    expectedMD5: fileMd5
+                    expectedMD5: fileMd5,
+                    namespace: cacheNamespace
                 )
                 if valid {
                     logger.debug("命中本地缓存并通过 MD5 校验，file_id=\(file.id)", module: .cache)
+                    await cacheManager.markRebuildable(fileUUID: file.fileUUID, fileName: file.originalName, namespace: cacheNamespace)
                     return cachedURL
                 }
-                try? await cacheManager.remove(fileUUID: file.fileUUID)
+                try? await cacheManager.remove(fileUUID: file.fileUUID, namespace: cacheNamespace)
             } else {
                 logger.debug("命中本地缓存，file_id=\(file.id)", module: .cache)
+                await cacheManager.markRebuildable(fileUUID: file.fileUUID, fileName: file.originalName, namespace: cacheNamespace)
                 return cachedURL
             }
         }
@@ -179,7 +188,9 @@ actor FileTransferService {
             throw SupportFileTransferError.invalidDownloadURL
         }
         logger.debug("使用附件直链下载，file_id=\(file.id)", module: .cache)
-        let (data, _) = try await URLSession.shared.data(from: downloadURL)
+        let (data, response) = try await ResourceDownloadSession.shared.data(from: downloadURL)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
+        guard await cacheManager.accountContext() == cacheNamespace else { throw StorageFailure.accountChanged }
 
         if let expectedMD5 = file.fileMD5 {
             let actualMD5 = Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
@@ -195,7 +206,9 @@ actor FileTransferService {
         let localURL = try await cacheManager.save(
             data: data,
             fileUUID: file.fileUUID,
-            fileName: file.originalName
+            fileName: file.originalName,
+            namespace: cacheNamespace,
+            automaticallyEvictable: true
         )
         logger.info("文件下载并缓存完成，file_id=\(file.id)", module: .cache)
         return localURL

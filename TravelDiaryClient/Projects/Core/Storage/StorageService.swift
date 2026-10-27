@@ -33,7 +33,7 @@ nonisolated enum StorageCategory: String, Codable, CaseIterable, Identifiable, S
         switch self {
         case .diaries: "原图、页面、草稿、历史和最近删除均保留。清理预览不会删除作品。"
         case .downloads: "主动下载不参加安全清理。移除模板下载不影响已完整导入的手帐；再次下载需要联网。模型与未知归属素材暂只统计。"
-        case .previews: "可清理项仅包括当前账号已登记的手帐预览和模板目录缓存。重新打开会生成预览或重新联网加载。"
+        case .previews: "统一管理模板、贴纸、附件和手帐的可重建缓存。达到容量上限后移除最久未使用的内容；主动下载资源单独管理。"
         case .exports: "只管理带任务记录且已完成的本地导出副本。系统相册和“文件”中的副本不受影响。"
         case .camera: "未保存媒体可能是唯一副本，当前保守保留。请在相机内完成保存或放弃编辑。"
         case .printOrders: "上传断点和生产文件受保护。请在订单中继续处理；清理缓存不取消订单。"
@@ -79,6 +79,7 @@ nonisolated struct StorageCleanupResult: Codable, Sendable {
 /// Unregistered resources are counted but never treated as deletion candidates.
 actor StorageService {
     let paths: StoragePaths
+    private let cache: ResourceCache
     private let activity: StorageActivity
     private var owner: String?
     private var generation = UUID()
@@ -92,7 +93,10 @@ actor StorageService {
         let workspace: URL?
     }
 
-    init(paths: StoragePaths = .system, activity: StorageActivity = .shared) { self.paths = paths; self.activity = activity }
+    init(paths: StoragePaths = .system, activity: StorageActivity = .shared, cache: ResourceCache? = nil) {
+        self.paths = paths; self.activity = activity
+        self.cache = cache ?? (paths.cacheRoot == StoragePaths.system.cacheRoot ? .shared : ResourceCache(paths: paths, activity: activity))
+    }
     func activate(owner value: String?) {
         guard value != owner else { return }
         owner = value; generation = UUID(); latestID = nil; files = [:]
@@ -109,6 +113,7 @@ actor StorageService {
         let fm = FileManager.default
         let privatePrint = paths.printOrders(expected)
         let privateCache = paths.cacheAccount(expected)
+        let indexed = Dictionary(uniqueKeysWithValues: cache.entries().map { ($0.url.path, $0) })
         var fileIndex = 0
         // The catalog covers disk data; scope is decided before publishing any item metadata.
         for root in [paths.support, paths.caches, paths.temporary] {
@@ -134,7 +139,11 @@ actor StorageService {
                 var removable = false, automatic = false, reason = "资料受保护或尚未确认用途", title = ""
                 var workspace: URL?
                 let relative = String(url.path.dropFirst(root.path.count + 1))
-                if StoragePaths.contains(url, in: paths.accounts), !StoragePaths.contains(url, in: paths.account(expected)) {
+                if let entry = indexed[url.path] {
+                    category = entry.scope == "shared" || entry.scope == StoragePaths.scopeKey(expected) ? .previews : .otherAccounts
+                    removable = category == .previews; automatic = removable
+                    title = entry.category == "attachments" ? "附件缓存" : "浏览与预览缓存"
+                } else if StoragePaths.contains(url, in: paths.accounts), !StoragePaths.contains(url, in: paths.account(expected)) {
                     category = .otherAccounts
                 } else if StoragePaths.contains(url, in: paths.cacheAccounts), !StoragePaths.contains(url, in: privateCache) {
                     category = .otherAccounts
@@ -200,14 +209,7 @@ actor StorageService {
     }
 
     private func canRebuildPreview(_ url: URL, owner: String) -> Bool {
-        let relative = String(url.path.dropFirst(paths.previews(owner).path.count + 1)).split(separator: "/").map(String.init)
-        guard relative.count == 4, let bookID = UUID(uuidString: relative[0]), let pageID = UUID(uuidString: relative[1]),
-              UUID(uuidString: relative[2]) != nil else { return false }
-        let root = paths.books(owner).appendingPathComponent(bookID.uuidString)
-        guard let data = try? Data(contentsOf: root.appendingPathComponent("book.json")),
-              let book = try? JSONDecoder().decode(DiaryBook.self, from: data), book.id == bookID,
-              book.pages.contains(where: { $0.id == pageID }) || book.trashedPages.contains(where: { $0.id == pageID }) else { return false }
-        return completeManifest(root: root, pageID: pageID, revision: relative[2])
+        LegacyCacheMigration.canRebuildPreview(url, scope: StoragePaths.scopeKey(owner), paths: paths)
     }
 
     private func completeManifest(root: URL, pageID: UUID, revision: String) -> Bool {
@@ -238,22 +240,29 @@ actor StorageService {
     }
     func savePolicy(_ value: StoragePolicy, owner expected: String) throws {
         try validate(expected)
-        guard [500_000_000, 1_000_000_000, 2_000_000_000].contains(value.previewLimit) else { throw StorageFailure.stalePlan }
+        guard StoragePolicy.cacheCapacities.contains(value.previewLimit) else { throw StorageFailure.stalePlan }
         try FileManager.default.createDirectory(at: paths.control, withIntermediateDirectories: true)
         try JSONEncoder().encode(value).write(to: paths.control.appendingPathComponent("policy.json"), options: .atomic)
+        cache.setCapacity(value.previewLimit)
     }
     /// Runs only when the storage page refreshes and the user has explicitly enabled the policy.
     func maintain(snapshot: StorageSnapshot) async throws -> StorageCleanupResult? {
         try validate(snapshot.owner, generation: snapshot.generation)
+        let before = cache.entries()
+        cache.maintain()
+        let remaining = Set(cache.entries().map(\.id))
+        let evicted = before.filter { !remaining.contains($0.id) }
+        var result = StorageCleanupResult(removed: evicted.count, bytes: evicted.reduce(0) { $0 + $1.bytes })
         let settings = policy()
-        guard settings.automaticallyManageSafeFiles else { return nil }
-        var ids = Set(snapshot.items.filter { $0.automatic && $0.category == .exports }.map(\.id))
-        var remaining = snapshot.totals[.previews, default: 0]
-        for item in snapshot.items.filter({ $0.automatic && $0.category == .previews }).sorted(by: { $0.modified < $1.modified }) where remaining > settings.previewLimit {
-            ids.insert(item.id); remaining -= item.bytes
+        if settings.automaticallyManageSafeFiles {
+            let ids = Set(snapshot.items.filter { $0.automatic && $0.category == .exports }.map(\.id))
+            if !ids.isEmpty {
+                let exports = try await clean(snapshot: snapshot, ids: ids)
+                result.removed += exports.removed; result.bytes += exports.bytes
+                result.skipped += exports.skipped; result.failed += exports.failed; result.stopped = exports.stopped
+            }
         }
-        guard !ids.isEmpty else { return nil }
-        return try await clean(snapshot: snapshot, ids: ids)
+        return result.removed + result.failed + result.skipped > 0 ? result : nil
     }
 
     func checkOwner(_ expected: String) throws { try validate(expected) }
@@ -307,8 +316,11 @@ actor StorageService {
             if Task.isCancelled { result.stopped = true; break }
             try validate(snapshot.owner, generation: snapshot.generation)
             do {
-                try activity.exclusively(candidate.url) {
-                    if candidate.item.category == .previews, candidate.url.pathExtension == "png", !canRebuildPreview(candidate.url, owner: snapshot.owner) { throw StorageFailure.stalePlan }
+                if let entry = cache.entry(at: candidate.url) {
+                    guard cache.remove(id: entry.id, expectedBytes: candidate.item.bytes, expectedModified: candidate.item.modified,
+                        expectedFileNumber: candidate.fileNumber) else { throw StorageFailure.stalePlan }
+                } else { try activity.exclusively(candidate.url) {
+                    if StoragePaths.contains(candidate.url, in: paths.previews(snapshot.owner)), candidate.url.pathExtension == "png", !canRebuildPreview(candidate.url, owner: snapshot.owner) { throw StorageFailure.stalePlan }
                     if let workspace = candidate.workspace {
                         let record = try JSONDecoder().decode(StorageWorkspace.self, from: Data(contentsOf: workspace.appendingPathComponent(StorageWorkspace.manifestName)))
                         guard record.owner == snapshot.owner, record.completedAt != nil,
@@ -321,7 +333,7 @@ actor StorageService {
                           attr[.modificationDate] as? Date == candidate.item.modified,
                           (attr[.systemFileNumber] as? NSNumber)?.uint64Value == candidate.fileNumber else { throw StorageFailure.stalePlan }
                     try FileManager.default.removeItem(at: candidate.url)
-                }
+                } }
                 result.removed += 1; result.bytes += candidate.item.bytes
             } catch StorageFailure.inUse { result.skipped += 1
             } catch StorageFailure.stalePlan { result.skipped += 1

@@ -263,8 +263,13 @@ final class SupportNetworkEngine {
 
         // 条件请求：在 transport 前附加 If-None-Match。
         let cacheKey: String? = request.strategy.allowETag ? etagInterceptor.cacheKey(for: urlRequest) : nil
+        var conditionalBody: Data?
         if let cacheKey, request.strategy.allowETag {
-            urlRequest = etagInterceptor.applyIfNoneMatch(to: urlRequest, cacheKey: cacheKey, request: request)
+            // Keep the matching body alive for this request even if the global LRU evicts it.
+            conditionalBody = etagInterceptor.store.cachedBody(forKey: cacheKey)
+            if conditionalBody != nil {
+                urlRequest = etagInterceptor.applyIfNoneMatch(to: urlRequest, cacheKey: cacheKey, request: request)
+            } else { urlRequest.setValue(nil, forHTTPHeaderField: "If-None-Match") }
         }
 
         let transportResponse = try await transport.send(urlRequest)
@@ -273,7 +278,8 @@ final class SupportNetworkEngine {
             return etagInterceptor.intercept(
                 transportResponse: transportResponse,
                 cacheKey: cacheKey,
-                request: request
+                request: request,
+                conditionalBody: conditionalBody
             )
         }
 

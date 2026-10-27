@@ -574,6 +574,7 @@ extension DiaryDocumentStore {
     /// Moving a whole book into trash preserves its complete editable contents.
     nonisolated func trashBook(_ id: UUID) async throws {
         try await run(protect: false) {
+            try self.recoverImportStatistics()
             let directory = self.libraryRoot.appendingPathComponent(id.uuidString, isDirectory: true)
             guard FileManager.default.fileExists(atPath: directory.path) else { return }
             try StorageActivity.shared.exclusively(directory) {
@@ -622,6 +623,7 @@ extension DiaryDocumentStore {
     }
     nonisolated func permanentlyDeleteBook(_ id: UUID) async throws {
         try await run(protect: false) {
+            try self.recoverImportStatistics()
             let source = self.trashRoot.appendingPathComponent(id.uuidString, isDirectory: true)
             guard FileManager.default.fileExists(atPath: source.path) else { return }
             guard StoragePaths.contains(source.resolvingSymlinksInPath(), in: self.trashRoot) else { throw StorageFailure.unsafePath }
@@ -816,7 +818,9 @@ extension DiaryDocumentStore {
             let url = self.previewURL(page, large: large)
             let lease = StorageActivity.shared.acquire(url)
             defer { withExtendedLifetime(lease) {} }
-            return try? Data(contentsOf: url)
+            let data = try? Data(contentsOf: url)
+            if data != nil { ResourceCache.shared.register(url, for: .account(self.ownerID, category: "diary-previews", identity: url.path)) }
+            return data
         }
     }
     nonisolated func cachePreview(_ data: Data, page: DiaryPageEntry, large: Bool) async throws {
@@ -826,6 +830,7 @@ extension DiaryDocumentStore {
             defer { withExtendedLifetime(lease) {} }
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
+            ResourceCache.shared.register(url, for: .account(self.ownerID, category: "diary-previews", identity: url.path))
         }
     }
     nonisolated var previewScope: String { root.path }
@@ -899,7 +904,7 @@ extension DiaryDocumentStore {
     /// 完整准备页面后一次发布目录。新本以目录移动发布，旧本以 book.json 原子写发布。
     /// operationID 由一次用户意图产生，错误重试沿用；已发布操作直接返回原结果。
     func importPreset(_ package: DiaryPresetPackage, pageIDs: [String], title: String,
-                      operationID: UUID, replacementPhotos: [URL] = [], replacementFill: DiaryPhotoSlot.Fill = .cover, hiddenCategories: Set<DiaryLayerSemanticKind> = [], afterPageID: UUID? = nil, expectedRevision: UUID? = nil,
+                      operationID: UUID, statistics: PresetImportStatisticsContext? = nil, replacementPhotos: [URL] = [], replacementFill: DiaryPhotoSlot.Fill = .cover, hiddenCategories: Set<DiaryLayerSemanticKind> = [], afterPageID: UUID? = nil, expectedRevision: UUID? = nil,
                       progress: @escaping @Sendable (String) -> Void = { _ in },
                       cancellation: DiaryPresetCancellation? = nil) async throws -> DiaryBook {
         let preparationLease = StorageActivity.shared.acquire(package.root)
@@ -917,6 +922,7 @@ extension DiaryDocumentStore {
         return try await run {
             let packageLease = StorageActivity.shared.acquire(package.root)
             defer { withExtendedLifetime(packageLease) {} }
+            try self.recoverImportStatistics()
             let destinationID = self.bookID ?? operationID
             if let existing = try? self.readBook(destinationID), existing.presetImports?[operationID.uuidString] != nil { return existing }
             progress("正在校验预设资源…")
@@ -1043,6 +1049,18 @@ extension DiaryDocumentStore {
             }
             if book.presetImports == nil { book.presetImports = [:] }
             book.presetImports?[operationID.uuidString] = entries.map(\.id)
+            if let statistics {
+                guard UUID(uuidString: statistics.templateID) != nil,
+                      statistics.templateID == package.id, statistics.version == package.manifest.packageVersion else {
+                    throw DiaryEditorError.invalidDocument.logged()
+                }
+                journal.statistics = PresetImportEvent(operation_id: operationID, template_id: statistics.templateID,
+                    version: statistics.version, mode: statistics.wholeBook ? "book" : "selection",
+                    target_book_id: destinationID, completed_at: ISO8601DateFormatter().string(from: Date()),
+                    pages: statistics.wholeBook ? nil : entries.map {
+                        PresetImportEvent.Page(source_page_id: $0.presetSource!.pageID, target_page_id: $0.id)
+                    })
+            }
             journal.pageIDs = entries.map(\.id); journal.assetIDs = Array(copied)
             journal.ownedAssetIDs = copied.filter { id in
                 !FileManager.default.fileExists(atPath: self.libraryRoot.appendingPathComponent("\(destinationID)/assets/\(id).image").path)
@@ -1053,7 +1071,7 @@ extension DiaryDocumentStore {
             if isNew {
                 let prepared = try target.publish(book)
                 try FileManager.default.moveItem(at: target.root, to: self.libraryRoot.appendingPathComponent(destinationID.uuidString))
-                try? FileManager.default.removeItem(at: journalURL)
+                self.finishImportStatistics(journal, at: journalURL)
                 return prepared
             }
             // 模板资源和页使用新 UUID；用户照片按内容复用稳定 ID。
@@ -1078,7 +1096,7 @@ extension DiaryDocumentStore {
                     }
                 }
                 let result = try self.publish(book)
-                try? FileManager.default.removeItem(at: journalURL)
+                self.finishImportStatistics(journal, at: journalURL)
                 return result
             } catch {
                 for item in moved { try? FileManager.default.removeItem(at: item) }
@@ -1094,6 +1112,7 @@ private nonisolated struct PresetImportJournal: Codable {
     var pageIDs: [UUID]
     var assetIDs: [UUID]
     var ownedAssetIDs: [UUID]? = nil
+    var statistics: PresetImportEvent? = nil
 }
 
 extension DiaryDocumentStore {
@@ -1107,5 +1126,73 @@ extension DiaryDocumentStore {
             try FileManager.default.copyItem(at: self.root, to: target.root)
         }
         return target
+    }
+}
+
+
+extension DiaryDocumentStore {
+    private nonisolated var importStatisticsRoot: URL { storagePaths.business("PresetImportStatistics", owner: ownerID) }
+    private nonisolated func statisticsURL(_ id: UUID) -> URL { importStatisticsRoot.appendingPathComponent(id.uuidString + ".json") }
+
+    private nonisolated func enqueueImportStatistics(_ event: PresetImportEvent) throws {
+        let url = statisticsURL(event.operation_id)
+        if FileManager.default.fileExists(atPath: url.path) { return }
+        try FileManager.default.createDirectory(at: importStatisticsRoot, withIntermediateDirectories: true)
+        try JSONEncoder().encode(PresetImportOutboxRecord(event: event)).write(to: url, options: .atomic)
+    }
+
+    /// A failed outbox write must not turn a committed import into a UI failure or rollback.
+    /// Keep its pre-commit journal so startup/deletion recovery can retry the handoff.
+    private nonisolated func finishImportStatistics(_ journal: PresetImportJournal, at url: URL) {
+        do {
+            if let event = journal.statistics { try enqueueImportStatistics(event) }
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            SupportLogger.log(level: .error, module: .diaryEditor, message: "preset_statistics_handoff_pending")
+        }
+    }
+
+    private nonisolated func recoverImportStatistics() throws {
+        guard FileManager.default.fileExists(atPath: libraryRoot.path) else { return }
+        for url in try FileManager.default.contentsOfDirectory(at: libraryRoot, includingPropertiesForKeys: nil)
+            where url.lastPathComponent.hasPrefix(".import-") && url.pathExtension == "json" {
+            guard let bytes = try? Data(contentsOf: url),
+                  let journal = try? JSONDecoder().decode(PresetImportJournal.self, from: bytes),
+                  let event = journal.statistics else { continue }
+            // Commit evidence survives page deletion because presetImports is retained in book.json.
+            var committed = false
+            for base in [libraryRoot, trashRoot] {
+                let bookURL = base.appendingPathComponent(journal.destinationID.uuidString).appendingPathComponent("book.json")
+                if let bytes = try? Data(contentsOf: bookURL), let book = try? JSONDecoder().decode(DiaryBook.self, from: bytes),
+                   book.presetImports?[event.operation_id.uuidString] != nil { committed = true; break }
+            }
+            guard committed else { continue } // Prepared/failed imports must never be reported.
+            try enqueueImportStatistics(event)
+            try FileManager.default.removeItem(at: url)
+        }
+    }
+
+    nonisolated func pendingImportStatistics() async throws -> [PresetImportOutboxRecord] {
+        try await run {
+            try self.recoverImportStatistics()
+            guard FileManager.default.fileExists(atPath: self.importStatisticsRoot.path) else { return [] }
+            return try FileManager.default.contentsOfDirectory(at: self.importStatisticsRoot, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "json" }
+                .map { try JSONDecoder().decode(PresetImportOutboxRecord.self, from: Data(contentsOf: $0)) }
+                .filter { !$0.acknowledged }
+        }
+    }
+    nonisolated func saveImportStatisticsAttempt(_ record: PresetImportOutboxRecord) async throws {
+        try await run { try JSONEncoder().encode(record).write(to: self.statisticsURL(record.event.operation_id), options: .atomic) }
+    }
+    nonisolated func acknowledgeImportStatistics(_ id: UUID) async throws {
+        try await run {
+            // Retain an acknowledgement tombstone, including if a previous journal removal failed.
+            let url = self.statisticsURL(id)
+            guard FileManager.default.fileExists(atPath: url.path) else { return }
+            var record = try JSONDecoder().decode(PresetImportOutboxRecord.self, from: Data(contentsOf: url))
+            record.acknowledged = true
+            try JSONEncoder().encode(record).write(to: url, options: .atomic)
+        }
     }
 }

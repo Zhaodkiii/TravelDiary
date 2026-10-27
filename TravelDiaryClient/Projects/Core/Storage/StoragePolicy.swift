@@ -1,6 +1,7 @@
 import Foundation
 
 nonisolated struct StoragePolicy: Codable, Equatable, Sendable {
+    static let cacheCapacities: [Int64] = [500_000_000, 1_000_000_000, 2_000_000_000, 5_000_000_000]
     var automaticallyManageSafeFiles = false
     var previewLimit: Int64 = 1_000_000_000
 }

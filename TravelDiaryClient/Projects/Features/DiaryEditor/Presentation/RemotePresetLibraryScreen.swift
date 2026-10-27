@@ -87,6 +87,9 @@ struct RemotePresetReaderDestination: View {
         }.task(id: retry) {
             do {
                 error = nil
+                if let cached = await PresetPreviewRepository.shared.cached(book, ownerID: ownerID) {
+                    browse = cached; pages = cached.pages
+                }
                 repeat {
                     let value = try await PresetDownloadManager.shared.browse(book, ownerID: ownerID)
                     try Task.checkCancellation()
@@ -205,18 +208,15 @@ struct RemotePresetDetailScreen: View {
             }
     }
     private func remoteImage(_ raw: String, size: CGSize) -> some View {
-        AsyncImage(url: URL(string: raw)) { phase in
-            switch phase {
-            case .success(let image): image.resizable().scaledToFit()
-            case .failure: Image(systemName: "photo.badge.exclamationmark").frame(maxWidth: .infinity)
-            default: Color.gray.opacity(0.1).overlay { ProgressView() }
-            }
-        }.aspectRatio(size.width / size.height, contentMode: .fit)
+        CachedPreviewImage(request: PreviewImagePipeline.shared.request(url: URL(string: raw), maxPixelSize: 1800)).aspectRatio(size.width / size.height, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 10))
     }
     private func load() async {
         error = nil
         do {
+            if let cached = await PresetPreviewRepository.shared.cached(book, ownerID: ownerID) {
+                browse = cached; pages = cached.pages
+            }
             repeat {
                 let value = try await downloads.browse(book, ownerID: ownerID)
                 try Task.checkCancellation()
@@ -234,13 +234,7 @@ struct RemotePresetLoadingPreview: View {
     let size: CGSize
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            AsyncImage(url: URL(string: page.thumbnail_url)) { phase in
-                switch phase {
-                case .success(let image): image.resizable().scaledToFit()
-                case .failure: Color.gray.opacity(0.1).overlay { Image(systemName: "photo") }
-                default: Color.gray.opacity(0.1).overlay { ProgressView() }
-                }
-            }.aspectRatio(size.width / max(1, size.height), contentMode: .fit)
+            CachedPreviewImage(request: PreviewImagePipeline.shared.request(url: URL(string: page.thumbnail_url))).aspectRatio(size.width / max(1, size.height), contentMode: .fit)
             Text(page.title).font(.headline)
         }
     }

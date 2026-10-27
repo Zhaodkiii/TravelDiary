@@ -335,6 +335,88 @@ struct DiaryPresetImportFlowTests {
         return file
     }
 
+    @Test func importStatisticsSeparateBookAndPageAndSurviveDeletion() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let package = try statisticsFixture(in: base)
+        let owner = "statistics-owner"
+        let store = DiaryDocumentStore(ownerID: owner, baseDirectory: base)
+        let operation = UUID()
+        let book = try await store.importPreset(package, pageIDs: package.manifest.pages.map(\.id), title: "整本",
+            operationID: operation, statistics: .init(templateID: package.id, version: 1, wholeBook: true))
+        _ = try await store.importPreset(package, pageIDs: package.manifest.pages.map(\.id), title: "整本",
+            operationID: operation, statistics: .init(templateID: package.id, version: 1, wholeBook: true))
+        var records = try await store.pendingImportStatistics()
+        #expect(records.count == 1)
+        let event = try #require(records.first?.event)
+        #expect(event.mode == "book" && event.pages == nil)
+        let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(event)) as? [String: Any])
+        #expect(json["pages"] == nil)
+        let pageOperation = UUID()
+        _ = try await DiaryDocumentStore(ownerID: owner, baseDirectory: base, bookID: book.id)
+            .importPreset(package, pageIDs: ["page-1"], title: "单页", operationID: pageOperation,
+                          statistics: .init(templateID: package.id, version: 1, wholeBook: false))
+        records = try await store.pendingImportStatistics()
+        #expect(records.count == 2)
+        #expect(records.first(where: { $0.event.mode == "selection" })?.event.pages?.count == 1)
+        try await store.trashBook(book.id)
+        try await store.permanentlyDeleteBook(book.id)
+        #expect(try await store.pendingImportStatistics().count == 2)
+        #expect(try await DiaryDocumentStore(ownerID: "other", baseDirectory: base).pendingImportStatistics().isEmpty)
+        try await store.acknowledgeImportStatistics(operation)
+        #expect(try await store.pendingImportStatistics().count == 1)
+    }
+
+    @Test func importStatisticsRecoverCommitBeforeOutboxAndIgnoreUncommitted() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let package = try statisticsFixture(in: base)
+        let owner = "statistics-recovery", operation = UUID()
+        let store = DiaryDocumentStore(ownerID: owner, baseDirectory: base)
+        let book = try await store.importPreset(package, pageIDs: ["page-1"], title: "恢复", operationID: operation,
+            statistics: .init(templateID: package.id, version: 1, wholeBook: false))
+        let record = try #require(try await store.pendingImportStatistics().first)
+        let paths = StoragePaths(support: base, caches: base.appendingPathComponent("Caches"), temporary: base.appendingPathComponent("Temporary"))
+        let outbox = paths.business("PresetImportStatistics", owner: owner).appendingPathComponent(operation.uuidString + ".json")
+        let journalURL = paths.books(owner).appendingPathComponent(".import-\(operation).json")
+        let eventJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(record.event))
+        let journal: [String: Any] = ["destinationID": book.id.uuidString, "stage": "publishing", "pageIDs": [], "assetIDs": [], "statistics": eventJSON]
+        let bytes = try JSONSerialization.data(withJSONObject: journal)
+        try bytes.write(to: journalURL)
+        try FileManager.default.removeItem(at: outbox)
+        #expect(try await store.pendingImportStatistics().first?.event == record.event)
+        #expect(!FileManager.default.fileExists(atPath: journalURL.path))
+        try await store.acknowledgeImportStatistics(operation)
+        // Even a stale journal cannot resurrect an acknowledged event.
+        try bytes.write(to: journalURL)
+        #expect(try await store.pendingImportStatistics().isEmpty)
+        var unpublished = journal
+        unpublished["destinationID"] = UUID().uuidString
+        try JSONSerialization.data(withJSONObject: unpublished).write(to: journalURL)
+        #expect(try await store.pendingImportStatistics().isEmpty)
+    }
+
+    @Test func cancelledImportDoesNotGenerateStatistics() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let package = try statisticsFixture(in: base)
+        let store = DiaryDocumentStore(ownerID: "cancel-statistics", baseDirectory: base)
+        let cancellation = DiaryPresetCancellation(); cancellation.cancel()
+        await #expect(throws: CancellationError.self) {
+            try await store.importPreset(package, pageIDs: ["page-1"], title: "取消", operationID: UUID(),
+                statistics: .init(templateID: package.id, version: 1, wholeBook: true), cancellation: cancellation)
+        }
+        #expect(try await store.pendingImportStatistics().isEmpty)
+    }
+
+    private func statisticsFixture(in base: URL) throws -> DiaryPresetPackage {
+        let local = try fixture(in: base)
+        var json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: local.root.appendingPathComponent("package.json"))) as? [String: Any])
+        json["templateBookID"] = UUID().uuidString
+        let manifest = try JSONDecoder().decode(PresetManifest.self, from: JSONSerialization.data(withJSONObject: json))
+        return DiaryPresetPackage(root: local.root, manifest: manifest)
+    }
+
     private func fixture(in base: URL, empty: Bool = false) throws -> DiaryPresetPackage {
         let root = base.appendingPathComponent("fixture.diarypreset")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

@@ -54,17 +54,23 @@ struct FileETagStore: ETagStore {
     }
 
     func record(forKey key: String) -> ETagCacheRecord? {
+        let unified = ResourceETagCache(baseDirectory: baseDirectory)
+        if unified.enabled { return unified.read(key)?.record }
         let url = baseDirectory.appendingPathComponent("\(key).meta.json", isDirectory: false)
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder.default.decode(ETagCacheRecord.self, from: data)
     }
 
     func cachedBody(forKey key: String) -> Data? {
+        let unified = ResourceETagCache(baseDirectory: baseDirectory)
+        if unified.enabled { return unified.read(key)?.body }
         let url = baseDirectory.appendingPathComponent("\(key).body", isDirectory: false)
         return try? Data(contentsOf: url)
     }
 
     func store(record: ETagCacheRecord, body: Data, forKey key: String) throws {
+        let unified = ResourceETagCache(baseDirectory: baseDirectory)
+        if unified.enabled { try unified.store(record: record, body: body, identity: key); return }
         if !fileManager.fileExists(atPath: baseDirectory.path) {
             try fileManager.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         }
@@ -78,6 +84,7 @@ struct FileETagStore: ETagStore {
     }
 
     func removeCache(forKey key: String) {
+        ResourceETagCache(baseDirectory: baseDirectory).remove(key)
         try? fileManager.removeItem(at: baseDirectory.appendingPathComponent("\(key).meta.json", isDirectory: false))
         try? fileManager.removeItem(at: baseDirectory.appendingPathComponent("\(key).body", isDirectory: false))
     }
@@ -143,12 +150,13 @@ struct ETagHTTPInterceptor: Sendable {
     func intercept(
         transportResponse: SupportTransportResponse,
         cacheKey: String,
-        request: SupportNetworkRequest
+        request: SupportNetworkRequest,
+        conditionalBody: Data? = nil
     ) -> SupportNetworkResponse {
         let httpResponse = transportResponse.httpResponse
 
         if httpResponse.statusCode == 304 {
-            if let cached = store.cachedBody(forKey: cacheKey) {
+            if let cached = conditionalBody ?? store.cachedBody(forKey: cacheKey) {
                 let presentation = JSONPayloadFormatting.prettyUTF8StringForLog(from: cached)
                 logger.verbose(
                     SupportNetworkingStrings.ETag.merged304FullPayload(

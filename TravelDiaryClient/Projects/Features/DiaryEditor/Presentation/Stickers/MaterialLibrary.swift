@@ -117,19 +117,23 @@ final class MaterialCatalogRepository: ObservableObject {
         let key = SHA256.hash(data: Data((owner + "|" + path).utf8)).map { String(format: "%02x", $0) }.joined()
         let root = StoragePaths.system.cacheAccount(capturedOwner).appendingPathComponent("MaterialCatalog")
         let cache = root.appendingPathComponent(key)
+        let cacheKey = ResourceCacheKey.account(capturedOwner, category: "material-catalog", identity: path)
+        let cacheGeneration = ResourceCache.shared.generation(for: cacheKey)
         do {
             let response = try await engine.sendRaw(Self.networkRequest(path, body: body, method: method))
             guard owner == capturedOwner else { throw CancellationError() }
             let result = try JSONDecoder().decode(T.self, from: response.data)
             if cacheable {
-                try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-                try? response.data.write(to: cache, options: .atomic)
+                if ResourceCache.shared.store(response.data, for: cacheKey, expectedGeneration: cacheGeneration) != nil {
+                    try? FileManager.default.removeItem(at: cache)
+                }
             }
             isOffline = false
             if !cacheable { changeID = UUID() }
             return result
         } catch let error as URLError where cacheable && [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotConnectToHost].contains(error.code) {
-            guard owner == capturedOwner, let data = try? Data(contentsOf: cache) else { throw error }
+            guard owner == capturedOwner, let data = ResourceCache.shared.data(for: cacheKey) ?? (try? Data(contentsOf: cache)) else { throw error }
+            if ResourceCache.shared.data(for: cacheKey) == nil, FileManager.default.fileExists(atPath: cache.path) { ResourceCache.shared.register(cache, for: cacheKey) }
             isOffline = true
             return try JSONDecoder().decode(T.self, from: data)
         }
@@ -556,8 +560,12 @@ struct MaterialLibraryBrowser: View {
 actor MaterialThumbnailCache {
     static let shared = MaterialThumbnailCache()
     private var generation = 0
+    private var pending: [String: Task<Data, Error>] = [:]
+    private func key(_ hash: String) -> ResourceCacheKey { ResourceCacheKey(scope: "shared", category: "material-thumbnails", identity: hash) }
     func clear() throws {
         generation += 1
+        for task in pending.values { task.cancel() }; pending.removeAll()
+        ResourceCache.shared.clear(category: "material-thumbnails")
         let root = StoragePaths.system.cache("MaterialThumbnails")
         if FileManager.default.fileExists(atPath:root.path) { try FileManager.default.removeItem(at:root) }
     }
@@ -565,28 +573,41 @@ actor MaterialThumbnailCache {
         guard item.thumbnail_sha256 == item.sha256, item.sha256.count == 64,
               item.sha256.allSatisfy({ $0.isHexDigit }) else { return nil }
         let path = StoragePaths.system.cache("MaterialThumbnails").appendingPathComponent(item.sha256)
-        guard let data = try? Data(contentsOf: path), data.count == item.byte_size,
+        guard let data = ResourceCache.shared.data(for: key(item.sha256)) ?? (try? Data(contentsOf: path)), data.count == item.byte_size,
               SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == item.sha256 else { return nil }
         return data
     }
     func load(_ item: CloudMaterial) async throws -> Data {
+        if let task = pending[item.thumbnail_sha256] { return try await task.value }
+        let task = Task { try await self.fetch(item) }
+        pending[item.thumbnail_sha256] = task
+        defer { pending[item.thumbnail_sha256] = nil }
+        return try await task.value
+    }
+    private func fetch(_ item: CloudMaterial) async throws -> Data {
         guard item.thumbnail_sha256.count == 64, item.thumbnail_sha256.allSatisfy({ $0.isHexDigit }) else { throw URLError(.badURL) }
         let root = StoragePaths.system.cache("MaterialThumbnails")
         let path = root.appendingPathComponent(item.thumbnail_sha256)
-        if let data = try? Data(contentsOf: path), SHA256.hash(data: data).map({String(format: "%02x", $0)}).joined() == item.thumbnail_sha256 { return data }
+        let cacheKey = key(item.thumbnail_sha256)
+        if let data = ResourceCache.shared.data(for: cacheKey), SHA256.hash(data: data).map({String(format: "%02x", $0)}).joined() == item.thumbnail_sha256 { return data }
+        if let data = try? Data(contentsOf: path), SHA256.hash(data: data).map({String(format: "%02x", $0)}).joined() == item.thumbnail_sha256 {
+            ResourceCache.shared.register(path, for: cacheKey)
+            return data
+        }
         guard let url = URL(string: item.thumbnail_url), url.scheme == "https", url.host?.hasSuffix(".aliyuncs.com") == true else { throw URLError(.badURL) }
         let started = generation
-        var (data, response) = try await URLSession.shared.data(from: url)
+        let cacheGeneration = ResourceCache.shared.generation(for: cacheKey)
+        var (data, response) = try await ResourceDownloadSession.shared.data(from: url)
         if (response as? HTTPURLResponse)?.statusCode == 403, let libraryID = item.library_id, let version = item.library_version {
             let refreshed = try await MaterialCatalogRepository.shared.refreshPreview(resourceID: item.thumbnail_sha256, libraryID: libraryID, version: version)
             guard let refreshedURL = URL(string: refreshed.url), refreshedURL.scheme == "https", refreshedURL.host?.hasSuffix(".aliyuncs.com") == true else { throw URLError(.badURL) }
-            (data, response) = try await URLSession.shared.data(from: refreshedURL)
+            (data, response) = try await ResourceDownloadSession.shared.data(from: refreshedURL)
         }
         guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 2_000_000,
               SHA256.hash(data: data).map({String(format: "%02x", $0)}).joined() == item.thumbnail_sha256 else { throw URLError(.badServerResponse) }
         if started == generation {
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            try data.write(to: path, options: .atomic)
+            try Task.checkCancellation()
+            ResourceCache.shared.store(data, for: cacheKey, expectedGeneration: cacheGeneration)
         }
         return data
     }
@@ -595,20 +616,25 @@ actor MaterialThumbnailCache {
 struct MaterialThumbnail: View {
     let item: CloudMaterial
     @State private var image: UIImage?
+    @State private var displayedID = ""
     @State private var failed = false
     var body: some View {
         Group {
-            if let image { Image(uiImage: image).resizable().scaledToFit() }
+            if displayedID == item.id + item.thumbnail_sha256, let image { Image(uiImage: image).resizable().scaledToFit() }
             else if failed { Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary) }
             else { ProgressView() }
         }.task(id: item.id + item.thumbnail_sha256) {
-            image=nil;failed=false
+            if displayedID != item.id + item.thumbnail_sha256 { image = nil; displayedID = item.id + item.thumbnail_sha256 }
+            failed=false
             if item.revision == 0, let local=DiaryStickerCatalog.items.first(where:{"local."+$0.id == item.id}) { image=local.image();return }
             if item.availability == "unavailable" { failed=true;return }
             do {
+                let request = PreviewImageRequest(key: ResourceCacheKey(scope: "shared", category: "material-thumbnails", identity: item.thumbnail_sha256), url: URL(string: item.thumbnail_url), maxPixelSize: 640)
+                if let cached = PreviewImagePipeline.shared.cached(request) { image = cached; return }
                 let data = try await MaterialThumbnailCache.shared.load(item)
+                let loaded = try await PreviewImagePipeline.shared.decoded(data, request: request)
                 try Task.checkCancellation()
-                image = UIImage(data: data)
+                image = loaded
             } catch { if !Task.isCancelled { failed = true } }
         }
     }

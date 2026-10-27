@@ -170,7 +170,7 @@ struct SupportMainCoordinatorView: View {
             customizations.routeID = nil; PushAdapter.shared.routeConsumed()
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await PushAdapter.shared.refreshRegistration(); await customizations.refreshUnread(owner: String(session.accountID)); await helpFeedback.refreshUnread(owner: String(session.accountID)) } }
+            if phase == .active { PresetImportStatisticsReporter.shared.wake(); Task { await PushAdapter.shared.refreshRegistration(); await customizations.refreshUnread(owner: String(session.accountID)); await helpFeedback.refreshUnread(owner: String(session.accountID)) } }
         }
         .sheet(isPresented: $showsDeviceAccountUpgradeSheet) {
             LoginView(viewModel: upgradeLoginViewModel, mode: .upgradeDeviceAccount)

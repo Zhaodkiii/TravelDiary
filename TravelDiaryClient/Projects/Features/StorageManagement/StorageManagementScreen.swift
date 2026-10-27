@@ -109,7 +109,7 @@ struct StorageManagementScreen: View {
                 } label: { Label("最近删除", systemImage: "trash") }
             }
             Section {
-                NavigationLink("自动清理与空间说明") { StoragePolicyScreen(owner: model.owner, service: model.service) }
+                NavigationLink("缓存容量与自动清理") { StoragePolicyScreen(owner: model.owner, service: model.service) }
             }
         }
         .navigationTitle("存储空间")
@@ -433,14 +433,19 @@ private struct StoragePolicyScreen: View {
     @State private var message: String?
     var body: some View {
         List {
-            Section("自动管理安全文件") {
-                Toggle("打开存储空间时自动整理", isOn: $policy.automaticallyManageSafeFiles)
-                Picker("预览缓存上限", selection: $policy.previewLimit) {
-                    Text("500 MB").tag(Int64(500_000_000))
-                    Text("1 GB").tag(Int64(1_000_000_000))
-                    Text("2 GB").tag(Int64(2_000_000_000))
+            Section("自动缓存") {
+                Picker("缓存容量上限", selection: $policy.previewLimit) {
+                    ForEach(StoragePolicy.cacheCapacities, id: \.self) { bytes in
+                        Text(storageBytes(bytes)).tag(bytes)
+                    }
                 }
-                Text("默认关闭。开启后，仅在存储页刷新时移除超过 7 天且源作品仍在的已完成导出副本，并按生成时间整理超限的可重建预览。使用中文件仍保留；受保护文件可导致总量暂时超限。")
+                Text("达到容量后自动移除最久未使用的缓存。再次查看时会重新获取。已下载资源、手帐和草稿会保留；使用中的缓存将在释放后整理。")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let message { Text(message).foregroundStyle(.orange) }
+            }
+            Section("导出副本整理") {
+                Toggle("打开存储空间时自动整理", isOn: $policy.automaticallyManageSafeFiles)
+                Text("开启后，在存储页刷新时移除超过 7 天且源作品仍在的已完成导出副本。缓存容量限制始终生效。")
                     .font(.caption).foregroundStyle(.secondary)
                 if let message { Text(message).foregroundStyle(.orange) }
             }
@@ -456,7 +461,7 @@ private struct StoragePolicyScreen: View {
                 Text("容量按文件字节数估算，1 GB = 1,000,000,000 字节。不含安装包、系统相册及已导出到其他位置的文件。压缩、克隆及系统回收会使设备实际可用空间变化与估算不同。")
                 Text("登录和 OSS 上传成功不代表手帐已具备云端备份。请保留原件，当前不提供仅留云端或云空间扩容。")
             }
-        }.navigationTitle("清理与空间说明")
+        }.navigationTitle("缓存与空间设置")
             .task { policy = await service.policy(); loaded = true }
             .onChange(of: policy) { _, value in
                 guard loaded else { return }

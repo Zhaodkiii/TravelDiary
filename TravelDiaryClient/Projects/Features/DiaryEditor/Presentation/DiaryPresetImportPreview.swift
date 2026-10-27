@@ -138,11 +138,7 @@ struct DiaryPresetImportPreview: View {
                     else if hiddenCategories.isEmpty, let package, let path = page.previewPath {
                         DiaryPresetImage(package: package, path: path, size: page.size)
                     } else if package == nil {
-                        AsyncImage(url: page.thumbnailURL) { phase in
-                            if let image = phase.image { image.resizable().scaledToFit() }
-                            else if phase.error != nil { Image(systemName: "photo.badge.exclamationmark") }
-                            else { ProgressView() }
-                        }
+                        CachedPreviewImage(request: PreviewImagePipeline.shared.request(url: page.thumbnailURL))
                     } else if imageIdentity == categoryIdentity, let image = images[page.id] {
                         Image(uiImage: image).resizable().scaledToFit()
                     } else if renderError != nil {

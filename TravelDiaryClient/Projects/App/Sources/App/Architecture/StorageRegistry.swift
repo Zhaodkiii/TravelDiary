@@ -90,8 +90,14 @@ struct StorageRegistry {
             Entry(id: "storage.resourceCatalog", backend: .fileSystem, scope: .accountScoped,
                   accountIsolated: true, owner: "StorageService", resetPolicy: "Invalidate scoped plans before session changes.", reset: { reason in
                 switch reason {
-                case .accountSwitch(_, let accountID): await storageService.activate(owner: String(accountID))
-                case .signOut: await storageService.activate(owner: nil)
+                case .accountSwitch(_, let accountID):
+                    PreviewImagePipeline.shared.activate(owner: String(accountID))
+                    PresetPreviewRepository.shared.reset()
+                    await storageService.activate(owner: String(accountID))
+                case .signOut:
+                    PreviewImagePipeline.shared.activate(owner: nil)
+                    PresetPreviewRepository.shared.reset()
+                    await storageService.activate(owner: nil)
                 }
             }),
             Entry(

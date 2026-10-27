@@ -5,25 +5,35 @@ import Foundation
 actor FileCacheManager {
     static let shared = FileCacheManager()
 
+    private let resourceCache: ResourceCache
     private let fileManager: FileManager
     private let logger: Logger
     private let baseDirectory: URL
     private var accountNamespace: String = "signed-out"
 
-    init(fileManager: FileManager = .default, logger: Logger = ConsoleLogger(), baseDirectory: URL? = nil) {
+    init(fileManager: FileManager = .default, logger: Logger = ConsoleLogger(), baseDirectory: URL? = nil, resourceCache: ResourceCache = .shared) {
+        self.resourceCache = resourceCache
         self.fileManager = fileManager
         self.logger = logger
 
         self.baseDirectory = baseDirectory ?? StoragePaths.system.fileCache
     }
 
-    func cachedFileURL(fileUUID: String, fileName: String) -> URL? {
+    func accountContext() -> String { accountNamespace }
+    func cachedFileURL(fileUUID: String, fileName: String, namespace: String? = nil) -> URL? {
         let normalizedUUID = fileUUID.lowercased()
-        let destination = fileURL(fileUUID: normalizedUUID, fileName: fileName)
+        let destination = fileURL(fileUUID: normalizedUUID, fileName: fileName, namespace: namespace)
         guard fileManager.fileExists(atPath: destination.path) else {
             return nil
         }
+        resourceCache.touch(url: destination)
         return destination
+    }
+
+    func markRebuildable(fileUUID: String, fileName: String, namespace: String) {
+        let url = fileURL(fileUUID: fileUUID.lowercased(), fileName: fileName, namespace: namespace)
+        let key = ResourceCacheKey(scope: namespace, category: "attachments", identity: fileUUID.lowercased() + ":" + fileName)
+        resourceCache.register(url, for: key)
     }
 
     func activateAccountContext(_ accountID: Int64) {
@@ -37,30 +47,24 @@ actor FileCacheManager {
     }
 
     @discardableResult
-    func save(data: Data, fileUUID: String, fileName: String) throws -> URL {
+    func save(data: Data, fileUUID: String, fileName: String, namespace: String? = nil, automaticallyEvictable: Bool = false) throws -> URL {
         let normalizedUUID = fileUUID.lowercased()
-        let directory = directoryURL(for: normalizedUUID)
+        let directory = directoryURL(for: normalizedUUID, namespace: namespace)
 
         if !fileManager.fileExists(atPath: directory.path) {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
 
-        let destination = fileURL(fileUUID: normalizedUUID, fileName: fileName)
-
-        if fileManager.fileExists(atPath: destination.path),
-           let attrs = try? fileManager.attributesOfItem(atPath: destination.path),
-           let size = attrs[.size] as? NSNumber,
-           size.intValue == data.count {
-            return destination
-        }
+        let destination = fileURL(fileUUID: normalizedUUID, fileName: fileName, namespace: namespace)
 
         try data.write(to: destination, options: [.atomic])
+        if automaticallyEvictable { markRebuildable(fileUUID: normalizedUUID, fileName: fileName, namespace: namespace ?? accountNamespace) }
         logger.debug("文件缓存写入成功，uuid=\(normalizedUUID)，name=\(fileName)", module: .cache)
         return destination
     }
 
-    func validateMD5(fileUUID: String, fileName: String, expectedMD5: String) -> Bool {
-        guard let url = cachedFileURL(fileUUID: fileUUID, fileName: fileName),
+    func validateMD5(fileUUID: String, fileName: String, expectedMD5: String, namespace: String? = nil) -> Bool {
+        guard let url = cachedFileURL(fileUUID: fileUUID, fileName: fileName, namespace: namespace),
               let data = try? Data(contentsOf: url) else {
             return false
         }
@@ -68,9 +72,10 @@ actor FileCacheManager {
         return digest.caseInsensitiveCompare(expectedMD5) == .orderedSame
     }
 
-    func remove(fileUUID: String) throws {
-        let directory = directoryURL(for: fileUUID.lowercased())
+    func remove(fileUUID: String, namespace: String? = nil) throws {
+        let directory = directoryURL(for: fileUUID.lowercased(), namespace: namespace)
         guard fileManager.fileExists(atPath: directory.path) else { return }
+        for entry in resourceCache.entries() where StoragePaths.contains(entry.url, in: directory) { resourceCache.forget(url: entry.url) }
         try fileManager.removeItem(at: directory)
         logger.info("已移除文件缓存目录，uuid=\(fileUUID)", module: .cache)
     }
@@ -83,6 +88,7 @@ actor FileCacheManager {
         guard namespace == "signed-out" || (namespace.count == 64 && namespace.allSatisfy({ $0.isHexDigit })) else { throw StorageFailure.unsafePath }
         let directory = baseDirectory.appendingPathComponent(namespace, isDirectory: true).appendingPathComponent("Attachments", isDirectory: true)
         guard fileManager.fileExists(atPath: directory.path) else { return }
+        for entry in resourceCache.entries() where StoragePaths.contains(entry.url, in: directory) { resourceCache.forget(url: entry.url) }
         try fileManager.removeItem(at: directory)
         logger.info("已清理当前账号的附件缓存", module: .cache)
     }
@@ -110,15 +116,15 @@ actor FileCacheManager {
         return (fileCount, totalBytes)
     }
 
-    private func directoryURL(for fileUUID: String) -> URL {
+    private func directoryURL(for fileUUID: String, namespace: String? = nil) -> URL {
         baseDirectory
-            .appendingPathComponent(accountNamespace, isDirectory: true)
+            .appendingPathComponent(namespace ?? accountNamespace, isDirectory: true)
             .appendingPathComponent("Attachments", isDirectory: true)
             .appendingPathComponent(StoragePaths.digest(fileUUID.lowercased()), isDirectory: true)
     }
 
-    private func fileURL(fileUUID: String, fileName: String) -> URL {
-        directoryURL(for: fileUUID).appendingPathComponent(sanitizedFileName(fileName), isDirectory: false)
+    private func fileURL(fileUUID: String, fileName: String, namespace: String? = nil) -> URL {
+        directoryURL(for: fileUUID, namespace: namespace).appendingPathComponent(sanitizedFileName(fileName), isDirectory: false)
     }
 
     private func sanitizedFileName(_ raw: String) -> String {

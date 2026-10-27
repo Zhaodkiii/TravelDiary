@@ -118,6 +118,7 @@ extension PresetDownloadManager {
         if entry.previews.first?["thumbnailPath"]?.url.hasPrefix("file:") == true { return entry }
         let data = try await request("templates/\(entry.template_id)/\(entry.version)/browse/")
         let browse = try JSONDecoder().decode(RemotePresetBrowse.self, from: data)
+        PresetPreviewRepository.shared.remember(browse, book: entry.book, ownerID: PreviewImagePipeline.shared.owner)
         let selected = entry.entity_type == "spread" ? entry.page_ids : [browse.cover_page_id]
         var result = entry
         result.previews = selected.map { id in
@@ -134,7 +135,9 @@ extension PresetDownloadManager {
         }
         if let cursor { items.append(URLQueryItem(name: "cursor", value: cursor)) }
         if let seriesID { items.append(URLQueryItem(name: "series", value: seriesID)) }
-        return try JSONDecoder().decode(PresetSearchResponse.self, from: await request("search/", queryItems: items))
+        let response = try JSONDecoder().decode(PresetSearchResponse.self, from: await request("search/", queryItems: items))
+        PresetPreviewRepository.shared.registerSearch(response.entries, ownerID: PreviewImagePipeline.shared.owner)
+        return response
     }
     func searchTaxonomy() async throws -> PresetTaxonomy {
         try JSONDecoder().decode(PresetTaxonomy.self, from: await request("taxonomy/"))

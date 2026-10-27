@@ -9,6 +9,7 @@ struct DiaryPresetSearchScreen: View {
     var fixedSeriesID: String? = nil
     var catalogLoader: @MainActor () async throws -> RemotePresetCatalog = { try await PresetDownloadManager.shared.catalog() }
     var showsSearchField = true
+    var onBookOpened: ((DiaryBook) -> Void)? = nil
     @AppStorage("preset.search.kind") private var kind = "book"
     @State private var entries: [PresetSearchEntry] = []
     @State private var total = 0
@@ -35,6 +36,13 @@ struct DiaryPresetSearchScreen: View {
         StoragePaths.system.cacheAccount(ownerID).appendingPathComponent("Catalog/taxonomy.json")
     }
     var body: some View {
+        if onBookOpened == nil {
+            searchBody.navigationDestination(item: Binding<UUID?>(get: { importedBook?.id }, set: { if $0 == nil { importedBook = nil } })) { bookID in
+                DiaryBookDestination(ownerID: ownerID, bookID: bookID).toolbar(.hidden, for: .tabBar)
+            }
+        } else { searchBody }
+    }
+    @ViewBuilder private var searchBody: some View {
         if showsSearchField {
             content.searchable(text: $searchText, prompt: kind == "spread" ? "搜索地点、景点或主题" : "搜索模板名称")
         } else {
@@ -102,25 +110,26 @@ struct DiaryPresetSearchScreen: View {
             RemotePresetImportDestination(ownerID: ownerID, book: entry.book, pageIDs: entry.page_ids,
                 wholeBook: false, targetBook: nil, afterPageID: nil, fixedTarget: false,
                 previewPages: entry.previewPages, previewSize: CGSize(width: 1, height: 1.4),
-                onImported: { importedBook = $0 }, unitID: entry.unit_id)
-        }
-        .navigationDestination(isPresented: Binding(get: { importedBook != nil }, set: { if !$0 { importedBook = nil } })) {
-            if let importedBook { DiaryBookDestination(ownerID: ownerID, bookID: importedBook.id).toolbar(.hidden, for: .tabBar) }
+                onImported: { openBook($0) }, unitID: entry.unit_id)
         }
         .task(id: queryKey) { await loadFirst() }
         .task(id: ownerID) {
             let owner = ownerID
-            taxonomy = (try? Data(contentsOf: taxonomyURL)).flatMap { try? JSONDecoder().decode(PresetTaxonomy.self, from: $0) }
+            let taxonomyKey = ResourceCacheKey.account(ownerID, category: "catalog", identity: "taxonomy")
+            taxonomy = (ResourceCache.shared.data(for: taxonomyKey) ?? (try? Data(contentsOf: taxonomyURL))).flatMap { try? JSONDecoder().decode(PresetTaxonomy.self, from: $0) }
+            if ResourceCache.shared.data(for: taxonomyKey) == nil, FileManager.default.fileExists(atPath: taxonomyURL.path) { ResourceCache.shared.register(taxonomyURL, for: taxonomyKey) }
             do {
                 let value = try await downloads.searchTaxonomy()
                 try Task.checkCancellation()
                 guard owner == ownerID else { return }
                 taxonomy = value
-                if let data = try? JSONEncoder().encode(value) { try? FileManager.default.createDirectory(at: taxonomyURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    try? data.write(to: taxonomyURL, options: .atomic) }
+                if let data = try? JSONEncoder().encode(value), ResourceCache.shared.store(data, for: taxonomyKey) != nil { try? FileManager.default.removeItem(at: taxonomyURL) }
             } catch { }
         }
         .refreshable { reload += 1 }
+    }
+    private func openBook(_ book: DiaryBook) {
+        if let onBookOpened { onBookOpened(book) } else { importedBook = book }
     }
     private func resultLink(_ entry: PresetSearchEntry) -> some View {
         Group {
@@ -135,7 +144,7 @@ struct DiaryPresetSearchScreen: View {
                 DiaryStablePresetDestination(item: PresetLibraryItem(id: entry.template_id,
                     local: downloads.completeCachedPackage(for: entry.book), remote: entry.book),
                     ownerID: ownerID, seriesTitle: entry.series, targetBook: nil, targetAfterPageID: nil, fixedTarget: false,
-                    onImported: { importedBook = $0 }).toolbar(.hidden, for: .tabBar)
+                    onImported: { openBook($0) }).toolbar(.hidden, for: .tabBar)
                 } label: { resultCard(entry) }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("template-search-result-\(entry.id)")
@@ -311,35 +320,9 @@ private struct PresetSearchImage: View {
     let url: String
     var refresh: (() async -> Void)? = nil
     var onImageSize: ((CGSize) -> Void)? = nil
-    @State private var image: UIImage?
-    @State private var failed = false
-    @State private var retry = 0
     var body: some View {
-        Group {
-            if let image { Image(uiImage: image).resizable().scaledToFit() }
-            else if failed { Button("重试预览") { Task { await refresh?(); retry += 1 } }.frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
-        }.task(id: "\(url)|\(retry)") {
-            image = nil; failed = false
-            do {
-                guard let location = URL(string: url) else { throw URLError(.badURL) }
-                let data: Data
-                if location.isFileURL { data = try await Task.detached { try Data(contentsOf: location) }.value }
-                else {
-                    let value = try await URLSession.shared.data(from: location)
-                    guard (value.1 as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-                    data = value.0
-                }
-                let loaded = try await Task.detached {
-                    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                          let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 2048] as CFDictionary) else { throw DiaryEditorError.invalidImage }
-                    return UIImage(cgImage: cg)
-                }.value
-                try Task.checkCancellation()
-                onImageSize?(loaded.size)
-                image = loaded
-            } catch is CancellationError { } catch { failed = true }
-        }
+        CachedPreviewImage(request: PreviewImagePipeline.shared.request(url: URL(string: url), maxPixelSize: 2048),
+                           onImageSize: onImageSize, onRetry: refresh)
     }
 }
 

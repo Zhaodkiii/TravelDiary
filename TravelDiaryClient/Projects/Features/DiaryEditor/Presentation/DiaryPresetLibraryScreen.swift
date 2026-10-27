@@ -46,6 +46,7 @@ struct DiaryPresetLibraryScreen: View {
     }
 
     var body: some View {
+        ZStack {
         if !singlePageOnly && fixedSeriesID == nil {
             VStack(spacing: 0) {
                 Picker("素材类型", selection: $catalogTab) { Text("模板").tag("模板"); Text("贴纸").tag("贴纸") }
@@ -56,6 +57,12 @@ struct DiaryPresetLibraryScreen: View {
                 }.tabViewStyle(.page(indexDisplayMode: .never))
             }
         } else { templateBody }
+        }
+        .background(DiaryLibraryStyle.background.ignoresSafeArea(edges: .bottom))
+        // TabView lazily creates its pages; destinations belong to this stable ancestor.
+        .navigationDestination(item: Binding<UUID?>(get: { recovered?.id }, set: { if $0 == nil { recovered = nil } })) { bookID in
+            DiaryBookDestination(ownerID: ownerID, bookID: bookID).toolbar(.hidden, for: .tabBar)
+        }
     }
 
     @ViewBuilder private var templateBody: some View {
@@ -73,7 +80,7 @@ struct DiaryPresetLibraryScreen: View {
             if isSearching && !singlePageOnly {
                 DiaryPresetSearchScreen(ownerID: ownerID, searchText: $search,
                     initialCatalog: remote ?? initialCatalog, fixedSeriesID: fixedSeriesID,
-                    catalogLoader: catalogLoader, showsSearchField: false)
+                    catalogLoader: catalogLoader, showsSearchField: false, onBookOpened: { recovered = $0 })
             } else {
                 libraryContent
             }
@@ -107,7 +114,7 @@ struct DiaryPresetLibraryScreen: View {
         .onChange(of: isSearching) { _, active in
             if !active { search = "" }
         }
-        .refreshable { await loadRemote() }
+        .refreshable { downloads.invalidateCatalog(); await loadRemote() }
         .sheet(isPresented: $showingFilters) { filterSheet }
         .sheet(item: $resuming) { intent in
             if let package = downloads.cachedPackage(bookID: intent.templateID, version: intent.version, pageIDs: intent.pageIDs) {
@@ -122,14 +129,12 @@ struct DiaryPresetLibraryScreen: View {
                 }
             }
         }
-        .navigationDestination(isPresented: Binding(get: { recovered != nil }, set: { if !$0 { recovered = nil } })) {
-            if let recovered { DiaryBookDestination(ownerID: ownerID, bookID: recovered.id).toolbar(.hidden, for: .tabBar) }
-        }
         .task(id: reload) {
             downloads.activate(owner: ownerID)
             pending = DiaryPresetImportIntent.read(owner: ownerID)
         }
         .task(id: reload) {
+            if reload > 0 { downloads.invalidateCatalog() }
             if remote == nil {
                 if let initialCatalog { remote = initialCatalog }
                 else { remote = await Task.detached { PresetLibraryCatalogCache.read(ownerID: ownerID) }.value }
@@ -261,22 +266,7 @@ struct DiaryPresetLibraryScreen: View {
 
 struct DiaryRemoteCover: View {
     let url: URL?
-    @State private var retry = 0
-    var body: some View {
-        AsyncImage(url: url) { phase in
-            switch phase {
-            case .success(let image): image.resizable().scaledToFit()
-            case .failure:
-                VStack(spacing: 8) {
-                    Image(systemName: "photo")
-                    Text("预览暂不可用").font(.caption)
-                    Button("重试预览") { retry += 1 }.frame(minHeight: 44)
-                }.foregroundStyle(DiaryLibraryStyle.secondary)
-            case .empty: ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            @unknown default: Image(systemName: "photo")
-            }
-        }.id("\(url?.absoluteString ?? "")-\(retry)")
-    }
+    var body: some View { CachedPreviewImage(request: PreviewImagePipeline.shared.request(url: url)) }
 }
 
 struct DiaryPresetCover: View {
@@ -315,34 +305,10 @@ struct DiaryPresetImage: View {
     let path: String
     let size: CGSize
     var cornerRadius: CGFloat = 10
-    @State private var image: UIImage?
-    @State private var failed = false
-    @State private var retry = 0
     var body: some View {
-        ZStack {
-            Color(uiColor: .secondarySystemGroupedBackground)
-            if let image { Image(uiImage: image).resizable().scaledToFit() }
-            else if failed { Button("重试预览") { retry += 1 } }
-            else { ProgressView() }
-        }.aspectRatio(size.width / size.height, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-            .task(id: "\(package.root.path)-\(path)-\(retry)") {
-                image = nil; failed = false
-                do {
-                    let loaded = try await Task.detached {
-                        let url = try package.url(path)
-                        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                                kCGImageSourceCreateThumbnailWithTransform: true,
-                                kCGImageSourceThumbnailMaxPixelSize: path.contains("thumb") ? 960 : 2048
-                              ] as CFDictionary) else { throw DiaryEditorError.invalidImage }
-                        return UIImage(cgImage: cg)
-                    }.value
-                    try Task.checkCancellation()
-                    image = loaded
-                } catch is CancellationError { }
-                catch { failed = true }
-            }
+        CachedPreviewImage(request: PreviewImagePipeline.shared.request(url: try? package.url(path), maxPixelSize: 1800))
+            .aspectRatio(size.width / max(1, size.height), contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
     }
 }
 private struct PresetSelection: Identifiable, Hashable { let id = UUID(); let pageIDs: [String]; var wholeBook = false }
@@ -903,7 +869,7 @@ struct DiaryPresetImportSheet: View {
                   hiddenCategories: hiddenCategories)
             try intent.save(owner: ownerID)
             let result = try await DiaryDocumentStore(ownerID: ownerID, bookID: targetID).importPreset(readyPackage ?? package, pageIDs: selectedPageIDs, title: title,
-                    operationID: operationID, replacementPhotos: replacementPhotos, replacementFill: replacementFill, hiddenCategories: hiddenCategories, afterPageID: afterPageID, expectedRevision: target?.catalogRevision, progress: { value in
+                    operationID: operationID, statistics: downloads.importStatisticsContext(for: readyPackage ?? package, wholeBook: wholeBook), replacementPhotos: replacementPhotos, replacementFill: replacementFill, hiddenCategories: hiddenCategories, afterPageID: afterPageID, expectedRevision: target?.catalogRevision, progress: { value in
                         Task { @MainActor in progress = value }
                     }, cancellation: cancellation)
             DiaryPresetImportIntent.clear(owner: ownerID)

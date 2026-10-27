@@ -106,7 +106,9 @@ nonisolated enum PresetLibraryCatalogCache {
         StoragePaths.system.catalog(ownerID)
     }
     static func read(ownerID: String) -> RemotePresetCatalog? {
-        guard let data = try? Data(contentsOf: url(ownerID: ownerID)) else { return nil }
+        let target = url(ownerID: ownerID)
+        guard let data = try? Data(contentsOf: target) else { return nil }
+        ResourceCache.shared.register(target, for: .account(ownerID, category: "catalog", identity: "templates"))
         return try? JSONDecoder().decode(RemotePresetCatalog.self, from: data)
     }
     static func save(_ catalog: RemotePresetCatalog, ownerID: String) {
@@ -116,5 +118,6 @@ nonisolated enum PresetLibraryCatalogCache {
         defer { withExtendedLifetime(lease) {} }
         try? FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: target, options: .atomic)
+        ResourceCache.shared.register(target, for: .account(ownerID, category: "catalog", identity: "templates"))
     }
 }

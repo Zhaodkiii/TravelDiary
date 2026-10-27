@@ -20,14 +20,14 @@ nonisolated struct RemotePresetCatalog: Codable, Sendable {
     let series: [Series]
     let books: [RemotePresetBook]
 }
-nonisolated struct RemotePresetPage: Decodable, Identifiable, Sendable {
+nonisolated struct RemotePresetPage: Codable, Identifiable, Sendable {
     let id: String
     let title: String
     let thumbnail_url: String
     let preview_url: String
 }
 /// Browsing never needs the import manifest or editable page documents.
-nonisolated struct RemotePresetBrowse: Decodable, Sendable {
+nonisolated struct RemotePresetBrowse: Codable, Sendable {
     let title: String
     let page_size: PresetSize
     let cover_page_id: String
@@ -103,6 +103,10 @@ final class PresetDownloadManager: ObservableObject {
     private var engine: SupportNetworkEngine?
     private var running: [UUID: Task<Void, Never>] = [:]
     private var lockedHashes = Set<String>()
+    private var catalogCache: (owner: String, date: Date, value: RemotePresetCatalog)?
+    private var catalogRequest: Task<RemotePresetCatalog, Error>?
+    private var catalogGeneration = UUID()
+    private var browseRequestIDs: [String: UUID] = [:]
     private var browseCache: [String: RemotePresetBrowse] = [:]
     private var browseRequests: [String: Task<RemotePresetBrowse, Error>] = [:]
     private var owner: String?
@@ -147,18 +151,28 @@ final class PresetDownloadManager: ObservableObject {
 
     func waitUntilRestored() async { await restoreTask?.value }
     func configure(engine: SupportNetworkEngine) {
+        catalogGeneration = UUID(); catalogCache = nil; catalogRequest?.cancel(); catalogRequest = nil
+        for task in browseRequests.values { task.cancel() }; browseRequests.removeAll(); browseRequestIDs.removeAll()
         browseCache.removeAll()
         self.engine = engine
         MaterialCatalogRepository.shared.engine = engine
     }
     func deactivate() {
+        catalogGeneration = UUID(); catalogCache = nil; catalogRequest?.cancel(); catalogRequest = nil
+        for task in browseRequests.values { task.cancel() }; browseRequests.removeAll(); browseRequestIDs.removeAll()
         for job in jobs where running[job.id] != nil { pause(job.id) }
         MaterialCatalogRepository.shared.activate("")
+        PreviewImagePipeline.shared.activate(owner: nil)
+        PresetPreviewRepository.shared.reset()
         owner = nil; signedURLs.removeAll(); browseCache.removeAll(); rebuildAvailability()
     }
     func activate(owner: String) {
+        PreviewImagePipeline.shared.activate(owner: owner)
         MaterialCatalogRepository.shared.activate(owner)
         if self.owner != owner {
+            catalogGeneration = UUID(); catalogCache = nil; catalogRequest?.cancel(); catalogRequest = nil
+            PresetPreviewRepository.shared.reset()
+            for task in browseRequests.values { task.cancel() }; browseRequests.removeAll(); browseRequestIDs.removeAll()
             for job in jobs where running[job.id] != nil { pause(job.id) }
             self.owner = owner
             signedURLs.removeAll(); browseCache.removeAll(); rebuildAvailability()
@@ -173,21 +187,44 @@ final class PresetDownloadManager: ObservableObject {
             strategy: NetworkStrategy(requiresAuth: true, allowETag: allowETag, etagTTL: allowETag ? 300 : nil)))
         return response.data
     }
-    func catalog() async throws -> RemotePresetCatalog {
-        try JSONDecoder().decode(RemotePresetCatalog.self, from: await request("catalog/", queryItems: [URLQueryItem(name: "schema_max", value: "2")]))
+    func importStatisticsContext(for package: DiaryPresetPackage, wholeBook: Bool) -> PresetImportStatisticsContext? {
+        guard UUID(uuidString: package.id) != nil, jobs.contains(where: { job in
+            guard job.owner == owner, let manifest = try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData) else { return false }
+            return manifest.templateBookID == package.id && manifest.packageVersion == package.manifest.packageVersion
+        }) else { return nil }
+        return PresetImportStatisticsContext(templateID: package.id, version: package.manifest.packageVersion, wholeBook: wholeBook)
     }
-    func browse(_ book: RemotePresetBook, ownerID: String) async throws -> RemotePresetBrowse {
+    func invalidateCatalog() { catalogCache = nil }
+    func catalog() async throws -> RemotePresetCatalog {
+        let context = owner ?? "signed-out"
+        if let catalogCache, catalogCache.owner == context, Date().timeIntervalSince(catalogCache.date) < 300 { return catalogCache.value }
+        if let catalogRequest { return try await catalogRequest.value }
+        let generation = catalogGeneration
+        let task = Task {
+            try JSONDecoder().decode(RemotePresetCatalog.self, from: await request("catalog/", queryItems: [URLQueryItem(name: "schema_max", value: "2")]))
+        }
+        catalogRequest = task
+        defer { if generation == catalogGeneration { catalogRequest = nil } }
+        let value = try await task.value
+        guard generation == catalogGeneration, (owner ?? "signed-out") == context else { throw CancellationError() }
+        catalogCache = (context, Date(), value)
+        return value
+    }
+    func browse(_ book: RemotePresetBook, ownerID: String, forceRefresh: Bool = false) async throws -> RemotePresetBrowse {
         let key = "\(ownerID):\(book.id):\(book.version)"
-        if let value = browseCache[key], value.isFresh { return value }
+        if !forceRefresh, let value = browseCache[key], value.isFresh { return value }
         if let pending = browseRequests[key] { return try await pending.value }
         let task = Task {
             try JSONDecoder().decode(RemotePresetBrowse.self,
                 from: await request("templates/\(book.id)/\(book.version)/browse/", allowETag: true))
         }
-        browseRequests[key] = task
-        defer { browseRequests[key] = nil }
+        let requestID = UUID()
+        browseRequests[key] = task; browseRequestIDs[key] = requestID
+        defer { if browseRequestIDs[key] == requestID { browseRequests[key] = nil; browseRequestIDs[key] = nil } }
         let value = try await task.value
+        guard browseRequestIDs[key] == requestID else { throw CancellationError() }
         browseCache[key] = value
+        PresetPreviewRepository.shared.remember(value, book: book, ownerID: ownerID)
         return value
     }
     func pages(_ book: RemotePresetBook) async throws -> [RemotePresetPage] {
@@ -281,6 +318,13 @@ final class PresetDownloadManager: ObservableObject {
         packages.filter { id, _ in canUsePackage(id) }.map(\.value).first {
             $0.manifest.templateBookID == bookID && $0.manifest.packageVersion == version
                 && Set(pageIDs).isSubset(of: Set($0.manifest.pages.map(\.id)))
+        }
+    }
+    /// Partial downloads may already contain a requested preview; completeness is irrelevant here.
+    func previewPackages(book: RemotePresetBook, ownerID: String) -> [DiaryPresetPackage] {
+        guard owner == ownerID else { return [] }
+        return packages.filter { canUsePackage($0.key) }.map(\.value).filter {
+            $0.manifest.templateBookID == book.id && $0.manifest.packageVersion == book.version
         }
     }
     func completeCachedPackage(for book: RemotePresetBook) -> DiaryPresetPackage? {
@@ -433,6 +477,7 @@ final class PresetDownloadManager: ObservableObject {
             update(id) { $0.status = "importing" }
             let result = try await DiaryDocumentStore(ownerID: job.owner, bookID: job.targetID).importPreset(package,
                 pageIDs: manifest.pages.map(\.id), title: job.title, operationID: id,
+                statistics: PresetImportStatisticsContext(templateID: manifest.templateBookID, version: manifest.packageVersion, wholeBook: job.wholeBook),
                 afterPageID: job.targetID == nil ? nil : job.afterPageID, expectedRevision: job.expectedRevision)
             update(id) { $0.status = "completed"; $0.resultID = result.id }
         } catch {
