@@ -581,6 +581,7 @@ struct DiaryPresetImportSheet: View {
 
     private var selectedPageIDs: [String] { pageIDs.filter { !excludedPageIDs.contains($0) } }
     private var hiddenCategories: Set<DiaryLayerSemanticKind> { categorySelection.hiddenCategories }
+    private var billingTemplateID: String? { remoteBook?.id ?? (UUID(uuidString: package.id) != nil ? package.id : nil) }
     private var availablePackage: DiaryPresetPackage? { remoteBook == nil ? package : readyPackage }
     private var target: DiaryBook? { books.first { $0.id == targetID } }
     private var finishesAtPhotos: Bool { wholeBook || fixedTarget }
@@ -681,8 +682,12 @@ struct DiaryPresetImportSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 DiaryImportFloatingActions {
-                    Button(action: continueFromPreview) {
-                        Text("下一步").frame(maxWidth: .infinity)
+                    if let billingTemplateID {
+                        BillingContentAction(owner: ownerID, kind: "template", targetID: billingTemplateID, title: "下一步") {
+                            Task { await prepareRemote(); continueFromPreview() }
+                        }
+                    } else {
+                        Button(action: continueFromPreview) { Text("下一步").frame(maxWidth: .infinity) }
                     }
                 }
             }
@@ -837,6 +842,8 @@ struct DiaryPresetImportSheet: View {
     }
     private func prepareRemote() async {
         guard let remoteBook else { return }
+        do { try await BillingStore.shared.requireContent(kind: "template", targetID: remoteBook.id, owner: ownerID) }
+        catch { self.error = error.localizedDescription; return }
         downloads.activate(owner: ownerID)
         if let cached = downloads.cachedPackage(bookID: remoteBook.id, version: remoteBook.version, pageIDs: pageIDs) {
             readyPackage = cached; return
@@ -865,6 +872,9 @@ struct DiaryPresetImportSheet: View {
         busy = true
         defer { busy = false }
         do {
+            if let billingTemplateID {
+                try await BillingStore.shared.requireContent(kind: "template", targetID: billingTemplateID, owner: ownerID)
+            }
             if let old = DiaryPresetImportIntent.read(owner: ownerID), old.templateID == package.id,
                old.pageIDs == selectedPageIDs, old.wholeBook == wholeBook,
                (old.hiddenCategories ?? []) == hiddenCategories, replacementPhotos.isEmpty,

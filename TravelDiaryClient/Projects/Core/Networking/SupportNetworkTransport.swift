@@ -29,7 +29,7 @@ struct URLSessionNetworkTransport: SupportNetworkTransport {
         let requestId = request.value(forHTTPHeaderField: "X-Request-ID") ?? "-"
 
         let requestHeaders = NetworkLogSanitizer.headersPreview(request.allHTTPHeaderFields)
-        let privatePrint = ["/print/", "/support/", "/diary-customizations/", "/diary-presets/", "/device/register/"].contains { request.url?.path.contains($0) == true }
+        let privatePrint = ["/billing/", "/print/", "/support/", "/diary-customizations/", "/diary-presets/", "/device/register/"].contains { request.url?.path.contains($0) == true }
         let requestBody = privatePrint ? "<private payload>" : NetworkLogSanitizer.bodyFullUTF8(data: request.httpBody, contentType: request.value(forHTTPHeaderField: "Content-Type"))
 
         logger.info(
@@ -152,7 +152,7 @@ private enum NetworkLogSanitizer {
             let lower = key.lowercased()
             if lower == "authorization" {
                 sanitized[key] = redactAuthorization(value)
-            } else if lower.contains("token") || lower == "x-api-key" || lower == "api-key" {
+            } else if lower == "x-billing-session" || lower.contains("token") || lower == "x-api-key" || lower == "api-key" {
                 sanitized[key] = "***"
             } else {
                 sanitized[key] = value

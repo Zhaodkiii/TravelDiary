@@ -154,8 +154,7 @@ struct RemotePresetDetailScreen: View {
         .background(DiaryLibraryStyle.background)
         .safeAreaInset(edge: .bottom) {
             if !fixedTarget {
-                Button("用这本模板") { selection = RemotePresetSelection(pageIDs: pages.map(\.id), wholeBook: true) }
-                    .buttonStyle(.borderedProminent).controlSize(.large).disabled(pages.isEmpty)
+                BillingContentAction(owner: ownerID, kind: "template", targetID: book.id, title: "用这本模板") { selection = RemotePresetSelection(pageIDs: pages.map(\.id), wholeBook: true) }.controlSize(.large).disabled(pages.isEmpty)
                     .padding()
 //                    .frame(maxWidth: .infinity).background(.regularMaterial)
             }
@@ -257,7 +256,7 @@ struct RemotePresetImportDestination: View {
             if let preparation {
                 DiaryPresetImportSheet(ownerID: ownerID, package: preparation.package, pageIDs: pageIDs,
                     defaultTarget: targetBook, wholeBook: wholeBook, defaultAfterPageID: afterPageID,
-                    remoteBook: preparation.downloadID == nil ? nil : book,
+                    remoteBook: book,
                     initialDownloadID: preparation.downloadID, loadingPages: previewPages,
                     loadingPreviewSize: previewSize, fixedTarget: fixedTarget, completed: onImported)
             } else {

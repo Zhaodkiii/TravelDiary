@@ -109,6 +109,9 @@ struct CustomizationDetailView: View {
         List {
             if let error { Section { Text(error).foregroundStyle(.red) } }
             if let v = value {
+                if v.billing_quote_available == true {
+                    Section("数字定制报价") { NavigationLink("查看报价与付款") { CustomizationDiamondPaymentScreen(owner: owner, requestID: id) } }
+                }
                 Section {
                     Text(customizationStatus(v.status)).font(.headline)
                     DisclosureGroup("需求信息") { Text(v.number).font(.caption).textSelection(.enabled) }

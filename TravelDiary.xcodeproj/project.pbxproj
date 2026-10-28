@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		BC0200000000000000000001 /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = BC0200000000000000000002 /* RevenueCatUI */; };
+		BC0100000000000000000001 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = BC0100000000000000000002 /* RevenueCat */; };
 		A1OSS0012FFB252D00137E68 /* CoreTelephony.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1OSS0112FFB252D00137E68 /* CoreTelephony.framework */; };
 		A1OSS0022FFB252D00137E68 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1OSS0122FFB252D00137E68 /* SystemConfiguration.framework */; };
 		A1OSS0032FFB252D00137E68 /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A1OSS0132FFB252D00137E68 /* libresolv.tbd */; };
@@ -221,6 +223,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BC0100000000000000000001 /* RevenueCat in Frameworks */,
+				BC0200000000000000000001 /* RevenueCatUI in Frameworks */,
 				C0DE00100000000000000001 /* Vendor/WeChat/WechatOpenSDK.xcframework in Frameworks */,
 				C0DE00200000000000000001 /* Vendor/Alipay/AlipaySDK.xcframework in Frameworks */,
 				A1OSS0022FFB252D00137E68 /* SystemConfiguration.framework in Frameworks */,
@@ -293,6 +297,8 @@
 			);
 			name = TravelDiary;
 			packageProductDependencies = (
+				BC0100000000000000000002 /* RevenueCat */,
+				BC0200000000000000000002 /* RevenueCatUI */,
 			);
 			productName = TravelDiary;
 			productReference = 85EA7EF22FFB252D00137E68 /* TravelDiary.app */;
@@ -351,6 +357,7 @@
 			mainGroup = 85EA7EE92FFB252D00137E68;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				BC0100000000000000000003 /* RevenueCat local package */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 85EA7EF32FFB252D00137E68 /* Products */;
@@ -748,6 +755,9 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+		BC0200000000000000000002 = {isa = XCSwiftPackageProductDependency; package = BC0100000000000000000003; productName = RevenueCatUI; };
+		BC0100000000000000000003 = {isa = XCLocalSwiftPackageReference; relativePath = Vendor/RevenueCat; };
+		BC0100000000000000000002 = {isa = XCSwiftPackageProductDependency; package = BC0100000000000000000003; productName = RevenueCat; };
 	};
 	rootObject = 85EA7EEA2FFB252D00137E68 /* Project object */;
 }

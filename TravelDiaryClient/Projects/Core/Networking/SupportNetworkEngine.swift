@@ -236,6 +236,10 @@ final class SupportNetworkEngine {
         let requestId = RequestIdGenerator.make()
         urlRequest.setValue(requestId, forHTTPHeaderField: "X-Request-ID")
 
+        if request.path.hasPrefix("/api/v1/materials/") || request.path.hasPrefix("/api/v1/diary-presets/") {
+            let billingSession = await MainActor.run { BillingStore.shared.bootstrapInfo?.session_id }
+            if let billingSession { urlRequest.setValue(billingSession, forHTTPHeaderField: "X-Billing-Session") }
+        }
         // 调用方自定义头（可补充 `.raw` 的 Content-Type 等）。
         for (k, v) in request.headers {
             urlRequest.setValue(v, forHTTPHeaderField: k)

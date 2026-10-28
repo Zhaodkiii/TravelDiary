@@ -35,6 +35,7 @@ nonisolated struct CustomRequest: Codable, Identifiable, Sendable {
     let id: String; let number: String; let title: String; let brief: [String: String]; let status: String; let revision: Int
     let due_at: String?; let event_sequence: Int; let last_read_sequence: Int; let revision_round: Int
     let current_delivery_id: String?; let assets: [CustomAsset]; let submissions: [CustomSubmission]; let events: [CustomEvent]; let deliveries: [CustomDelivery]
+    var billing_quote_available: Bool? = nil
     let accepted_submission_id: Int?
     let latest_submission_id: Int?
     let pending_submission: Bool?

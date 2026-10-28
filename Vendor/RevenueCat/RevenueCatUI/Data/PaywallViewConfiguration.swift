@@ -1,0 +1,113 @@
+//
+//  PaywallViewConfiguration.swift
+//
+//
+//  Created by Nacho Soto on 1/19/24.
+//
+
+import Foundation
+
+@_spi(Internal) import RevenueCat
+
+/// Parameters needed to configure a ``PaywallView``.
+@available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
+struct PaywallViewConfiguration {
+
+    var content: Content
+    var mode: PaywallViewMode
+    var fonts: PaywallFontProvider
+
+    /// This is a configuration value that is for V1 paywalls and the fallback paywall. V2 paywalls
+    /// can have their own close buttons configured via the dashboard, so it's not used by the
+    /// PaywallsV2View success path.
+    var displayCloseButton: Bool
+    var introEligibility: TrialOrIntroEligibilityChecker?
+    var purchaseHandler: PurchaseHandler
+    var promoOfferCache: PaywallPromoOfferCache?
+    #if !os(tvOS)
+    /// Receives a workflow configuration error so checkpoint presentation can report an error outcome.
+    var workflowPresentationErrorHandler: ((NSError) -> Void)?
+    /// A pre-built workflow context to seed directly (injection/preview path), bypassing the
+    /// backend fetch. When set, `PaywallView` renders the workflow paywall immediately. Set by the
+    /// `PaywallView(workflowContext:)` initializer; tvOS has no workflow paywall UI.
+    var injectedWorkflowContext: WorkflowContext?
+    #endif
+
+    init(
+        content: Content,
+        mode: PaywallViewMode = .default,
+        fonts: PaywallFontProvider = DefaultPaywallFontProvider(),
+        displayCloseButton: Bool = false,
+        introEligibility: TrialOrIntroEligibilityChecker? = nil,
+        purchaseHandler: PurchaseHandler,
+        promoOfferCache: PaywallPromoOfferCache? = nil,
+        workflowPresentationErrorHandler: ((NSError) -> Void)? = nil
+    ) {
+        self.content = content
+        self.mode = mode
+        self.fonts = fonts
+        self.displayCloseButton = displayCloseButton
+        self.introEligibility = introEligibility
+        self.purchaseHandler = purchaseHandler
+        self.promoOfferCache = promoOfferCache
+        #if !os(tvOS)
+        self.workflowPresentationErrorHandler = workflowPresentationErrorHandler
+        #endif
+
+        PurchasesUIService.activateIfNeeded()
+    }
+
+}
+
+@available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
+extension PaywallViewConfiguration {
+
+    /// Offering selection for the paywall.
+    enum Content {
+
+        case defaultOffering
+        case offering(Offering)
+        case offeringIdentifier(String, presentedOfferingContext: PresentedOfferingContext?)
+
+    }
+
+}
+
+// MARK: -
+
+@available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
+extension PaywallViewConfiguration {
+
+    init(
+        offering: Offering? = nil,
+        mode: PaywallViewMode = .default,
+        fonts: PaywallFontProvider = DefaultPaywallFontProvider(),
+        displayCloseButton: Bool = false,
+        introEligibility: TrialOrIntroEligibilityChecker? = nil,
+        purchaseHandler: PurchaseHandler = PurchaseHandler.default(),
+        promoOfferCache: PaywallPromoOfferCache? = nil
+    ) {
+        let handler = purchaseHandler
+
+        self.init(
+            content: .optionalOffering(offering),
+            mode: mode,
+            fonts: fonts,
+            displayCloseButton: displayCloseButton,
+            introEligibility: introEligibility,
+            purchaseHandler: handler,
+            promoOfferCache: promoOfferCache
+        )
+    }
+
+}
+
+@available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
+extension PaywallViewConfiguration.Content {
+
+    /// - Returns: `Content.offering` or `Content.defaultOffering` if `nil`.
+    static func optionalOffering(_ offering: Offering?) -> Self {
+        return offering.map(Self.offering) ?? .defaultOffering
+    }
+
+}

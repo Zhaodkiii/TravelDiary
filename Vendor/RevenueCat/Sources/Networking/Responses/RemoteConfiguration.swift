@@ -1,0 +1,202 @@
+//
+//  RemoteConfiguration.swift
+//  RevenueCat
+//
+//  Created by Rick van der Linden on 27/05/2026.
+//  Copyright © 2026 RevenueCat, Inc. All rights reserved.
+
+import Foundation
+
+/// The `/v1/config` configuration object.
+///
+/// This is returned by the remote config API either as the config JSON inside an `RCContainer`
+/// response or as the plain JSON HTTP response body.
+struct RemoteConfiguration: Equatable {
+
+    static let defaultDomain = "app"
+
+    let domain: String
+    /// Other domains the SDK should also sync to assemble the full configuration.
+    let subdomains: [String]
+    /// Opaque token returned by the server and replayed on future requests.
+    let manifest: String
+    /// Full set of active topic names, including unchanged topics omitted from `topics`.
+    let activeTopics: [String]
+    /// Blob refs the server expects the SDK to have cached for this configuration.
+    let prefetchBlobs: [String]
+    /// Changed topic bodies only. If a topic's client-sent etag still matches, the topic is omitted
+    /// and the client keeps its cached topic data. `activeTopics` is the source of truth for topic
+    /// existence, so cached topics absent there should be removed.
+    let topics: Topics
+
+    init(
+        domain: String,
+        subdomains: [String] = [],
+        manifest: String,
+        activeTopics: [String],
+        prefetchBlobs: [String] = [],
+        topics: Topics = .init()
+    ) {
+        self.domain = domain
+        self.subdomains = subdomains
+        self.manifest = manifest
+        self.activeTopics = activeTopics
+        self.prefetchBlobs = prefetchBlobs
+        self.topics = topics
+    }
+
+}
+
+extension RemoteConfiguration {
+
+    /// A single topic's items, keyed by item name.
+    typealias ConfigTopic = [String: ConfigItem]
+
+    struct Topics: Equatable {
+
+        /// Changed topic bodies only: topic name to topic.
+        let entries: [String: ConfigTopic]
+
+        init(
+            entries: [String: ConfigTopic] = [:]
+        ) {
+            self.entries = entries
+        }
+
+    }
+
+    /// A single item within a topic.
+    ///
+    /// Items are arbitrary topic-specific JSON. `blob_ref` and `prefetch` are the only
+    /// reserved keys the SDK interprets; every other key is preserved in `content`.
+    /// An item's blob payload is addressed by `blobRef`; `content` is the inline topic
+    /// metadata exposed through the topic index, not blob bytes returned by `blobData`.
+    struct ConfigItem: Codable, Equatable {
+        /// When present, the item's payload is an external static blob addressed by this ref.
+        let blobRef: String?
+        /// When true, the SDK should proactively cache this item's blob.
+        let prefetch: Bool
+        /// Topic-specific item content with wire keys preserved exactly, excluding the reserved
+        /// `blob_ref` and `prefetch` keys.
+        let content: [String: AnyDecodable]
+
+        init(
+            blobRef: String? = nil,
+            prefetch: Bool = false,
+            content: [String: AnyDecodable] = [:]
+        ) {
+            self.blobRef = blobRef
+            self.prefetch = prefetch
+            self.content = content
+        }
+
+        init(from decoder: Decoder) throws {
+            // String-keyed dictionaries bypass the decoder's key strategy. Topic metadata is a dynamic wire
+            // contract, so snake_case keys and opaque identifiers must not be converted to Swift-style names.
+            var item = try decoder.singleValueContainer().decode([String: AnyDecodable].self)
+
+            if case let .string(blobRef)? = item.removeValue(forKey: Self.blobRefKey) {
+                self.blobRef = blobRef
+            } else {
+                self.blobRef = nil
+            }
+
+            if case let .bool(prefetch)? = item.removeValue(forKey: Self.prefetchKey) {
+                self.prefetch = prefetch
+            } else {
+                self.prefetch = false
+            }
+
+            self.content = item
+        }
+
+        func encode(to encoder: Encoder) throws {
+            // Encode through a string-keyed dictionary so opaque topic keys bypass the encoder's key strategy.
+            // This is required for audience predicate hashes, whose exact spelling is part of their identity.
+            var item = self.content
+            if let blobRef = self.blobRef {
+                item[Self.blobRefKey] = .string(blobRef)
+            }
+            if self.prefetch {
+                item[Self.prefetchKey] = .bool(self.prefetch)
+            }
+
+            var container = encoder.singleValueContainer()
+            try container.encode(item)
+        }
+
+        private static let blobRefKey = "blob_ref"
+        private static let prefetchKey = "prefetch"
+
+    }
+
+}
+
+// MARK: - Codable
+
+extension RemoteConfiguration: Codable {
+
+    private enum CodingKeys: String, CodingKey {
+        case domain
+        case subdomains
+        case manifest
+        case activeTopics
+        case prefetchBlobs
+        case topics
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.domain = try container.decode(String.self, forKey: .domain)
+        self.subdomains = try container.decodeIfPresent([String].self, forKey: .subdomains) ?? []
+        self.manifest = try container.decode(String.self, forKey: .manifest)
+        self.activeTopics = try container.decode([String].self, forKey: .activeTopics)
+        self.prefetchBlobs = try container.decodeIfPresent([String].self, forKey: .prefetchBlobs) ?? []
+        self.topics = try container.decodeIfPresent(Topics.self, forKey: .topics) ?? Topics()
+    }
+
+}
+
+extension RemoteConfiguration: HTTPResponseBody {}
+
+extension RemoteConfiguration.Topics: Codable {
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.init(entries: try container.decode([String: [String: RemoteConfiguration.ConfigItem]].self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(self.entries)
+    }
+
+}
+
+extension RemoteConfiguration.Topics {
+
+    /// All blob refs referenced by this topic collection.
+    var blobRefs: Set<String> {
+        return Set(self.entries.values.flatMap { $0.values.compactMap(\.blobRef) })
+    }
+
+}
+
+private struct DynamicCodingKey: CodingKey, Hashable {
+
+    let stringValue: String
+    let intValue: Int? = nil
+
+    init(_ stringValue: String) {
+        self.stringValue = stringValue
+    }
+
+    init?(stringValue: String) {
+        self.init(stringValue)
+    }
+
+    init?(intValue: Int) {
+        return nil
+    }
+
+}

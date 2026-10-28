@@ -1,0 +1,183 @@
+//
+//  Copyright RevenueCat Inc. All Rights Reserved.
+//
+//  Licensed under the MIT License (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      https://opensource.org/licenses/MIT
+//
+//  WorkflowPreviewTests.swift
+//
+
+import Nimble
+@_spi(Internal) @testable import RevenueCat
+@_spi(Internal) @testable import RevenueCatUI
+import XCTest
+
+#if !os(tvOS)
+
+@available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
+final class WorkflowPreviewTests: TestCase {
+
+    func testMakeContextBuildsWorkflowContextFromInjectedData() throws {
+        let baseOffering = Self.makeOffering(identifier: "offering_a")
+        let workflow = try Self.makeWorkflow(screenOfferingIdentifier: "offering_a")
+
+        let context = try WorkflowPreview.makeContext(workflow: workflow, offerings: [baseOffering])
+
+        // The rendered offering is the screen's offering with the workflow screen's components applied.
+        expect(context.initialOffering.identifier) == "offering_a"
+        expect(context.initialOffering.internalPaywallComponents).toNot(beNil())
+        expect(context.workflow.id) == "wf_test"
+    }
+
+    func testInitialOfferingCarriesTheScreenZeroDecimalPlaceCountries() throws {
+        let baseOffering = Self.makeOffering(identifier: "offering_a")
+        let workflow = try Self.makeWorkflow(
+            screenOfferingIdentifier: "offering_a",
+            zeroDecimalPlaceCountries: ["TWN", "MEX"]
+        )
+
+        let context = try WorkflowPreview.makeContext(workflow: workflow, offerings: [baseOffering])
+
+        expect(context.initialOffering.internalPaywallComponents?.data.zeroDecimalPlaceCountries) == ["TWN", "MEX"]
+    }
+
+    func testMakeContextPropagatesPresentedOfferingContext() throws {
+        let baseOffering = Self.makeOffering(identifier: "offering_a")
+        let workflow = try Self.makeWorkflow(screenOfferingIdentifier: "offering_a")
+        let presentedOfferingContext = PresentedOfferingContext(offeringIdentifier: "offering_a")
+
+        let context = try WorkflowPreview.makeContext(
+            workflow: workflow,
+            offerings: [baseOffering],
+            presentedOfferingContext: presentedOfferingContext
+        )
+
+        expect(context.presentedOfferingContext?.offeringIdentifier) == "offering_a"
+    }
+
+    func testMakeContextPreservesCompleteOfferingsBundle() throws {
+        let baseOffering = Self.makeOffering(identifier: "offering_a")
+        let secondaryOffering = Self.makeOffering(identifier: "offering_b")
+        let offerings = Offerings.preview(offerings: [baseOffering, secondaryOffering])
+        let workflow = try Self.makeWorkflow(screenOfferingIdentifier: "offering_a")
+
+        let context = try WorkflowPreview.makeContext(workflow: workflow, offerings: offerings)
+
+        expect(context.offering(for: "offering_b")?.identifier) == "offering_b"
+    }
+
+    func testMakeContextAllowsInitialDeclaredOfferingMissingFromOfferings() throws {
+        // The workflow screen resolves to "offering_b", but only "offering_a" is supplied. The
+        // workflow should reach the UI so it can surface its configuration error to the customer.
+        let workflow = try Self.makeWorkflow(screenOfferingIdentifier: "offering_b")
+
+        let context = try WorkflowPreview.makeContext(
+            workflow: workflow,
+            offerings: [Self.makeOffering(identifier: "offering_a")]
+        )
+
+        expect(context.initialOffering.identifier) == ""
+        expect(WorkflowPaywallView.presentationError(for: "step_1", in: context)?.code)
+            == ErrorCode.configurationError.rawValue
+    }
+
+    func testMakeContextAllowsAnInitialContentOnlyScreen() throws {
+        let workflow = try Self.makeWorkflow(screenOfferingIdentifier: nil)
+
+        let context = try WorkflowPreview.makeContext(workflow: workflow, offerings: [])
+
+        expect(context.initialOffering.identifier) == ""
+        expect(context.initialOffering.availablePackages).to(beEmpty())
+        expect(context.initialOffering.internalPaywallComponents).toNot(beNil())
+        expect(context.offering(for: try XCTUnwrap(workflow.steps["step_1"]))).to(beNil())
+    }
+
+}
+
+@available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
+private extension WorkflowPreviewTests {
+
+    /// A packages-only offering (no paywall components), as the preview seam expects.
+    static func makeOffering(identifier: String) -> Offering {
+        return Offering(
+            identifier: identifier,
+            serverDescription: "Offering \(identifier)",
+            metadata: [:],
+            paywall: nil,
+            availablePackages: TestData.packages,
+            webCheckoutUrl: nil
+        )
+    }
+
+    /// Builds a single-screen workflow using the `@_spi(Internal)` initializers (C-1), sourcing the
+    /// `componentsConfig` sub-object from JSON since hand-building it is impractical.
+    static func makeWorkflow(
+        screenOfferingIdentifier: String?,
+        zeroDecimalPlaceCountries: [String] = []
+    ) throws -> PublishedWorkflow {
+        let screen = WorkflowScreen(
+            name: nil,
+            templateName: "tmpl",
+            assetBaseURL: try XCTUnwrap(URL(string: "https://assets.revenuecat.com")),
+            componentsConfig: try Self.makeComponentsConfig(),
+            componentsLocalizations: [:],
+            defaultLocale: "en_US",
+            offeringIdentifier: screenOfferingIdentifier,
+            zeroDecimalPlaceCountries: zeroDecimalPlaceCountries
+        )
+        let step = WorkflowStep(id: "step_1", type: "screen", screenId: "screen_1")
+
+        return PublishedWorkflow(
+            id: "wf_test",
+            displayName: "Test",
+            initialStepId: "step_1",
+            singleStepFallbackId: nil,
+            steps: ["step_1": step],
+            screens: ["screen_1": screen]
+        )
+    }
+
+    static func makeComponentsConfig() throws -> PaywallComponentsData.ComponentsConfig {
+        let json = """
+        {
+          "base": {
+            "stack": {
+              "type": "stack",
+              "components": [],
+              "dimension": { "type": "vertical", "alignment": "center", "distribution": "center" },
+              "size": { "width": { "type": "fill" }, "height": { "type": "fill" } },
+              "padding": { "top": 0, "bottom": 0, "leading": 0, "trailing": 0 },
+              "margin": { "top": 0, "bottom": 0, "leading": 0, "trailing": 0 }
+            },
+            "background": {
+              "type": "color",
+              "value": { "light": { "type": "hex", "value": "#FFFFFF" } }
+            }
+          }
+        }
+        """
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        return try JSONDecoder.default.decode(PaywallComponentsData.ComponentsConfig.self, from: data)
+    }
+
+    func testMakeContextCarriesTheWorkflowBlobRef() throws {
+        let baseOffering = Self.makeOffering(identifier: "offering_a")
+        let workflow = try Self.makeWorkflow(screenOfferingIdentifier: "offering_a")
+
+        let withRef = try WorkflowPreview.makeContext(
+            workflow: workflow,
+            offerings: [baseOffering],
+            workflowBlobRef: "blob-ref-1"
+        )
+        let withoutRef = try WorkflowPreview.makeContext(workflow: workflow, offerings: [baseOffering])
+
+        expect(withRef.workflowBlobRef) == "blob-ref-1"
+        expect(withoutRef.workflowBlobRef).to(beNil())
+    }
+
+}
+
+#endif

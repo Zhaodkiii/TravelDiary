@@ -503,7 +503,7 @@ struct StickerPackDetailScreen: View {
             HStack {
                 Button(library.is_favorited ? "已收藏" : "收藏贴纸包") { Task { await favorite() } }.disabled(saving)
                 Spacer()
-                Button("去使用") { if let onUse { onUse(library) } else { choosingBook = true } }.buttonStyle(.borderedProminent)
+                BillingContentAction(owner: MaterialCatalogRepository.shared.owner, kind: "sticker_library", targetID: library.id, title: "去使用") { if let onUse { onUse(library) } else { choosingBook = true } }
                     .disabled(library.availability == "unavailable")
             }.padding().background(.regularMaterial)
         }

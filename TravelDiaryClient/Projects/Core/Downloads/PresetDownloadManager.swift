@@ -234,6 +234,7 @@ final class PresetDownloadManager: ObservableObject {
     }
     @discardableResult
     func enqueue(book: RemotePresetBook, pageIDs: [String]?, owner: String, target: DiaryBook?, after: UUID?, downloadOnly: Bool = false, minimumLayerSchema: Int? = nil, unitID: String? = nil) async throws -> UUID {
+        try await BillingStore.shared.requireContent(kind: "template", targetID: book.id, owner: owner)
         await restoreTask?.value
         activate(owner: owner)
         if downloadOnly, let existing = jobs.last(where: { job in
@@ -283,6 +284,8 @@ final class PresetDownloadManager: ObservableObject {
         await restoreTask?.value
         try Task.checkCancellation()
         activate(owner: ownerID)
+        try await BillingStore.shared.requireContent(kind: "template", targetID: book.id, owner: ownerID)
+        guard owner == ownerID else { throw CancellationError() }
         if let cached = cachedPackage(bookID: book.id, version: book.version, pageIDs: pageIDs) {
             return PresetImportPreparation(package: cached, downloadID: nil)
         }
@@ -301,6 +304,8 @@ final class PresetDownloadManager: ObservableObject {
         await restoreTask?.value
         try Task.checkCancellation()
         activate(owner: ownerID)
+        try await BillingStore.shared.requireContent(kind: "template", targetID: book.id, owner: ownerID)
+        guard owner == ownerID else { throw CancellationError() }
         if let cached = cachedPackage(bookID: book.id, version: book.version, pageIDs: pageIDs), cached.manifest.layerSchemaVersion >= 2 {
             return PresetImportPreparation(package: cached, downloadID: nil)
         }
@@ -476,6 +481,8 @@ final class PresetDownloadManager: ObservableObject {
                 return
             }
             guard owner == job.owner else { throw CancellationError() }
+            try await BillingStore.shared.requireContent(kind: "template", targetID: manifest.templateBookID, owner: job.owner)
+            guard owner == job.owner else { throw CancellationError() }
             update(id) { $0.status = "importing" }
             let result = try await DiaryDocumentStore(ownerID: job.owner, bookID: job.targetID).importPreset(package,
                 pageIDs: manifest.pages.map(\.id), title: job.title, operationID: id,
@@ -515,18 +522,32 @@ final class PresetDownloadManager: ObservableObject {
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try? JSONEncoder().encode(Array(hashes)).write(to: registry, options: .atomic)
         let materialKey = "material-\(item.revision)"
-        if item.library_id != nil {
-            do {
-                let plan = try await MaterialCatalogRepository.shared.downloadPlan(item)
-                guard plan.sha256 == item.sha256, plan.byte_size == item.byte_size else { throw DiaryEditorError.invalidDocument }
-                signedURLs[materialKey] = (Date(), [item.sha256: plan.url])
-            } catch let error as URLError where [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotConnectToHost].contains(error.code) {
-                // Only complete, hash-verified cached bytes can be used offline.
-                let path = root.appendingPathComponent("blobs").appendingPathComponent(item.sha256)
-                if let data = try? Data(contentsOf: path), data.count == item.byte_size,
-                   SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == item.sha256 { progress(1); return data }
+        let expectedOwner = owner
+        let scope = "billing.material-access.\(expectedOwner).\(item.library_id ?? "unscoped").\(item.library_version ?? 0).\(item.revision)"
+        do {
+            // Authorize before reading shared bytes, including when the preview equals the source.
+            let plan = try await MaterialCatalogRepository.shared.downloadPlan(item)
+            guard owner == expectedOwner else { throw CancellationError() }
+            guard plan.sha256 == item.sha256, plan.byte_size == item.byte_size else { throw DiaryEditorError.invalidDocument }
+            signedURLs[materialKey] = (Date(), [item.sha256: plan.url])
+            if item.library_id != nil { UserDefaults.standard.set(Date().addingTimeInterval(300), forKey: scope) }
+        } catch {
+            guard owner == expectedOwner else { throw CancellationError() }
+            let networkError: URLError?
+            if let value = error as? URLError { networkError = value }
+            else if case let SupportNetworkError.transport(value) = error { networkError = value }
+            else { networkError = nil }
+            let offline = networkError.map { [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotConnectToHost].contains($0.code) } ?? false
+            let expires = UserDefaults.standard.object(forKey: scope) as? Date
+            guard offline, item.library_id != nil, expires.map({ $0 > Date() }) == true else {
+                if !offline { UserDefaults.standard.removeObject(forKey: scope) }
                 throw error
             }
+            let path = root.appendingPathComponent("blobs").appendingPathComponent(item.sha256)
+            guard let data = try? Data(contentsOf: path), data.count == item.byte_size,
+                  SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == item.sha256 else { throw error }
+            progress(1)
+            return data
         }
         if let data = await MaterialThumbnailCache.shared.cachedOriginal(item) {
             try Task.checkCancellation()

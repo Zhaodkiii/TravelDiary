@@ -63,6 +63,7 @@ final class AppContainer {
         PrintOrderService.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
         HelpFeedbackService.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
         CustomizationService.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
+        BillingStore.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
         self.coreDataStack = coreDataStack
         self.contentDependencies = contentDependencies
         self.aiSettingsRepository = aiSettingsRepository

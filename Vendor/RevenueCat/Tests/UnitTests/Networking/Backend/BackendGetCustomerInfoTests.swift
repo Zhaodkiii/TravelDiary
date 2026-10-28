@@ -1,0 +1,313 @@
+//
+//  Copyright RevenueCat Inc. All Rights Reserved.
+//
+//  Licensed under the MIT License (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      https://opensource.org/licenses/MIT
+//
+//  BackendGetCustomerInfoTests.swift
+//
+//  Created by Nacho Soto on 3/7/22.
+
+import Foundation
+import Nimble
+import XCTest
+
+@testable import RevenueCat
+
+class BackendGetCustomerInfoTests: BaseBackendTests {
+
+    override func createClient() -> MockHTTPClient {
+        super.createClient(#file)
+    }
+
+    func testCachesCustomerGetsForSameCustomer() {
+        httpClient.mock(
+            requestPath: .getCustomerInfo(appUserID: Self.userID),
+            response: .init(statusCode: .success, response: Self.validCustomerResponse)
+        )
+
+        self.backend.getCustomerInfo(appUserID: Self.userID, isAppBackgrounded: false) { _ in }
+        self.backend.getCustomerInfo(appUserID: Self.userID, isAppBackgrounded: false) { _ in }
+
+        expect(self.httpClient.calls).toEventually(haveCount(1))
+    }
+
+    func testDoesntCacheCustomerGetsForSameCustomer() {
+        let response = MockHTTPClient.Response(statusCode: .success, response: Self.validCustomerResponse)
+        let userID2 = "user_id_2"
+        httpClient.mock(requestPath: .getCustomerInfo(appUserID: Self.userID), response: response)
+        httpClient.mock(requestPath: .getCustomerInfo(appUserID: userID2), response: response)
+
+        self.backend.getCustomerInfo(appUserID: Self.userID, isAppBackgrounded: false) { _ in }
+        self.backend.getCustomerInfo(appUserID: userID2, isAppBackgrounded: false) { _ in }
+
+        expect(self.httpClient.calls).toEventually(haveCount(2))
+    }
+
+    func testGetCustomerInfoIsAppendedToInFlightPostReceiptForSameUser() {
+        self.httpClient.disableSnapshotTesting()
+        self.httpClient.mock(
+            requestPath: .postReceiptData,
+            response: .init(statusCode: .success, response: Self.validCustomerResponse)
+        )
+
+        let getCustomerInfoCompleted: Atomic<Bool> = false
+
+        self.postReceipt(appUserID: Self.userID)
+        self.backend.getCustomerInfo(appUserID: Self.userID, isAppBackgrounded: false) { _ in
+            getCustomerInfoCompleted.value = true
+        }
+
+        expect(getCustomerInfoCompleted.value).toEventually(beTrue())
+        expect(self.httpClient.calls).to(haveCount(1))
+        expect(self.httpClient.calls.first?.request.path as? HTTPRequest.Path) == .postReceiptData
+    }
+
+    func testGetCustomerInfoIsNotAppendedToInFlightPostReceiptForDifferentUser() throws {
+        self.httpClient.disableSnapshotTesting()
+
+        let otherUserID = "other_user_id"
+        var otherUserResponse = Self.validCustomerResponse
+        var otherUserSubscriber = try XCTUnwrap(otherUserResponse["subscriber"] as? [String: Any])
+        otherUserSubscriber["original_app_user_id"] = otherUserID
+        otherUserResponse["subscriber"] = otherUserSubscriber
+
+        self.httpClient.mock(
+            requestPath: .postReceiptData,
+            response: .init(statusCode: .success, response: Self.validCustomerResponse)
+        )
+        self.httpClient.mock(
+            requestPath: .getCustomerInfo(appUserID: otherUserID),
+            response: .init(statusCode: .success, response: otherUserResponse)
+        )
+
+        self.postReceipt(appUserID: Self.userID)
+        let result = waitUntilValue { completed in
+            self.backend.getCustomerInfo(appUserID: otherUserID, isAppBackgrounded: false, completion: completed)
+        }
+
+        expect(result).to(beSuccess())
+        expect(result?.value?.originalAppUserId) == otherUserID
+        expect(self.httpClient.calls).to(haveCount(2))
+        expect(self.httpClient.calls.last?.request.path as? HTTPRequest.Path)
+            == .getCustomerInfo(appUserID: otherUserID)
+    }
+
+    func testGetCustomerCallsBackendProperly() throws {
+        let path: HTTPRequest.Path = .getCustomerInfo(appUserID: Self.userID)
+        let response = MockHTTPClient.Response(statusCode: .success, response: Self.validCustomerResponse)
+
+        self.httpClient.mock(requestPath: path, response: response)
+
+        backend.getCustomerInfo(appUserID: Self.userID, isAppBackgrounded: false) { _ in }
+        expect(self.httpClient.calls).toEventually(haveCount(1))
+    }
+
+    func testGetsCustomerInfo() {
+        httpClient.mock(
+            requestPath: .getCustomerInfo(appUserID: Self.userID),
+            response: .init(statusCode: .success, response: Self.validCustomerResponse)
+        )
+
+        let customerInfo = waitUntilValue { completed in
+            self.backend.getCustomerInfo(appUserID: Self.userID, isAppBackgrounded: false, completion: completed)
+        }
+
+        expect(customerInfo).to(beSuccess())
+        expect(customerInfo?.value?.entitlements.verification) == .notRequested
+    }
+
+    func testGetCustomerInfoPreservesUnparsedResponseDataOfEveryJSONType() throws {
+        self.httpClient.disableSnapshotTesting()
+        var response = Self.validCustomerResponse
+        response["future_data"] = [
+            "string": "value",
+            "boolean": true,
+            "integer": 3,
+            "double": 0.75,
+            "object": ["nested": "value"],
+            "array": ["a", "b"],
+            "null": NSNull()
+        ]
+        self.httpClient.mock(
+            requestPath: .getCustomerInfo(appUserID: Self.userID),
+            response: .init(statusCode: .success, response: response)
+        )
+
+        let result = waitUntilValue { completed in
+            self.backend.getCustomerInfo(
+                appUserID: Self.userID,
+                isAppBackgrounded: false,
+                completion: completed
+            )
+        }
+        expect(result).to(beSuccess())
+
+        let futureData = try XCTUnwrap(result?.value?.rawData["future_data"] as? [String: Any])
+        expect(futureData["string"] as? String) == "value"
+        expect(futureData["boolean"] as? Bool) == true
+        expect(futureData["integer"] as? Int) == 3
+        expect(futureData["double"] as? Double) == 0.75
+        expect(futureData["object"] as? [String: String]) == ["nested": "value"]
+        expect(futureData["array"] as? [String]) == ["a", "b"]
+        expect(futureData["null"] is NSNull) == true
+    }
+
+    func testHandlesGetCustomerInfoErrors() throws {
+        let mockedError = NetworkError.unexpectedResponse(nil)
+
+        self.httpClient.mock(
+            requestPath: .getCustomerInfo(appUserID: Self.userID),
+            response: .init(error: mockedError)
+        )
+
+        let result = waitUntilValue { completed in
+            self.backend.getCustomerInfo(appUserID: Self.userID, isAppBackgrounded: false, completion: completed)
+        }
+
+        expect(result).to(beFailure())
+        expect(result?.error) == .networkError(mockedError)
+    }
+
+    func testHandlesInvalidJSON() {
+        self.httpClient.mock(
+            requestPath: .getCustomerInfo(appUserID: Self.userID),
+            response: .init(statusCode: .success, response: ["sjkaljdklsjadkjs": ""])
+        )
+
+        let result = waitUntilValue { completed in
+            self.backend.getCustomerInfo(appUserID: Self.userID, isAppBackgrounded: false, completion: completed)
+        }
+
+        guard case .failure(.networkError(.decoding)) = result else {
+            fail("Unexpected result: \(String(describing: result))")
+            return
+        }
+    }
+
+    func testGetCustomerInfoDoesNotMakeTwoRequests() {
+        let customerResponse: [String: Any] = [
+            "request_date": "2019-08-16T10:30:42Z",
+            "subscriber": [
+                "first_seen": "2019-07-17T00:05:54Z",
+                "original_app_user_id": "user",
+                "subscriptions": [:] as [String: Any]
+            ] as [String: Any]
+        ]
+        let path: HTTPRequest.Path = .getCustomerInfo(appUserID: Self.userID)
+        let customerInfoResponse = MockHTTPClient.Response(statusCode: .success, response: customerResponse)
+        httpClient.mock(requestPath: path, response: customerInfoResponse)
+
+        let firstResult: Atomic<Result<CustomerInfo, BackendError>?> = nil
+        let secondResult: Atomic<Result<CustomerInfo, BackendError>?> = nil
+
+        backend.getCustomerInfo(appUserID: Self.userID, isAppBackgrounded: false) {
+            firstResult.value = $0
+        }
+
+        backend.getCustomerInfo(appUserID: Self.userID, isAppBackgrounded: false) {
+            secondResult.value = $0
+        }
+
+        expect(firstResult.value).toEventuallyNot(beNil())
+        expect(firstResult.value).to(beSuccess())
+        expect(secondResult.value?.value) == firstResult.value?.value
+
+        expect(self.httpClient.calls.map { $0.request.path as? HTTPRequest.Path }) == [path]
+    }
+
+    func testGetCustomerInfoWithVerifiedResponse() throws {
+        self.httpClient.mock(
+            requestPath: .getCustomerInfo(appUserID: Self.userID),
+            response: .init(statusCode: .success, response: Self.validCustomerResponse, verificationResult: .verified)
+        )
+
+        let customerInfo = waitUntilValue { completed in
+            self.backend.getCustomerInfo(appUserID: Self.userID, isAppBackgrounded: false, completion: completed)
+        }
+
+        expect(customerInfo).to(beSuccess())
+        expect(customerInfo?.value?.entitlements.verification) == .verified
+    }
+
+    func testGetCustomerInfoWithFailedVerification() throws {
+        self.httpClient.mock(
+            requestPath: .getCustomerInfo(appUserID: Self.userID),
+            response: .init(statusCode: .success,
+                            response: Self.validCustomerResponse,
+                            verificationResult: .failed)
+        )
+
+        let customerInfo = waitUntilValue { completed in
+            self.backend.getCustomerInfo(appUserID: Self.userID, isAppBackgrounded: false, completion: completed)
+        }
+
+        expect(customerInfo).to(beSuccess())
+        expect(customerInfo?.value?.entitlements.verification) == .failed
+    }
+
+    func testUpdatesRequestDateFromResponseHeader() {
+        let requestDate = Date().addingTimeInterval(-10000)
+
+        self.httpClient.mock(
+            requestPath: .getCustomerInfo(appUserID: Self.userID),
+            response: .init(
+                statusCode: .success,
+                response: Self.validCustomerResponse,
+                responseHeaders: [
+                    HTTPClient.ResponseHeader.requestDate.rawValue: String(requestDate.millisecondsSince1970)
+                ]
+            )
+        )
+
+        let response = waitUntilValue { completed in
+            self.backend.getCustomerInfo(appUserID: Self.userID, isAppBackgrounded: false, completion: completed)
+        }
+
+        expect(response).to(beSuccess())
+        expect(response?.value?.requestDate).to(beCloseTo(requestDate, within: 0.01))
+    }
+
+    private func postReceipt(appUserID: String) {
+        self.backend.post(receipt: .receipt("a receipt".asData),
+                          productData: nil,
+                          transactionData: .init(presentedOfferingContext: nil,
+                                                 unsyncedAttributes: nil,
+                                                 storeCountry: nil),
+                          postReceiptSource: .init(isRestore: false, initiationSource: .queue),
+                          observerMode: false,
+                          originalPurchaseCompletedBy: nil,
+                          appUserID: appUserID) { _ in }
+    }
+
+}
+
+class BackendGetCustomerInfoSignatureTests: BaseBackendTests {
+
+    override var verificationMode: Configuration.EntitlementVerificationMode {
+        return .informational
+    }
+
+    override func createClient() -> MockHTTPClient {
+        super.createClient(#file)
+    }
+
+    func testSendsNonceWhenEnabled() {
+        self.httpClient.mock(
+            requestPath: .getCustomerInfo(appUserID: Self.userID),
+            response: .init(statusCode: .success, response: Self.validCustomerResponse)
+        )
+
+        let result = waitUntilValue { completed in
+            self.backend.getCustomerInfo(appUserID: Self.userID, isAppBackgrounded: false, completion: completed)
+        }
+        let request = self.httpClient.calls.onlyElement
+
+        expect(result).to(beSuccess())
+        expect(request?.request.nonce).toNot(beNil())
+    }
+
+}

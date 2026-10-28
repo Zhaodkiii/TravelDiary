@@ -1,0 +1,369 @@
+//
+//  Copyright RevenueCat Inc. All Rights Reserved.
+//
+//  Licensed under the MIT License (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      https://opensource.org/licenses/MIT
+//
+//  BottomSheetView.swift
+//
+//  Created by Will Taylor on 5/5/25.
+
+import SwiftUI
+#if os(iOS) || os(visionOS)
+import UIKit
+#endif
+
+@_spi(Internal) import RevenueCat
+
+#if !os(tvOS) // For Paywalls V2
+
+/// A view that presents content in a sheet-like interface with customizable height and background.
+///
+/// This view is designed to be used as a bottom sheet that slides up from the bottom of the screen.
+/// It provides a scrollable container for its content with a fixed height and customizable background color.
+///
+/// - Note: This view is typically used in conjunction with ``BottomSheetOverlayModifier`` to present
+///   content in a sheet-like interface.
+///
+
+@available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
+struct SheetViewModel: Equatable {
+    let sheet: RevenueCat.PaywallComponent.ButtonComponent.Sheet
+    let sheetStackViewModel: StackComponentViewModel
+
+    static func == (lhs: SheetViewModel, rhs: SheetViewModel) -> Bool {
+        lhs.sheet.id == rhs.sheet.id
+    }
+}
+
+/// Decides whether a sheet's content should be visible yet.
+///
+/// Content is added hidden and only slides in after one layout pass, so components that measure
+/// themselves on first layout (the carousel) are not resized mid-animation. Pure so it can be
+/// unit tested, like ``ImageRenderPlan``.
+struct SheetPresentationPlan: Equatable {
+
+    /// True once the requested sheet has completed its first layout pass.
+    let isPresented: Bool
+
+    /// Presented only when the requested sheet is the one that has settled.
+    static func make(requestedSheetID: String?, settledSheetID: String?) -> SheetPresentationPlan {
+        guard let requestedSheetID else {
+            return SheetPresentationPlan(isPresented: false)
+        }
+
+        return SheetPresentationPlan(isPresented: requestedSheetID == settledSheetID)
+    }
+
+    /// Dismissing or switching sheets clears the settled id; re-requesting the settled sheet keeps it.
+    static func settledSheetID(afterRequesting requestedSheetID: String?, previous: String?) -> String? {
+        guard let requestedSheetID else {
+            return nil
+        }
+
+        return requestedSheetID == previous ? previous : nil
+    }
+
+    /// A sheet re-requested while its content is still mounted (dismissal in flight) keeps the same
+    /// view identity, so `onAppear` does not fire again and the settle must be scheduled elsewhere.
+    static func reusesMountedContent(requestedSheetID: String?, mountedSheetID: String?) -> Bool {
+        guard let requestedSheetID else {
+            return false
+        }
+
+        return requestedSheetID == mountedSheetID
+    }
+}
+
+/// A view modifier that presents content in a sheet-like interface.
+///
+/// This modifier handles the presentation and dismissal of a sheet view, including
+/// the animation and tap-to-dismiss behavior.
+@available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
+struct BottomSheetOverlayModifier: ViewModifier {
+    @Binding var sheetViewModel: SheetViewModel?
+    let safeAreaInsets: EdgeInsets
+    let onSheetContentAppear: (() -> Void)?
+
+    @Environment(\.workflowRenderingContext) private var workflowRenderingContext
+
+    @State private var parentHeight: CGFloat?
+
+    /// Sheet whose content has completed its first layout pass. See ``SheetPresentationPlan``.
+    @State private var settledSheetID: String?
+
+    /// Sheet whose content is currently in the hierarchy, including while its removal animates out.
+    @State private var mountedSheetID: String?
+
+    private static let presentationAnimation = Animation.spring(response: 0.35, dampingFraction: 1)
+
+    init(
+        sheetViewModel: Binding<SheetViewModel?>,
+        safeAreaInsets: EdgeInsets,
+        onSheetContentAppear: (() -> Void)?
+    ) {
+        self._sheetViewModel = sheetViewModel
+        self.safeAreaInsets = safeAreaInsets
+        self.onSheetContentAppear = onSheetContentAppear
+        // A sheet that is already requested when the overlay is created has nothing to slide in from.
+        self._settledSheetID = State(initialValue: sheetViewModel.wrappedValue?.sheet.id)
+    }
+
+    private func presentationPlan(for sheetViewModel: SheetViewModel) -> SheetPresentationPlan {
+        SheetPresentationPlan.make(
+            requestedSheetID: sheetViewModel.sheet.id,
+            settledSheetID: self.settledSheetID
+        )
+    }
+
+    /// A sheet is not a new screen to UIKit, so VoiceOver holds its focus until told otherwise.
+    private static func announceScreenChange() {
+#if os(iOS) || os(visionOS)
+        UIAccessibility.post(notification: .screenChanged, argument: nil)
+#endif
+    }
+
+    /// One hop so the content's own measurements land before anything moves.
+    private func settleAfterLayout(sheetID: String) {
+        DispatchQueue.main.async {
+            guard self.sheetViewModel?.sheet.id == sheetID else { return }
+            withAnimation(Self.presentationAnimation) {
+                self.settledSheetID = sheetID
+            }
+            Self.announceScreenChange()
+        }
+    }
+
+    var sheetHeight: CGFloat? {
+        guard let size = self.sheetViewModel?.sheet.size else {
+            return nil
+        }
+
+        switch size.height {
+        case .fit, .fill:
+            return nil
+        case .fixed(let height):
+            return CGFloat(height)
+        case .relative(let percent, _):
+            guard let parentHeight = self.parentHeight else {
+                return nil
+            }
+            return parentHeight * percent
+        }
+    }
+
+    func body(content: Content) -> some View {
+        ZStack {
+            content
+                .blur(radius: sheetViewModel?.sheet.backgroundBlur == true ? 10 : 0)
+                .animation(.easeInOut(duration: 0.25), value: sheetViewModel?.sheet.backgroundBlur)
+                // Blur is visual only: without this VoiceOver still walks what is behind.
+                .accessibilityHidden(self.sheetViewModel != nil)
+
+            // Invisible tap area that covers the screen
+            if sheetViewModel != nil {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        sheetViewModel = nil
+                    }
+                    // Nothing to announce: dismissal is reachable from inside the sheet.
+                    .accessibilityHidden(true)
+            }
+
+            // Sheet content
+            VStack {
+                Spacer()
+                if let sheetViewModel {
+                    StackComponentView(
+                        viewModel: sheetViewModel.sheetStackViewModel,
+                        onDismiss: {
+                            self.sheetViewModel = nil
+                        },
+                        additionalPadding: EdgeInsets(
+                            top: 0,
+                            leading: 0,
+                            bottom: safeAreaInsets.bottom,
+                            trailing: 0
+                        )
+                    )
+                    // Dismissal in here closes the sheet, so a `navigate_back` button must not
+                    // inherit the workflow's back stack or handler. Its label and tap both refer
+                    // to the sheet's local dismissal.
+                    .environment(
+                        \.workflowRenderingContext,
+                        self.workflowRenderingContext.withoutBackNavigation()
+                    )
+                    .environment(
+                        \.workflowNavigateBackHandler,
+                        nil
+                    )
+                    .applyIfLet(self.sheetHeight, apply: { view, height in
+                        view.frame(height: height)
+                    })
+                    // Hidden until the first layout pass has settled, then animated in.
+                    .offset(y: self.presentationPlan(for: sheetViewModel).isPresented ? 0 : (self.parentHeight ?? 2000))
+                    .opacity(self.presentationPlan(for: sheetViewModel).isPresented ? 1 : 0)
+                    .transition(.asymmetric(
+                        insertion: .identity,
+                        removal: .move(edge: .bottom).combined(with: .opacity)
+                    ))
+                    .onAppear {
+                        self.onSheetContentAppear?()
+                        self.mountedSheetID = sheetViewModel.sheet.id
+                        self.settleAfterLayout(sheetID: sheetViewModel.sheet.id)
+                    }
+                    .onDisappear {
+                        if self.mountedSheetID == sheetViewModel.sheet.id {
+                            self.mountedSheetID = nil
+                        }
+                        // Hand focus back to the paywall. Skipped when another sheet took its
+                        // place, since that one announces itself once it settles.
+                        if self.sheetViewModel == nil {
+                            Self.announceScreenChange()
+                        }
+                    }
+                    // A sheet need not author a close button, so without this a screen reader
+                    // could have no way out.
+                    .accessibilityAction(.escape) {
+                        self.sheetViewModel = nil
+                    }
+                    // Tie the sheet content's identity to the sheet's `id` so that
+                    // switching to a different sheet disposes the previous sheet's
+                    // content and builds the new one from scratch, instead of reusing
+                    // the views positionally. Without this, a rapid dismiss→open reuses
+                    // the same view identity while the dismiss animation is still in
+                    // flight, and media such as a video from the previous sheet keeps
+                    // playing in the newly-opened sheet.
+                    .id(sheetViewModel.sheet.id)
+                }
+            }
+            .background(
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear {
+                            self.parentHeight = proxy.size.height
+                        }
+                        .onChangeOf(proxy.size.height) { height in
+                            self.parentHeight = height
+                        }
+                }
+            )
+            .animation(Self.presentationAnimation, value: sheetViewModel)
+            .onChangeOf(self.sheetViewModel?.sheet.id) { newID in
+                self.settledSheetID = SheetPresentationPlan.settledSheetID(
+                    afterRequesting: newID,
+                    previous: self.settledSheetID
+                )
+                // Reopened mid-dismissal: the same content is reused, so `onAppear` won't run again.
+                if let newID,
+                   self.settledSheetID == nil,
+                   SheetPresentationPlan.reusesMountedContent(requestedSheetID: newID,
+                                                              mountedSheetID: self.mountedSheetID) {
+                    self.onSheetContentAppear?()
+                    self.settleAfterLayout(sheetID: newID)
+                }
+            }
+        }
+    }
+}
+
+@available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
+extension View {
+    /// Presents a sheet view when a binding to a Boolean value is true.
+    ///
+    /// Use this modifier to present a sheet view that slides up from the bottom of the screen.
+    /// The sheet can be dismissed by setting the binding to `false` or by tapping outside
+    /// the sheet (if `tapOutsideToDismiss` is enabled in the configuration).
+    ///
+    /// - Parameters:
+    ///   - sheet: A binding to a SheetViewModel value that determines whether to present the sheet.
+    ///   - content: A closure that returns the content of the sheet.
+    ///
+    /// - Returns: A view that presents the sheet when `isPresented` is true.
+    func bottomSheet(
+        sheet: Binding<SheetViewModel?>,
+        safeAreaInsets: EdgeInsets,
+        onSheetContentAppear: (() -> Void)? = nil
+    ) -> some View {
+        self.modifier(
+            BottomSheetOverlayModifier(
+                sheetViewModel: sheet,
+                safeAreaInsets: safeAreaInsets,
+                onSheetContentAppear: onSheetContentAppear
+            )
+        )
+    }
+}
+
+#if DEBUG
+@available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
+struct BottomSheetViewTestView: View {
+    @State private var sheetViewModel: SheetViewModel? = .init(
+        sheet: PaywallComponent.ButtonComponent.Sheet(
+            id: "exampleSheet",
+            name: nil,
+            stack: .init(
+                components: [
+                    PaywallComponent.text(
+                        PaywallComponent.TextComponent(
+                            text: "buttonText",
+                            color: .init(light: .hex("#000000"))
+                        )
+                    )
+                ],
+                backgroundColor: nil
+            ),
+            backgroundBlur: false,
+            size: .init(width: .fill, height: .fit(nil))
+        ),
+        // swiftlint:disable:next force_try
+        sheetStackViewModel: try! .init(component: .init(
+            components: [
+                PaywallComponent.text(
+                    PaywallComponent.TextComponent(
+                        text: "buttonText",
+                        color: .init(light: .hex("#000000"))
+                    )
+                )
+            ],
+            backgroundColor: .init(light: .hex("#FFFFFF"))
+        ), localizationProvider: .init(
+            locale: Locale.current,
+            localizedStrings: [
+                "buttonText": PaywallComponentsData.LocalizationData.string("Do something")
+            ]
+        ), colorScheme: .light
+        )
+    )
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                Color.gray.opacity(0.2)
+
+                VStack {
+                    Text("This view will have a sheet over it")
+                        .bottomSheet(
+                            sheet: $sheetViewModel,
+                            safeAreaInsets: proxy.safeAreaInsets,
+                            onSheetContentAppear: nil
+                        )
+                }
+            }
+            .edgesIgnoringSafeArea(.all)
+        }
+        .previewRequiredPaywallsV2Properties()
+    }
+}
+
+@available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
+struct BottomSheetView_Previews: PreviewProvider {
+    static var previews: some View {
+        BottomSheetViewTestView()
+    }
+}
+#endif
+#endif
