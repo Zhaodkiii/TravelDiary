@@ -7,7 +7,7 @@
 | 字体 | 版本 | 上游来源 | 文件 |
 |---|---:|---|---|
 | 霞鹜文楷（现有） | 1.522 | https://github.com/lxgw/LxgwWenKai | `fonts/LXGWWenKai-Regular.ttf` |
-| 马善政毛笔楷书 | 2.003 | https://github.com/googlefonts/mashanzheng | `fonts/MaShanZheng-Regular.ttf` |
+| 马善政毛笔楷书 | 2.003 | https://fonts.google.com/specimen/Ma+Shan+Zheng | `fonts/MaShanZheng-Regular.ttf` |
 | 龙藏体 | 2.001 | https://github.com/googlefonts/longcang | `fonts/LongCang-Regular.ttf` |
 | 钟齐流江毛草 | 1.003 | https://github.com/googlefonts/liujianmaocao | `fonts/LiuJianMaoCao-Regular.ttf` |
 | 霞鹜臻楷 GB | 0.800.2 | https://github.com/lxgw/LxgwZhenKai/releases/tag/v0.800.2 | `fonts/LXGWZhenKaiGB-Regular.ttf` |
@@ -26,3 +26,5 @@
 ## 完整性与更新
 
 `catalog.json` 中的 `sha256` 是每个 TTF 文件的 SHA-256。字体目录采用延迟校验和注册：用户打开字体选择器时先读取轻量目录，仅在字体预览或使用时验证对应文件，避免一次性加载所有大型中文字库。替换字体文件时必须同时更新 catalog 中的版本和 SHA-256。
+
+马善政毛笔楷书于 2026-10-28 更新为用户从 Google Fonts 下载的完整 TTF（内置版本仍为 2.003），同时收录下载包中的原始 `OFL.txt` 至 `licenses/mashanzheng-OFL.txt`。保留现有字体 ID 和版本引用，兼容已有作品。

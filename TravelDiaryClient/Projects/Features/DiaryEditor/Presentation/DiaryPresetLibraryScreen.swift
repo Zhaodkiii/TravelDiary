@@ -59,12 +59,14 @@ struct DiaryPresetLibraryScreen: View {
                         onPageAdded: onPageAdded, showsInlineSearch: false, initialCatalog: remote ?? initialCatalog,
                         fixedContentKind: "album", showsCatalogTabs: false, catalogLoader: catalogLoader).tag("相册")
                     StickerGalleryScreen(showsPersonalLibrary: false).tag("贴纸")
+                    FontGalleryScreen(embedded: true).tag("字体")
                 }.tabViewStyle(.page(indexDisplayMode: .never))
             }
         } else { templateBody }
         }
         // 分页容器不具备书架 ScrollView 的顶部背景延伸，显式覆盖安全区域。
         .background(DiaryLibraryStyle.background.ignoresSafeArea())
+        .navigationTitle(screenTitle)
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             if showsInlineSearch {
@@ -72,6 +74,8 @@ struct DiaryPresetLibraryScreen: View {
                     NavigationLink {
                         if catalogTab == "贴纸" && !singlePageOnly && fixedSeriesID == nil {
                             StickerGalleryScreen(isSearchPage: true).toolbar(.hidden, for: .tabBar)
+                        } else if catalogTab == "字体" && !singlePageOnly && fixedSeriesID == nil {
+                            FontGalleryScreen().toolbar(.hidden, for: .tabBar)
                         } else {
                             DiaryPresetSearchScreen(ownerID: ownerID, searchText: $searchQuery,
                                 initialCatalog: remote ?? initialCatalog, fixedSeriesID: fixedSeriesID,
@@ -79,7 +83,7 @@ struct DiaryPresetLibraryScreen: View {
                                 catalogLoader: catalogLoader).toolbar(.hidden, for: .tabBar)
                         }
                     } label: { Image(systemName: "magnifyingglass") }
-                        .accessibilityLabel(catalogTab == "贴纸" ? "搜索贴纸" : catalogTab == "相册" ? "搜索相册" : "搜索模板")
+                        .accessibilityLabel(catalogTab == "字体" ? "搜索字体" : catalogTab == "贴纸" ? "搜索贴纸" : catalogTab == "相册" ? "搜索相册" : "搜索模板")
                 }
             }
             if showsCatalogTabs && !singlePageOnly && fixedSeriesID == nil {
@@ -87,6 +91,7 @@ struct DiaryPresetLibraryScreen: View {
                     Menu("我的素材", systemImage: "tray") {
                         NavigationLink { PresetDownloadCenter(ownerID: ownerID) } label: { Label("模板下载", systemImage: "arrow.down.circle") }
                         NavigationLink { StickerGalleryScreen(mine: true) } label: { Label("贴纸收藏", systemImage: "heart") }
+                        NavigationLink { FontGalleryScreen(mine: true) } label: { Label("我的字体", systemImage: "textformat") }
                     }
                 }
             }
@@ -950,7 +955,7 @@ struct DiaryImportFloatingActions<Content: View>: View {
 private struct DiaryMaterialTabHeader: View {
     @Binding var selection: String
     @Namespace private var indicator
-    private let tabs = ["模板", "相册", "贴纸"]
+    private let tabs = ["模板", "相册", "贴纸", "字体"]
 
     var body: some View {
         HStack(spacing: 0) {

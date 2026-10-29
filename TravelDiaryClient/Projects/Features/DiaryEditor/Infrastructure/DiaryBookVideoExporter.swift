@@ -52,7 +52,7 @@ enum DiaryBookVideoExporter {
                     guard let page else { leaves.append(nil); continue }
                     let loaded = try await store.loadPDFSource(page)
                     let fonts = loaded.document.objects.values.flatMap { $0.layers.compactMap(\.font) }
-                    await DiaryFontCatalog.shared.prewarm(fonts)
+                    await DiaryFontCatalog.shared.prewarm(fonts, documentID: loaded.document.id)
                     try Task.checkCancellation()
                     fallback = fallback || fonts.contains { !DiaryFontCatalog.shared.available($0) }
                     leaves.append(DiaryBookImageExporter.renderPage(loaded.document, images: loaded.images, longestEdge: width))

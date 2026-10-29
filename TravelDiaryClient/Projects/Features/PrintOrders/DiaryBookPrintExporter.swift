@@ -77,7 +77,7 @@ enum DiaryBookPrintExporter {
                 try Task.checkCancellation()
                 let loaded = try await source.loadPDFSource(page)
                 let fonts = loaded.document.objects.values.flatMap { $0.layers.filter { $0.kind == .text }.compactMap(\.font) }
-                await DiaryFontCatalog.shared.prewarm(fonts)
+                await DiaryFontCatalog.shared.prewarm(fonts, documentID: loaded.document.id)
                 guard !fonts.contains(where: { !DiaryFontCatalog.shared.available($0) }) else { throw PrintFailure("\(role == "cover" ? "外壳" : "内页")第 \(index+1) 面存在缺失字体，请修复后再印制") }
                 let design = loaded.document.root.referenceSize
                 guard proportionDifference(design, product: product) <= 0.15 + 0.000001 else {

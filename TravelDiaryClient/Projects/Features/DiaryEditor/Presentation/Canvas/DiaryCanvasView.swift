@@ -190,8 +190,9 @@ final class DiaryCanvasSurface: UIView {
     private func scheduleRasters() {
         renderTask?.cancel()
         let fonts = renderCache.document.objects.values.flatMap { $0.layers.compactMap(\.font) }
+        let fontDocumentID = renderCache.document.id
         renderTask = Task { @MainActor [weak self] in
-            await DiaryFontCatalog.shared.prewarm(fonts)
+            await DiaryFontCatalog.shared.prewarm(fonts, documentID: fontDocumentID)
             // 逐个提交对象预览，在对象之间让出主线程，避免一次生成整页大位图。
             while !Task.isCancelled {
                 guard let self else { return }

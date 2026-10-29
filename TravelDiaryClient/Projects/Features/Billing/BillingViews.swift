@@ -175,7 +175,7 @@ struct DiamondOwnershipScreen: View {
     var body: some View {
         SupportCanvas {
             ForEach(items) { item in
-                VStack(alignment: .leading) { Text(item.target_kind == "template" ? "已解锁手帐模板" : "已解锁贴纸包"); Text(item.target_id).font(.caption).textSelection(.enabled) }.padding().feedbackPaperCard()
+                VStack(alignment: .leading) { Text(item.target_kind == "template" ? "已解锁手帐模板" : item.target_kind == "font" ? "已解锁字体" : "已解锁贴纸包"); Text(item.target_id).font(.caption).textSelection(.enabled) }.padding().feedbackPaperCard()
             }
             if items.isEmpty { Text("暂无永久解锁内容") }
             if let error { Text(error) }

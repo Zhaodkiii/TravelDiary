@@ -25,6 +25,7 @@ struct DiaryTextEditorSheet: View {
     @State private var styleSection: TextStyleSection
     @State private var category = ""
     @State private var search = ""
+    @State private var showFontGallery = false
     @State private var ready = false
     @State private var error: String?
     @State private var saving = false
@@ -83,9 +84,17 @@ struct DiaryTextEditorSheet: View {
         .task {
             DiaryFontCatalog.shared.prepare()
             keyboard = tab == .content
-            await DiaryFontCatalog.shared.prewarm(DiaryFontCatalog.shared.entries.map(\.reference))
+            await DiaryFontCatalog.shared.prewarm([draft.layer.font ?? .system])
             guard !Task.isCancelled else { return }
             ready = true; draft.refresh()
+        }
+        .sheet(isPresented: $showFontGallery) {
+            NavigationStack {
+                FontGalleryScreen(documentID: session.document.id) { reference in
+                    guard showFontGallery, !committed else { return }
+                    draft.layer.font = reference; showFontGallery = false
+                }.toolbar { ToolbarItem(placement: .topBarLeading) { Button("返回编辑器") { showFontGallery = false } } }
+            }
         }
         .alert("文字编辑", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             if committed {
@@ -234,6 +243,7 @@ struct DiaryTextEditorSheet: View {
 
     private var fonts: some View {
         VStack(spacing: 8) {
+            Button("字体集市 · 我的字体") { keyboard = false; showFontGallery = true }
             Picker("字体分类", selection: $category) {
                 Text("全部").tag("")
                 Text("手写").tag("handwriting")
@@ -245,7 +255,7 @@ struct DiaryTextEditorSheet: View {
                 ScrollView {
                     LazyVStack(spacing: 6) {
                         ForEach(DiaryFontCatalog.shared.entries.filter {
-                            (category.isEmpty || $0.category == category) && (search.isEmpty || $0.displayName.localizedCaseInsensitiveContains(search))
+                            ($0.category != "cloud") && (category.isEmpty || $0.category == category) && (search.isEmpty || $0.displayName.localizedCaseInsensitiveContains(search))
                         }) { entry in
                             Button { draft.layer.font = entry.reference } label: {
                                 HStack {
@@ -272,6 +282,7 @@ struct DiaryTextEditorSheet: View {
     private func save() {
         guard !saving else { return }
         if !committed {
+            if let font = draft.layer.font { CloudFontRepository.shared.recordUse(font) }
             guard session.commitTextDraft(draft.layer, targetID: draft.targetID) else {
                 error = session.errorMessage ?? "暂时无法保存文字，请重试。"; return
             }

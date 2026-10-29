@@ -26,6 +26,11 @@ struct SettingsView: View {
                 }.padding(20).frame(maxWidth: .infinity, alignment: .leading).feedbackPaperCard()
             }.buttonStyle(.plain).accessibilityHint("打开账户管理")
             VStack(alignment: .leading, spacing: 10) {
+                sectionTitle("我的资源")
+                MainNavigationLink { FontGalleryScreen(mine: true) } label: { SupportNavigationRow(title: "我的字体", symbol: "textformat", detail: "已获取、收藏与最近使用") }.buttonStyle(.plain).feedbackPaperCard()
+                MainNavigationLink { StickerGalleryScreen(mine: true) } label: { SupportNavigationRow(title: "我的贴纸", symbol: "heart", detail: "贴纸包与收藏") }.buttonStyle(.plain).feedbackPaperCard()
+                MainNavigationLink { FontGalleryScreen() } label: { SupportNavigationRow(title: "字体集市", symbol: "textformat.abc", detail: "发现适合旅途记录的字体") }.buttonStyle(.plain).feedbackPaperCard()
+                MainNavigationLink { FontStorageScreen() } label: { SupportNavigationRow(title: "字体存储", symbol: "internaldrive", detail: "查看字体下载与占用空间") }.buttonStyle(.plain).feedbackPaperCard()
                 sectionTitle("通用")
                 MainNavigationLink {
                     StorageManagementScreen(owner: String(session.accountID), service: storageService).id(session.accountID)

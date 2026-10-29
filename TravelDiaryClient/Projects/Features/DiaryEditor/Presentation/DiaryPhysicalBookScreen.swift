@@ -387,12 +387,16 @@ struct DiaryPhysicalBookScreen: View {
 struct DiaryBindingRings: View {
     var body: some View {
         GeometryReader { geometry in
-            // 九扣按三组三枚排列；固定在书脊，翻页时不跟随纸张旋转。
-            ForEach(0..<9) { index in
-                let fraction = DiaryBookSpine.ringPositions[index]
-                Image("DiaryBookRing").resizable().scaledToFit()
-                    .frame(width: min(geometry.size.width * 0.075, 56))
-                    .position(x: geometry.size.width / 2, y: geometry.size.height * fraction)
+            // 关闭时保留透明视口，让视频导出的独立装订层仍有有效尺寸。
+            Color.clear
+            if DiaryBookAppearance.showsBindingRings {
+                // 九扣按三组三枚排列；固定在书脊，翻页时不跟随纸张旋转。
+                ForEach(0..<9) { index in
+                    let fraction = DiaryBookSpine.ringPositions[index]
+                    Image("DiaryBookRing").resizable().scaledToFit()
+                        .frame(width: min(geometry.size.width * 0.075, 56))
+                        .position(x: geometry.size.width / 2, y: geometry.size.height * fraction)
+                }
             }
         }
     }

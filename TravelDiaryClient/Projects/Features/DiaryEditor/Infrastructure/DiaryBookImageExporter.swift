@@ -31,7 +31,7 @@ enum DiaryBookImageExporter {
         func render(_ page: DiaryPageEntry) async throws -> UIImage {
             let loaded = try await store.loadPDFSource(page)
             let fonts = loaded.document.objects.values.flatMap { $0.layers.compactMap(\.font) }
-            await DiaryFontCatalog.shared.prewarm(fonts)
+            await DiaryFontCatalog.shared.prewarm(fonts, documentID: loaded.document.id)
             try Task.checkCancellation()
             fallback = fallback || fonts.contains { !DiaryFontCatalog.shared.available($0) }
             return renderPage(loaded.document, images: loaded.images, longestEdge: 3000)

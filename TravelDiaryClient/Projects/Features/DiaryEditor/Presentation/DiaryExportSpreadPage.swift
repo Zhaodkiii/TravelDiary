@@ -57,7 +57,7 @@ struct DiaryExportSpreadPage: View {
                 for page in pair {
                     if let page {
                         let loaded = try await store.loadPDFSource(page)
-                        await DiaryFontCatalog.shared.prewarm(loaded.document.objects.values.flatMap { $0.layers.compactMap(\.font) })
+                        await DiaryFontCatalog.shared.prewarm(loaded.document.objects.values.flatMap { $0.layers.compactMap(\.font) }, documentID: loaded.document.id)
                         try Task.checkCancellation()
                         leaves.append(DiaryBookImageExporter.renderPage(loaded.document, images: loaded.images, longestEdge: 400))
                     } else { leaves.append(nil) }
