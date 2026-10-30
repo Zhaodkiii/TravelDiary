@@ -5,6 +5,7 @@ struct DiaryEditorHomeView: View {
     let ownerID: String
     @Binding var path: NavigationPath
     @Binding var creating: Bool
+    var bookTransition: Namespace.ID? = nil
     var onBrowseTemplates: (() -> Void)? = nil
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var books: [DiaryBook] = []
@@ -158,12 +159,13 @@ struct DiaryEditorHomeView: View {
     }
     private func bookCard(_ book: DiaryBook) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button { path.append(DiaryBookRoute(bookID: book.id)) } label: {
+            Button { path.append(DiaryBookRoute(bookID: book.id, zoomFromShelf: true)) } label: {
                 VStack(alignment: .leading, spacing: 12) {
                     cover(book).aspectRatio(3.0 / 4, contentMode: .fit)
                     Text(book.title).font(.headline).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }.contentShape(Rectangle())
+                    .contentZoomSource(id: book.id, in: bookTransition)
             }.buttonStyle(.plain).accessibilityLabel("打开手帐，\(book.title)")
             HStack(alignment: .top, spacing: 4) {
                 Text("\(book.contentPages.count) 页 · \(updatedLabel(book.updatedAt))")

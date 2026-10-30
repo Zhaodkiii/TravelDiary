@@ -120,7 +120,7 @@ struct ModelsSettingsView: View {
                             Label(L10n.text("ai_settings.models.menu.add_agent"), systemImage: "person.crop.circle.badge.plus")
                         }
 
-                        MainNavigationLink {
+                        NavigationLink {
                             ModelsAdvancedEditorView(
                                 models: Binding(
                                     get: { viewModel.snapshot.allModels },

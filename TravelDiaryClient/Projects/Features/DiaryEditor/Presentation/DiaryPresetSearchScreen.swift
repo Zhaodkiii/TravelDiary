@@ -41,7 +41,7 @@ struct DiaryPresetSearchScreen: View {
     var body: some View {
         if onBookOpened == nil {
             searchBody.navigationDestination(item: Binding<UUID?>(get: { importedBook?.id }, set: { if $0 == nil { importedBook = nil } })) { bookID in
-                DiaryBookDestination(ownerID: ownerID, bookID: bookID).toolbar(.hidden, for: .tabBar)
+                DiaryBookDestination(ownerID: ownerID, bookID: bookID)
             }
         } else { searchBody }
     }
@@ -141,11 +141,11 @@ struct DiaryPresetSearchScreen: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("template-search-result-\(entry.id)")
             } else {
-                NavigationLink {
+                ZoomNavigationLink {
                 DiaryStablePresetDestination(item: PresetLibraryItem(id: entry.template_id,
                     local: downloads.completeCachedPackage(for: entry.book), remote: entry.book),
                     ownerID: ownerID, seriesTitle: entry.series, targetBook: nil, targetAfterPageID: nil, fixedTarget: false,
-                    onImported: { openBook($0) }).toolbar(.hidden, for: .tabBar)
+                    onImported: { openBook($0) })
                 } label: { resultCard(entry) }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("template-search-result-\(entry.id)")

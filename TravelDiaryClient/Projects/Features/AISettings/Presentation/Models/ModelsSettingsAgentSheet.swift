@@ -67,7 +67,7 @@ struct ModelsSettingsAgentSheet: View {
                     onTextInput: { showTextInputDrawer = true }
                 )
 
-                MainNavigationLink {
+                NavigationLink {
                     MultiSelectOptionsView(
                         title: L10n.text("ai_settings.models.agent.related_tasks.title", fallback: "Related small tasks", comment: "关联小任务选择页标题"),
                         options: smallTasks.map { ($0.code, L10n.format("ai_settings.models.agent.related_tasks.option_format", fallback: "%@ (%@)", comment: "关联小任务选项格式", $0.name, $0.code)) },
@@ -99,7 +99,7 @@ struct ModelsSettingsAgentSheet: View {
             }
 
             Section(L10n.text("ai_settings.models.online.section.usage", comment: "使用场景与工具")) {
-                MainNavigationLink {
+                NavigationLink {
                     ModelScenarioBindingsEditorView(
                         scenarioBindings: $draftScenarioBindings,
                         modelID: editingAgent?.id ?? draftAgentID,
@@ -124,7 +124,7 @@ struct ModelsSettingsAgentSheet: View {
                     }
                 }
 
-                MainNavigationLink {
+                NavigationLink {
                     GroupedToolSelectionView(
                         title: L10n.text("common.tools", comment: "工具"),
                         selectedValues: $selectedToolNames

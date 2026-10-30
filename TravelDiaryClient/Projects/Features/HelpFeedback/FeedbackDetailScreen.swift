@@ -60,7 +60,6 @@ struct FeedbackDetailScreen: View {
                 }.padding(.horizontal, 20).padding(.vertical, 12).background(.regularMaterial)
             }
         }
-        .toolbar(.hidden, for: .tabBar)
         .toolbar {
             if ticket?.allowed_actions.contains("close") == true {
                 ToolbarItem(placement: .topBarTrailing) {

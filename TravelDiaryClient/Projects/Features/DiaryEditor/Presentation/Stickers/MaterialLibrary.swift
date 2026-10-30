@@ -182,6 +182,7 @@ struct MaterialLibraryBrowser: View {
     @State private var paginationFilter = ""
     @State private var selectedGalleryItem: CloudMaterial?
     @State private var showGallery = false
+    @State private var showMaker = false
     @State private var showFilters = false
     @State private var showAllPacks = false
     @State private var searchScope = "本包"
@@ -229,7 +230,7 @@ struct MaterialLibraryBrowser: View {
         var result = [("", "全部")] + taxonomy
             .filter { ($0.kind == "background") == (type == "background") }
             .map { ($0.kind, $0.title) }
-        if type == "sticker", session != nil { result.append(("frames", "相框")); result.append(("builtin", "内置")) }
+        if type == "sticker", session != nil { result.append(("frames", "相框")) }
         return result
     }
     private var filterKey: String { query + "|" + kind + "|" + subcategory + "|" + source + "|" + (selectedLibrary?.id ?? "") + "|" + searchScope }
@@ -237,7 +238,8 @@ struct MaterialLibraryBrowser: View {
     private var isStickerPicker: Bool { session != nil && type == "sticker" }
     private var isCompact: Bool { isStickerPicker && sheetDetent == Self.compactDetent }
     private var contextTitle: String {
-        if isLocal { return "内置贴纸" }
+        if kind == "personal" { return "我制作的" }
+        if isLocal { return "历史贴纸" }
         if kind == "frames" { return "相框" }
         return selectedLibrary?.title ?? (source == "我的" ? "单张收藏" : source == "最近" ? "最近使用" : "手帐配套贴纸")
     }
@@ -293,8 +295,11 @@ struct MaterialLibraryBrowser: View {
                                     .accessibilityLabel("\(lib.title)，\(lib.count) 张贴纸")
                                     .accessibilityAddTraits(selectedLibrary?.id == lib.id && kind.isEmpty ? [.isSelected] : [])
                             }
-                            packChip("内置贴纸", symbol: "sparkles", selected: isLocal) {
-                                kind = "builtin"; subcategory = ""; selectedLibrary = nil
+                            packChip("制作", symbol: "scissors", selected: false) { showMaker = true }
+                            if source == "我的" {
+                                packChip("我制作的", symbol: "person.crop.square", selected: kind == "personal") {
+                                    kind = "personal"; selectedLibrary = nil; subcategory = ""
+                                }
                             }
                             if source == "我的" {
                                 Button("全部贴纸包") { showAllPacks = true }.font(.caption).frame(minHeight: 44)
@@ -303,12 +308,12 @@ struct MaterialLibraryBrowser: View {
                     }
                 }
             }
-            if !isCompact && source == "我的" && !query.isEmpty {
+            if !isCompact && kind != "personal" && source == "我的" && !query.isEmpty {
                 Picker("搜索范围", selection: $searchScope) { Text(selectedLibrary == nil ? "单张收藏" : "本包").tag("本包"); Text("我的全部贴纸").tag("我的全部") }
                     .pickerStyle(.segmented).padding(.horizontal, 16)
             }
             if catalog.isOffline { Text("离线缓存").font(.caption).foregroundStyle(.secondary) }
-            if !isCompact {
+            if !isCompact && kind != "personal" {
                 HStack(spacing: 10) {
                     DiaryLibrarySearch(text: $query, prompt: isStickerPicker ? "搜索\(contextTitle)" : "搜索\(title)")
                         .focused($searchFocused)
@@ -336,7 +341,7 @@ struct MaterialLibraryBrowser: View {
                     }.frame(minHeight: 44)
                 }.font(.caption).padding(.horizontal, 16)
             }
-            if (!isCompact && showFilters) || session == nil || type != "sticker" {
+            if kind != "personal" && ((!isCompact && showFilters) || session == nil || type != "sticker") {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(categories, id: \.0) { entry in
@@ -363,7 +368,11 @@ struct MaterialLibraryBrowser: View {
                 }.padding(.horizontal, 16)
             }
             ScrollView {
-                if kind == "frames", let session {
+                if kind == "personal" {
+                    PersonalStickerGrid(query: query, onCreate: { showMaker = true }) { sticker, data in
+                        await insertPersonal(sticker, data: data)
+                    }
+                } else if kind == "frames", let session {
                     DiaryPhotoFrameGrid(session: session, query: query).padding(.horizontal, 16)
                 } else {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: dynamicTypeSize.isAccessibilitySize ? 2 : 4), spacing: 12) {
@@ -408,7 +417,7 @@ struct MaterialLibraryBrowser: View {
                             ContentUnavailableView {
                                 Label(query.isEmpty ? "这里还没有贴纸" : "没有找到贴纸", systemImage: "square.grid.2x2")
                             } description: {
-                                Text(query.isEmpty ? "可以使用内置贴纸，或前往贴纸库挑选。" : "试试其他关键词，或前往贴纸库搜索。")
+                                Text(query.isEmpty ? "可以制作自己的贴纸，或前往贴纸库挑选。" : "试试其他关键词，或前往贴纸库搜索。")
                             } actions: {
                                 Button("浏览贴纸库") { showGallery = true }
                             }
@@ -438,12 +447,19 @@ struct MaterialLibraryBrowser: View {
                 localRecent = UserDefaults.standard.stringArray(forKey: session.store.stickerPreferenceKey + ".recent") ?? []
             }
             await loadSources()
+            if kind == "builtin" { kind = "personal"; source = "我的" }
             await loadCategories()
         }
         .onChange(of: catalog.owner) { _, _ in
             generation=UUID();addition?.cancel();items=[];myLibraries=[];currentLibraries=[];selectedLibrary=nil;localFavorites=[];localRecent=[]
         }
         .onChange(of: catalog.changeID) { _, _ in Task { await loadSources(refresh: true) } }
+        .fullScreenCover(isPresented: $showMaker) {
+            StickerMakerScreen(addsToCanvas: session != nil) { sticker, data in
+                source = "我的"; kind = "personal"; selectedLibrary = nil
+                await insertPersonal(sticker, data: data)
+            }
+        }
         .sheet(isPresented: $showGallery, onDismiss: useSelectedGalleryItem) {
             NavigationStack { StickerGalleryScreen(onUse: { lib in selectedLibrary = lib; source = "我的"; kind = ""; showGallery = false }, onUseItem: { item in selectedGalleryItem = item; showGallery = false }, initialQuery:query, initialMode:query.isEmpty ? "包" : "单张").toolbar { ToolbarItem(placement:.topBarLeading) { Button("返回编辑器") { showGallery=false } } } }
         }
@@ -457,7 +473,7 @@ struct MaterialLibraryBrowser: View {
         .onChange(of: filterKey) { _, _ in
             requestID = UUID(); items = []; cursor = nil; nextCursor = nil
             scrollID = nil; error = nil; lastAddedID = nil; lastAddedName = nil
-            loading = !isLocal && kind != "frames"
+            loading = !isLocal && kind != "personal" && kind != "frames"
         }
         .onChange(of: searchFocused) { _, focused in
             if focused { sheetDetent = .large }
@@ -477,6 +493,19 @@ struct MaterialLibraryBrowser: View {
                 }
             }.padding().presentationDetents([.medium])
         }
+    }
+
+    private func insertPersonal(_ sticker: PersonalSticker, data: Data) async {
+        guard let session else { return }
+        let owner = catalog.owner
+        let documentID = session.document.id
+        let contentID = session.contentID
+        let canCommit = { catalog.owner == owner && session.acceptsMaterialInsertion(documentID: documentID, contentID: contentID, replacingID: replacingID) }
+        let imported: Bool
+        if let replacingID { imported = await session.importPhoto(data, replacing: replacingID, canCommit: canCommit) }
+        else { imported = await session.importPhoto(data, asSticker: true, stickerName: "我制作的贴纸", canCommit: canCommit) }
+        if imported { finishAdding(id: "personal." + sticker.id, name: "我制作的贴纸") }
+        else { error = "贴纸已保存，可从我的贴纸重新添加" }
     }
 
     private func packChip(_ title: String, symbol: String, selected: Bool, action: @escaping () -> Void) -> some View {
@@ -564,7 +593,7 @@ struct MaterialLibraryBrowser: View {
                     source=saved.source;selectedLibrary=saved.library;query=saved.query;kind=saved.kind;subcategory=saved.subcategory;scrollID=saved.scrollID
                 }
                 else if let first = currentLibraries.first { source = "当前手帐"; selectedLibrary = first }
-                else if MaterialRecentStore.items(owner: catalog.owner).isEmpty { kind = "builtin" }
+                else if MaterialRecentStore.items(owner: catalog.owner).isEmpty { source = "我的"; kind = "personal" }
             }
             await loadItems(more: false)
         } catch { self.error = error.localizedDescription }
@@ -579,7 +608,7 @@ struct MaterialLibraryBrowser: View {
         if more { guard !loading, paginationFilter == filterKey, cursor != nil || nextCursor != nil else { return } }
         else { paginationFilter = filterKey }
         if !more { cursor = nil; nextCursor = nil }
-        guard !isLocal && kind != "frames" else { items = []; cursor = nil; loading = false; return }
+        guard !isLocal && kind != "personal" && kind != "frames" else { items = []; cursor = nil; loading = false; return }
         if type == "sticker", session != nil || selectedLibrary != nil {
             await loadStickerItems(more: more); return
         }

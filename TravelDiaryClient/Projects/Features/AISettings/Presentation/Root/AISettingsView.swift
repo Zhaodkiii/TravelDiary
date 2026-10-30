@@ -6,7 +6,7 @@ struct AISettingsView: View {
     var body: some View {
         List {
             Section(L10n.text("ai_settings.section.model")) {
-                MainNavigationLink {
+                NavigationLink {
                     APIKeysSettingsView(viewModel: viewModel)
                 } label: {
                     SettingNavRow(
@@ -16,7 +16,7 @@ struct AISettingsView: View {
                     )
                 }
 
-                MainNavigationLink {
+                NavigationLink {
                     ModelsSettingsView(viewModel: viewModel)
                 } label: {
                     SettingNavRow(
@@ -26,7 +26,7 @@ struct AISettingsView: View {
                     )
                 }
 
-                MainNavigationLink {
+                NavigationLink {
                     AIModelPreferencesView(
                         viewModel: viewModel.makeScenarioModelPreferencesViewModel()
                     )
@@ -40,7 +40,7 @@ struct AISettingsView: View {
             }
 
             Section(L10n.text("ai_settings.section.tools")) {
-                MainNavigationLink {
+                NavigationLink {
                     SmallTasksSettingsView(viewModel: viewModel)
                 } label: {
                     SettingNavRow(
@@ -51,9 +51,8 @@ struct AISettingsView: View {
                 }
 
                 // 当前版本 功能不完善 展示关闭入口
-                MainNavigationLink {
+                NavigationLink {
                     AISearchToolSettingsView(viewModel: viewModel)
-                        .hidesMainTabBarWhenPushed()
                 } label: {
                     SettingNavRow(
                         title: L10n.text("ai_settings.row.search_tools"),
@@ -72,7 +71,6 @@ struct AISettingsView: View {
 //                            await viewModel.persistPromptRepoNow()
 //                        }
 //                    )
-//                        .hidesMainTabBarWhenPushed()
 //                } label: {
 //                    SettingNavRow(
 //                        title: L10n.text("ai_settings.row.prompt_repo"),
@@ -83,7 +81,6 @@ struct AISettingsView: View {
 //
 //                NavigationLink {
 //                    MemoryArchiveSettingsView(viewModel: viewModel.makeMemoryArchiveSettingsViewModel())
-//                        .hidesMainTabBarWhenPushed()
 //                } label: {
 //                    SettingNavRow(
 //                        title: L10n.text("ai_settings.row.memory_archive"),
@@ -94,7 +91,6 @@ struct AISettingsView: View {
 //
 //                NavigationLink {
 //                    TranslationDicSettingsView(translationDic: $viewModel.snapshot.translationDic)
-//                        .hidesMainTabBarWhenPushed()
 //                } label: {
 //                    SettingNavRow(
 //                        title: L10n.text("ai_settings.row.translation_dic"),

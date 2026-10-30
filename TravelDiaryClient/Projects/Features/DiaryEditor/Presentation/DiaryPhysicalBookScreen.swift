@@ -117,7 +117,6 @@ struct DiaryPhysicalBookScreen: View {
                 if spread > 0 { spread -= 1 }
             }
             .toolbar(isImmersive ? .hidden : .visible, for: .navigationBar)
-            .toolbar(isImmersive ? .hidden : .automatic, for: .tabBar)
             .statusBarHidden(isImmersive)
             .persistentSystemOverlays(isImmersive ? .hidden : .automatic)
             .disabled(loadingEditor || editingReaderPhotos)

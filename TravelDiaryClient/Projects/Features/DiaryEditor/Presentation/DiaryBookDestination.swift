@@ -4,6 +4,7 @@ import SwiftUI
 struct DiaryBookRoute: Hashable {
     let bookID: UUID
     var managePages = false
+    var zoomFromShelf = false
 }
 
 /// 根导航栈根据 ID 读取最新目录，不依赖书架子页面的加载状态。

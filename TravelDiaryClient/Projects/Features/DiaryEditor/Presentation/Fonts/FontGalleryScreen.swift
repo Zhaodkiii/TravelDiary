@@ -66,9 +66,8 @@ struct FontGalleryScreen: View {
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: typeSize.isAccessibilitySize ? 160 : 72), spacing: 12)], spacing: 24) {
                     ForEach(visible) { font in
-                        NavigationLink {
+                        ZoomNavigationLink {
                             FontDetailScreen(font: font, documentID: documentID, onUse: onUse)
-                                .toolbar(.hidden, for: .tabBar)
                         } label: {
                             VStack(alignment: .leading, spacing: 6) {
                                 FontSpecimenImage(font: font, resourceID: font.content.cover)

@@ -10,7 +10,6 @@ struct CustomizationHomeView: View {
     @State private var loading = false
     @State private var loaded = false
     @State private var nextPage: Int?
-    @State private var showingSettings = false
     @State private var showHistory = false
     private var attention: [CustomRequestRow] { rows.filter { CustomizationFormRules.needsAttention($0.status) } }
     private var remaining: [CustomRequestRow] {
@@ -53,13 +52,6 @@ struct CustomizationHomeView: View {
             .frame(maxWidth: 640, alignment: .leading).padding(20).frame(maxWidth: .infinity)
         }
         .background(DiaryLibraryStyle.background).foregroundStyle(DiaryLibraryStyle.ink).tint(DiaryLibraryStyle.accent)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showingSettings = true } label: { Image(systemName: "bell").frame(minWidth: 44, minHeight: 44) }
-                    .accessibilityLabel("定制提醒设置")
-            }
-        }
-        .sheet(isPresented: $showingSettings) { CustomizationNotificationSettingsView(owner: owner) }
         .refreshable { await load() }
         .task {
             await load()

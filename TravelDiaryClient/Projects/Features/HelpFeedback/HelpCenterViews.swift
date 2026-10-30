@@ -65,7 +65,6 @@ struct HelpCenterScreen: View {
             }
         }
         .navigationTitle("帮助与反馈")
-        .toolbar(.hidden, for: .tabBar)
         .task(id:query+"|"+category) { if !query.isEmpty { try? await Task.sleep(for:.milliseconds(300)) }; guard !Task.isCancelled else { return };await load() }
         .task { config = try? await service.config(); await service.refreshUnread(owner:owner) }
         .refreshable { await load(); await service.refreshUnread(owner:owner) }
@@ -120,7 +119,7 @@ struct HelpArticleScreen: View {
                 if let error { FeedbackInlineNotice(message: error, symbol: "exclamationmark.circle", actionTitle: "重试", action: { Task { await load() } }) }
             }
             NavigationLink { FeedbackFormScreen(owner: owner, articleID: article.id) } label: { Text("仍有问题，提交反馈").frame(maxWidth: .infinity) }.buttonStyle(FeedbackPrimaryButtonStyle())
-        }.navigationTitle("帮助详情").toolbar(.hidden, for: .tabBar).task { await load() }
+        }.navigationTitle("帮助详情").task { await load() }
     }
     private func load() async {
         do { value = try await HelpFeedbackService.shared.article(article.id);offline = false;unavailable = false;error = nil;HelpFeedbackService.shared.cache(value,name:"article-"+article.id) }
@@ -159,7 +158,7 @@ struct FeedbackListScreen: View {
             }
             if let cursor { DiaryPaginationFooter(token: status + "|" + cursor, loading: busy, error: error) { await load(more: true) } }
             NavigationLink { FeedbackFormScreen(owner: owner) } label: { Label("提交新反馈", systemImage: "square.and.pencil").frame(maxWidth: .infinity) }.buttonStyle(FeedbackPrimaryButtonStyle())
-        }.navigationTitle("我的反馈").toolbar(.hidden, for: .tabBar)
+        }.navigationTitle("我的反馈")
             .task(id: status) { rows = []; cursor = nil; await load() }.refreshable { await load() }
     }
     private func load(more: Bool = false) async {
@@ -196,7 +195,7 @@ struct AppVersionScreen: View {
             Button { UIPasteboard.general.string = AppVersionInformation.copiedText; copied = true } label: {
                 Label(copied ? "已复制版本信息" : "复制版本信息", systemImage: copied ? "checkmark" : "doc.on.doc").frame(maxWidth: .infinity)
             }.buttonStyle(FeedbackPrimaryButtonStyle())
-        }.navigationTitle("版本信息").toolbar(.hidden, for: .tabBar)
+        }.navigationTitle("版本信息")
     }
 }
 

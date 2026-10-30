@@ -62,7 +62,6 @@ struct FeedbackFormScreen: View {
         .tint(DiaryLibraryStyle.accent)
         .navigationTitle(model.success == nil ? "提交反馈" : "已提交")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .tabBar)
         .navigationBarBackButtonHidden(model.isWorking)
         .toolbar {
             if model.isWorking {

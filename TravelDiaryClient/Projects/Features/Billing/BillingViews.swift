@@ -12,22 +12,22 @@ struct DiamondWalletScreen: View {
                 Text(store.wallet?.wallet_domain == "sandbox" ? "钻石余额 · 测试环境" : "钻石余额").font(.headline)
                 Text(store.wallet?.balance.map(String.init) ?? "—").font(.system(size: 44, weight: .semibold, design: .rounded))
                 if store.wallet?.balance_state != "fresh" { Text("余额待刷新").font(.caption) }
-                MainNavigationLink { DiamondRechargeScreen(owner: owner) } label: { Label("充值钻石", systemImage: "diamond") }
+                NavigationLink { DiamondRechargeScreen(owner: owner) } label: { Label("充值钻石", systemImage: "diamond") }
                 Text("可用于指定模板、贴纸和数字定制，已购钻石不过期。").font(.footnote).foregroundStyle(DiaryLibraryStyle.secondary)
             }.padding(20).frame(maxWidth: .infinity, alignment: .leading).feedbackPaperCard()
             if let message = store.message { Text(message).font(.footnote).foregroundStyle(DiaryLibraryStyle.secondary) }
             if !store.pending.isEmpty {
                 Text("待处理").font(.headline)
                 ForEach(store.pending) { order in
-                    MainNavigationLink { DiamondOrderScreen(owner: owner, orderID: order.id) } label: {
+                    NavigationLink { DiamondOrderScreen(owner: owner, orderID: order.id) } label: {
                         VStack(alignment: .leading) { Text(order.title); Text(order.statusText).font(.caption) }.frame(maxWidth: .infinity, alignment: .leading).padding().feedbackPaperCard()
                     }
                 }
             }
-            MainNavigationLink { DiamondEntriesScreen(owner: owner) } label: { SupportNavigationRow(title: "钻石明细", symbol: "list.bullet.rectangle") }.feedbackPaperCard()
-            MainNavigationLink { DiamondOwnershipScreen(owner: owner) } label: { SupportNavigationRow(title: "我的解锁内容", symbol: "lock.open") }.feedbackPaperCard()
+            NavigationLink { DiamondEntriesScreen(owner: owner) } label: { SupportNavigationRow(title: "钻石明细", symbol: "list.bullet.rectangle") }.feedbackPaperCard()
+            NavigationLink { DiamondOwnershipScreen(owner: owner) } label: { SupportNavigationRow(title: "我的解锁内容", symbol: "lock.open") }.feedbackPaperCard()
             Button("同步购买记录") { Task { await store.refresh(owner: owner) } }.frame(minHeight: 44)
-            MainNavigationLink { HelpCenterScreen(owner: owner) } label: { SupportNavigationRow(title: "帮助与售后", symbol: "questionmark.circle") }.feedbackPaperCard()
+            NavigationLink { HelpCenterScreen(owner: owner) } label: { SupportNavigationRow(title: "帮助与售后", symbol: "questionmark.circle") }.feedbackPaperCard()
         }.navigationTitle("我的钻石")
         .task(id: owner) { await store.refresh(owner: owner) }
         .onChange(of: scenePhase) { _, value in if value == .active { Task { await store.refresh(owner: owner) } } }

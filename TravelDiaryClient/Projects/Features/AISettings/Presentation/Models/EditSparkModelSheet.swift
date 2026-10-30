@@ -52,7 +52,7 @@ struct EditSparkModelSheet: View {
                 }
                 if canEditCapabilities {
                     Section(L10n.text("ai_settings.models.online.section.usage", comment: "使用场景与工具")) {
-                        MainNavigationLink {
+                        NavigationLink {
                             if let model {
                                 ModelScenarioBindingsEditorView(
                                     scenarioBindings: $viewModel.snapshot.scenarioBindings,
@@ -79,7 +79,7 @@ struct EditSparkModelSheet: View {
                             }
                         }
 
-                        MainNavigationLink {
+                        NavigationLink {
                             GroupedToolSelectionView(
                                 title: L10n.text("common.tools", comment: "工具"),
                                 selectedValues: $selectedToolNames
@@ -93,7 +93,7 @@ struct EditSparkModelSheet: View {
                             }
                         }
 
-                        MainNavigationLink {
+                        NavigationLink {
                             
                             MultiSelectOptionsView(
                                 title: L10n.text("ai_settings.models.agent.related_tasks.title", fallback: "Related small tasks", comment: "关联小任务选择页标题"),

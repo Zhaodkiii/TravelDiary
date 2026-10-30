@@ -74,7 +74,7 @@ struct SmallTaskEditorView: View {
             }
 
             Section(L10n.text("common.tools", fallback: "Tools", comment: "Small task tools section")) {
-                MainNavigationLink {
+                NavigationLink {
                     GroupedToolSelectionView(
                         title: L10n.text("common.tools", fallback: "Tools", comment: "Tool selection title"),
                         selectedValues: $selectedToolNames

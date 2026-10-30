@@ -91,16 +91,15 @@ struct SupportMainCoordinatorView: View {
     @StateObject private var upgradeLoginViewModel: LoginViewModel
     @State private var showsDeviceAccountUpgradeSheet = false
     @State private var showsCreateDiaryBookForm = false
+    @State private var showsCustomizationSettings = false
+    @State private var materialToolbar = DiaryMaterialToolbarState()
+    @State private var materialSearchQuery = ""
     @ObservedObject private var helpFeedback = HelpFeedbackService.shared
     @ObservedObject private var customizations = CustomizationService.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: SupportRootTab = .diaryEditor
+    @Namespace private var bookshelfTransition
     @State private var path = NavigationPath()
-    @State private var templateSearch = ""
-    @State private var templatePath = NavigationPath()
-    @State private var customizationPath = NavigationPath()
-    @State private var settingsPath = NavigationPath()
-    @State private var searchPath = NavigationPath()
 
     init(session: UserSession, dependencies: AppCoordinatorDependencies) {
         self.session = session
@@ -111,40 +110,10 @@ struct SupportMainCoordinatorView: View {
     }
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            Tab("手帐", systemImage: "book.pages", value: SupportRootTab.diaryEditor) {
-                rootNavigation(path: $path) {
-                    DiaryEditorHomeView(ownerID: String(session.accountID), path: $path, creating: $showsCreateDiaryBookForm,
-                        onBrowseTemplates: { selectedTab = .diaryPresets })
-                        .id(session.accountID)
-                }
-            }
-            Tab("素材", systemImage: "books.vertical", value: SupportRootTab.diaryPresets) {
-                rootNavigation(path: $templatePath) {
-                    DiaryPresetLibraryScreen(ownerID: String(session.accountID))
-                        .id(session.accountID)
-                }
-            }
-            Tab("定制", systemImage: "sparkles", value: SupportRootTab.customization) {
-                rootNavigation(path: $customizationPath) {
-                    CustomizationHomeView(owner: String(session.accountID)).id(session.accountID)
-                }
-            }.badge(customizations.unread)
-            Tab(L10n.tr("tab.settings", fallback: "设置"), systemImage: "gearshape", value: SupportRootTab.settings) {
-                rootNavigation(path: $settingsPath) {
-                    SettingsView(accountManagementViewModel: accountViewModel,
-                        aiSettingsViewModel: aiSettingsViewModel, session: session, storageService: dependencies.storageService,
-                        onAccountEntryTap: handleAccountEntryTap)
-                        .id(session.accountID)
-                        .navigationDestination(for: SupportRoute.self) { route in FeedbackDetailScreen(id: route.id, owner: String(session.accountID)) }
-                }
-            }
-//            Tab(value: SupportRootTab.templateSearch, role: .search) {
-//                rootNavigation(path: $searchPath) {
-//                    DiaryPresetSearchScreen(ownerID: String(session.accountID), searchText: $templateSearch)
-//                        .id(session.accountID)
-//                }
-//            }
+        rootNavigation(path: $path) {
+            tabContent
+                .navigationTitle(currentTabTitle)
+                .toolbar { tabToolbar }
         }
         .environment(\.accountLoginContext, AccountLoginContext(
             isDeviceAccount: session.isDeviceAccount, viewModel: upgradeLoginViewModel))
@@ -154,7 +123,7 @@ struct SupportMainCoordinatorView: View {
             selectedTab = .settings
             do {
                 _ = try await helpFeedback.ticket(id, owner: String(session.accountID))
-                settingsPath = NavigationPath(); settingsPath.append(SupportRoute(id: id))
+                path = NavigationPath([SupportRoute(id: id)])
             } catch { helpFeedback.routeError = "此反馈在当前账号下不可访问，请确认登录账号后重试。" }
             helpFeedback.routeID = nil; UserDefaults.standard.removeObject(forKey: "support-push-pending-v1")
         }
@@ -165,12 +134,15 @@ struct SupportMainCoordinatorView: View {
                 _ = try await customizations.detail(id, owner: String(session.accountID))
                 customizations.routeError = nil
                 selectedTab = .customization
-                customizationPath = NavigationPath(); customizationPath.append(CustomizationRoute(id: id))
+                path = NavigationPath([CustomizationRoute(id: id)])
             } catch { selectedTab = .customization; customizations.routeError = "此内容在当前账号下不可用，或已被移除。" }
             customizations.routeID = nil; PushAdapter.shared.routeConsumed()
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { PresetImportStatisticsReporter.shared.wake(); Task { await PushAdapter.shared.refreshRegistration(); await customizations.refreshUnread(owner: String(session.accountID)); await helpFeedback.refreshUnread(owner: String(session.accountID)) } }
+        }
+        .sheet(isPresented: $showsCustomizationSettings) {
+            CustomizationNotificationSettingsView(owner: String(session.accountID))
         }
         .sheet(isPresented: $showsDeviceAccountUpgradeSheet) {
             LoginView(viewModel: upgradeLoginViewModel, mode: .upgradeDeviceAccount)
@@ -182,23 +154,53 @@ struct SupportMainCoordinatorView: View {
         }
     }
 
-    /// 搜索由 TabView 管理；每个 Tab 持有自己的导航栈，系统才能展示底部原生搜索框。
+    /// TabView is the shared stack's root. Pushed pages replace the entire tab
+    /// container, so the tab bar needs no visibility modifiers.
+    private var tabContent: some View {
+        TabView(selection: $selectedTab) {
+            Tab("手帐", systemImage: "book.pages", value: SupportRootTab.diaryEditor) {
+                DiaryEditorHomeView(ownerID: String(session.accountID), path: $path,
+                    creating: $showsCreateDiaryBookForm, bookTransition: bookshelfTransition,
+                    onBrowseTemplates: { selectedTab = .diaryPresets })
+                    .id(session.accountID)
+            }
+            Tab("素材", systemImage: "books.vertical", value: SupportRootTab.diaryPresets) {
+                DiaryPresetLibraryScreen(ownerID: String(session.accountID), toolbarState: materialToolbar)
+                    .id(session.accountID)
+            }
+            Tab("定制", systemImage: "sparkles", value: SupportRootTab.customization) {
+                CustomizationHomeView(owner: String(session.accountID))
+                    .id(session.accountID)
+            }.badge(customizations.unread)
+            Tab(L10n.tr("tab.settings", fallback: "设置"), systemImage: "gearshape", value: SupportRootTab.settings) {
+                SettingsView(accountManagementViewModel: accountViewModel,
+                    aiSettingsViewModel: aiSettingsViewModel, session: session,
+                    storageService: dependencies.storageService, onAccountEntryTap: handleAccountEntryTap)
+                    .id(session.accountID)
+            }
+        }
+    }
+
+    /// Register typed routes at the shared stack root, independent of the
+    /// selected tab, so notifications can open their destination immediately.
     private func rootNavigation<Content: View>(path: Binding<NavigationPath>, @ViewBuilder content: () -> Content) -> some View {
         NavigationStack(path: path) {
             content()
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar { tabToolbar }
                 .navigationDestination(for: DiaryBookRoute.self) { route in
                     DiaryBookDestination(ownerID: String(session.accountID), bookID: route.bookID, managePages: route.managePages)
-                        .id(route.bookID).toolbar(.hidden, for: .tabBar)
+                        .id(route.bookID)
+                        .contentZoomTransition(sourceID: route.bookID, in: route.zoomFromShelf ? bookshelfTransition : nil)
                 }
                 .navigationDestination(for: CustomizationRoute.self) { route in
                     CustomizationDetailView(id: route.id, owner: String(session.accountID))
-                        .id("\(session.accountID):\(route.id)").toolbar(.hidden, for: .tabBar)
+                        .id("\(session.accountID):\(route.id)")
+                }
+                .navigationDestination(for: SupportRoute.self) { route in
+                    FeedbackDetailScreen(id: route.id, owner: String(session.accountID))
                 }
                 .navigationDestination(for: AccountRoute.self) { _ in
                     AccountManagementView(viewModel: accountViewModel, session: session)
-                        .toolbar(.hidden, for: .tabBar)
                 }
         }
     }
@@ -217,28 +219,68 @@ struct SupportMainCoordinatorView: View {
     }
     @ToolbarContentBuilder
     private var tabToolbar: some ToolbarContent {
-        if selectedTab != .secondCamera && selectedTab != .templateSearch {
-            ToolbarItem(placement: .principal) { tabTitle(currentTabTitle) }
-        }
-        if selectedTab == .diaryEditor {
+        switch selectedTab {
+        case .diaryEditor:
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showsCreateDiaryBookForm = true } label: { Image(systemName: "plus") }
                     .accessibilityLabel("新建手帐本")
             }
+        case .diaryPresets:
+            ToolbarItem(placement: .topBarLeading) {
+                NavigationLink {
+                    materialSearchDestination
+                } label: { Image(systemName: "magnifyingglass") }
+                .accessibilityLabel("搜索\(materialToolbar.category.rawValue)")
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if materialToolbar.category.contentKind != nil {
+                    Button { materialToolbar.requestFilters() } label: {
+                        Image(systemName: materialToolbar.hasActiveFilters
+                            ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
+                    }.accessibilityLabel("筛选\(materialToolbar.category.rawValue)")
+                }
+                Menu("我的素材", systemImage: "tray") {
+                    NavigationLink { PresetDownloadCenter(ownerID: String(session.accountID)) } label: {
+                        Label("模板下载", systemImage: "arrow.down.circle")
+                    }
+                    NavigationLink { StickerGalleryScreen(mine: true) } label: {
+                        Label("贴纸收藏", systemImage: "heart")
+                    }
+                    NavigationLink { FontGalleryScreen(mine: true) } label: {
+                        Label("我的字体", systemImage: "textformat")
+                    }
+                }
+            }
+        case .customization:
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showsCustomizationSettings = true } label: { Image(systemName: "bell") }
+                    .accessibilityLabel("定制提醒设置")
+            }
+        default:
+            // Settings and the inactive tabs have no root toolbar actions.
+            ToolbarItemGroup(placement: .topBarTrailing) { }
         }
     }
 
-    private func tabTitle(_ title: String) -> some View {
-        Text(title)
-            .font(.headline.weight(.semibold))
-            .foregroundStyle(.primary)
+    @ViewBuilder
+    private var materialSearchDestination: some View {
+        switch materialToolbar.category {
+        case .stickers:
+            StickerGalleryScreen(isSearchPage: true)
+        case .fonts:
+            FontGalleryScreen()
+        case .templates, .albums:
+            DiaryPresetSearchScreen(ownerID: String(session.accountID), searchText: $materialSearchQuery,
+                initialCatalog: materialToolbar.catalog,
+                contentKind: materialToolbar.category.contentKind ?? "journal")
+        }
     }
 
     private func handleAccountEntryTap() {
         if session.isDeviceAccount {
             showsDeviceAccountUpgradeSheet = true
         } else {
-            settingsPath.append(AccountRoute.management)
+            path.append(AccountRoute.management)
         }
     }
 }

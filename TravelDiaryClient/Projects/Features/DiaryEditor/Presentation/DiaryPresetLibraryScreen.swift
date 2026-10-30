@@ -8,11 +8,11 @@ struct DiaryPresetLibraryScreen: View {
     var targetAfterPageID: UUID? = nil
     var singlePageOnly = false
     var onPageAdded: ((DiaryBook) -> Void)? = nil
-    var showsInlineSearch = true
     var fixedSeriesID: String? = nil
     var initialCatalog: RemotePresetCatalog? = nil
     var fixedContentKind = "journal"
     var showsCatalogTabs = true
+    var toolbarState: DiaryMaterialToolbarState? = nil
     var catalogLoader: @MainActor () async throws -> RemotePresetCatalog = { try await PresetDownloadManager.shared.catalog() }
     private let downloads = PresetDownloadManager.shared
     @ObservedObject private var availability = PresetDownloadManager.shared.availability
@@ -21,7 +21,6 @@ struct DiaryPresetLibraryScreen: View {
     @State private var pending: DiaryPresetImportIntent?
     @State private var resuming: DiaryPresetImportIntent?
     @State private var recovered: DiaryBook?
-    @State private var searchQuery = ""
     @State private var reload = 0
     @State private var remoteError: String?
     @State private var remoteFinished = false
@@ -47,17 +46,30 @@ struct DiaryPresetLibraryScreen: View {
         return singlePageOnly ? "选择模板" : "旅行素材"
     }
 
-    var body: some View {
+    private var catalogSelection: Binding<String> {
+        Binding(get: { toolbarState?.category.rawValue ?? catalogTab }, set: { value in
+            if let toolbarState, let category = DiaryMaterialToolbarState.Category(rawValue: value) {
+                toolbarState.category = category
+            } else { catalogTab = value }
+        })
+    }
+
+    @ViewBuilder var body: some View {
+        if toolbarState == nil { screenContent.navigationTitle(screenTitle) }
+        else { screenContent }
+    }
+
+    private var screenContent: some View {
         ZStack {
         if showsCatalogTabs && !singlePageOnly && fixedSeriesID == nil {
             VStack(spacing: 0) {
-                DiaryMaterialTabHeader(selection: $catalogTab)
+                DiaryMaterialTabHeader(selection: catalogSelection)
                     .padding(.horizontal, 16)
-                TabView(selection: $catalogTab) {
+                TabView(selection: catalogSelection) {
                     templateBody.tag("模板")
                     DiaryPresetLibraryScreen(ownerID: ownerID, targetBook: targetBook, targetAfterPageID: targetAfterPageID,
-                        onPageAdded: onPageAdded, showsInlineSearch: false, initialCatalog: remote ?? initialCatalog,
-                        fixedContentKind: "album", showsCatalogTabs: false, catalogLoader: catalogLoader).tag("相册")
+                        onPageAdded: onPageAdded, initialCatalog: remote ?? initialCatalog,
+                        fixedContentKind: "album", showsCatalogTabs: false, toolbarState: toolbarState, catalogLoader: catalogLoader).tag("相册")
                     StickerGalleryScreen(showsPersonalLibrary: false).tag("贴纸")
                     FontGalleryScreen(embedded: true).tag("字体")
                 }.tabViewStyle(.page(indexDisplayMode: .never))
@@ -66,39 +78,17 @@ struct DiaryPresetLibraryScreen: View {
         }
         // 分页容器不具备书架 ScrollView 的顶部背景延伸，显式覆盖安全区域。
         .background(DiaryLibraryStyle.background.ignoresSafeArea())
-        .navigationTitle(screenTitle)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .toolbar {
-            if showsInlineSearch {
-                ToolbarItem(placement: .topBarLeading) {
-                    NavigationLink {
-                        if catalogTab == "贴纸" && !singlePageOnly && fixedSeriesID == nil {
-                            StickerGalleryScreen(isSearchPage: true).toolbar(.hidden, for: .tabBar)
-                        } else if catalogTab == "字体" && !singlePageOnly && fixedSeriesID == nil {
-                            FontGalleryScreen().toolbar(.hidden, for: .tabBar)
-                        } else {
-                            DiaryPresetSearchScreen(ownerID: ownerID, searchText: $searchQuery,
-                                initialCatalog: remote ?? initialCatalog, fixedSeriesID: fixedSeriesID,
-                                contentKind: catalogTab == "相册" ? "album" : fixedContentKind,
-                                catalogLoader: catalogLoader).toolbar(.hidden, for: .tabBar)
-                        }
-                    } label: { Image(systemName: "magnifyingglass") }
-                        .accessibilityLabel(catalogTab == "字体" ? "搜索字体" : catalogTab == "贴纸" ? "搜索贴纸" : catalogTab == "相册" ? "搜索相册" : "搜索模板")
-                }
-            }
-            if showsCatalogTabs && !singlePageOnly && fixedSeriesID == nil {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu("我的素材", systemImage: "tray") {
-                        NavigationLink { PresetDownloadCenter(ownerID: ownerID) } label: { Label("模板下载", systemImage: "arrow.down.circle") }
-                        NavigationLink { StickerGalleryScreen(mine: true) } label: { Label("贴纸收藏", systemImage: "heart") }
-                        NavigationLink { FontGalleryScreen(mine: true) } label: { Label("我的字体", systemImage: "textformat") }
-                    }
-                }
-            }
+        .onChange(of: toolbarState?.filterRequest, initial: true) { _, _ in
+            guard toolbarState?.consumeFilterRequest(contentKind: fixedContentKind) == true else { return }
+            showFilters()
+        }
+        .onChange(of: hasFilters, initial: true) { _, active in
+            toolbarState?.setFiltersActive(active, contentKind: fixedContentKind)
         }
         // TabView lazily creates its pages; destinations belong to this stable ancestor.
         .navigationDestination(item: Binding<UUID?>(get: { recovered?.id }, set: { if $0 == nil { recovered = nil } })) { bookID in
-            DiaryBookDestination(ownerID: ownerID, bookID: bookID).toolbar(.hidden, for: .tabBar)
+            DiaryBookDestination(ownerID: ownerID, bookID: bookID)
         }
     }
 
@@ -110,12 +100,11 @@ struct DiaryPresetLibraryScreen: View {
         libraryContent
         .background(DiaryLibraryStyle.background).foregroundStyle(DiaryLibraryStyle.ink).tint(DiaryLibraryStyle.accent)
         .scrollDismissesKeyboard(.interactively)
-        .navigationTitle(screenTitle)
         .toolbar {
-            if (catalogTab == "模板" || !showsCatalogTabs) || singlePageOnly || fixedSeriesID != nil {
+            if singlePageOnly || fixedSeriesID != nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        draftStyles = styles; draftUsages = usages; draftOnlyDownloaded = onlyDownloaded; showingFilters = true
+                        showFilters()
                     } label: {
                         Image(systemName: hasFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
                     }.accessibilityLabel("筛选\(materialName)")
@@ -154,6 +143,7 @@ struct DiaryPresetLibraryScreen: View {
                 if let initialCatalog { remote = initialCatalog }
                 else { remote = await Task.detached { PresetLibraryCatalogCache.read(ownerID: ownerID) }.value }
             }
+            if let remote { toolbarState?.catalog = remote }
             await loadRemote()
         }
     }
@@ -197,7 +187,7 @@ struct DiaryPresetLibraryScreen: View {
     }
 
     private func templateLink(_ item: PresetLibraryItem, expanded: Bool = false) -> some View {
-        NavigationLink { destination(item).toolbar(.hidden, for: .tabBar) } label: {
+        ZoomNavigationLink { destination(item) } label: {
             DiaryPresetTemplateCard(item: item, ownerID: ownerID,
                 downloadedCount: item.remote.map { availability.downloadedPageIDs(bookID: $0.id, version: $0.version).count } ?? 0,
                 expanded: expanded, seriesTitle: remote?.series.first { $0.slug == item.series }?.title)
@@ -210,7 +200,6 @@ struct DiaryPresetLibraryScreen: View {
                 DiaryPresetLibraryScreen(ownerID: ownerID, targetBook: targetBook, targetAfterPageID: targetAfterPageID,
                     singlePageOnly: singlePageOnly, onPageAdded: onPageAdded, fixedSeriesID: section.id,
                     initialCatalog: remote, fixedContentKind: fixedContentKind, showsCatalogTabs: false, catalogLoader: catalogLoader)
-                    .toolbar(.hidden, for: .tabBar)
             } label: {
                 HStack(spacing: 7) {
                     Text(section.title).font(.title3.weight(.semibold))
@@ -227,6 +216,13 @@ struct DiaryPresetLibraryScreen: View {
             }
         }
     }
+    private func showFilters() {
+        draftStyles = styles
+        draftUsages = usages
+        draftOnlyDownloaded = onlyDownloaded
+        showingFilters = true
+    }
+
     private var filterSheet: some View {
         NavigationStack {
             List {
@@ -272,6 +268,7 @@ struct DiaryPresetLibraryScreen: View {
             let value = try await catalogLoader()
             try Task.checkCancellation()
             remote = value; remoteError = nil
+            toolbarState?.catalog = value
             await Task.detached { PresetLibraryCatalogCache.save(value, ownerID: ownerID) }.value
         } catch is CancellationError { return }
         catch {
@@ -435,6 +432,7 @@ private struct DiaryPresetDetailScreen: View {
     var fixedTarget = false
     @State private var error: String?
     @State private var pages: [PresetPage] = []
+    @Namespace private var pagePreviewTransition
     @State private var preview: DiaryTemplatePreviewSelection?
     @State private var pendingPreviewImport: String?
     @State private var selection: PresetSelection?
@@ -470,6 +468,7 @@ private struct DiaryPresetDetailScreen: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Button { if let id = spread.pages.first?.id { preview = DiaryTemplatePreviewSelection(id: id) } } label: {
                                 overviewThumbnail(spread)
+                                    .contentZoomSource(id: spread.pages.first?.id, in: pagePreviewTransition)
                             }
                             Text(spread.pages.map(\.title).joined(separator: " · ")).font(.caption)
                             Button(spread.pages.count == 2 ? "使用这两页" : "使用这一页") {
@@ -520,6 +519,7 @@ private struct DiaryPresetDetailScreen: View {
                     pendingPreviewImport = id
                     preview = nil
                 }
+                .contentZoomTransition(sourceID: Optional(value.id), in: pagePreviewTransition)
             }
             .sheet(item: $selection) { value in
                 importPage(value)

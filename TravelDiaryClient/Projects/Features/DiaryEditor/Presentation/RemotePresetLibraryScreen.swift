@@ -115,6 +115,7 @@ struct RemotePresetDetailScreen: View {
     @State private var browse: RemotePresetBrowse?
     @State private var error: String?
     @State private var retry = 0
+    @Namespace private var pagePreviewTransition
     @State private var preview: DiaryTemplatePreviewSelection?
     @State private var pendingPreviewImport: String?
     @State private var selection: RemotePresetSelection?
@@ -137,6 +138,7 @@ struct RemotePresetDetailScreen: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Button { if let id = spread.pages.first?.id { preview = DiaryTemplatePreviewSelection(id: id) } } label: {
                                 overviewThumbnail(spread, size: browse.page_size.cg)
+                                    .contentZoomSource(id: spread.pages.first?.id, in: pagePreviewTransition)
                             }
                             Text(spread.pages.map(\.title).joined(separator: " · ")).font(.caption)
                             PresetAvailabilityBadge(downloaded: spread.pages.allSatisfy {
@@ -179,6 +181,7 @@ struct RemotePresetDetailScreen: View {
                 pendingPreviewImport = id
                 preview = nil
             }
+            .contentZoomTransition(sourceID: Optional(value.id), in: pagePreviewTransition)
         }
         .sheet(item: $selection) { value in
             importPage(value)

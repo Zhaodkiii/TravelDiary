@@ -66,7 +66,6 @@ struct CustomizationDetailView: View {
         }
         .navigationTitle(value?.editable == true ? "创建专属手帐" : "专属定制").navigationBarTitleDisplayMode(.inline)
         .background(DiaryLibraryStyle.background).foregroundStyle(DiaryLibraryStyle.ink).tint(DiaryLibraryStyle.accent)
-        .toolbar(.hidden, for: .tabBar)
         .navigationBarBackButtonHidden(busy)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let value, value.editable { draftFooter(value) }

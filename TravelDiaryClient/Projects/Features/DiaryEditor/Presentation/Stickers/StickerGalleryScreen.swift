@@ -164,6 +164,7 @@ struct StickerGalleryScreen: View {
     @State private var error: String?
     @State private var managing = false
     @State private var selection: Set<String> = []
+    @Namespace private var stickerPreviewTransition
     @State private var preview: CloudMaterial?
     @State private var itemToUse: CloudMaterial?
     @State private var choosingItemBook = false
@@ -178,10 +179,17 @@ struct StickerGalleryScreen: View {
     private var isHome: Bool { !mine && !isSearchPage && mode == "包" }
     @ViewBuilder var body: some View {
         if isSearchPage {
-            galleryBody.searchable(text: $query, isPresented: $searchPresented,
+            titledGallery.searchable(text: $query, isPresented: $searchPresented,
                 placement: .navigationBarDrawer(displayMode: .always),
                 prompt: mine ? "搜索我的贴纸" : (mode == "包" ? "搜索贴纸包名称、地点或主题" : "搜索贴纸名称或关键词"))
+        } else if showsPersonalLibrary {
+            titledGallery
         } else { galleryBody }
+    }
+    private var titledGallery: some View {
+        galleryBody
+            .navigationTitle(isSearchPage ? "搜索贴纸" : (mine ? "我的贴纸" : (mode == "单张" ? "单张贴纸" : "贴纸")))
+            .navigationBarTitleDisplayMode(.inline)
     }
     private var galleryBody: some View {
         ScrollView {
@@ -191,6 +199,11 @@ struct StickerGalleryScreen: View {
                         contentTab("贴纸包", value: "包")
                         contentTab(mine ? "单张收藏" : "单张贴纸", value: "单张")
                         Spacer(minLength: 0)
+                    }
+                }
+                if mine && !isSearchPage {
+                    NavigationLink { PersonalStickerLibraryScreen() } label: {
+                        Label("我制作的", systemImage: "scissors").font(.headline).frame(minHeight: 44)
                     }
                 }
                 if !mine && mode == "包" && !tags.isEmpty {
@@ -212,7 +225,7 @@ struct StickerGalleryScreen: View {
                             if managing {
                                 Button { toggle(pack.id) } label: { packCell(pack).overlay(alignment: .topTrailing) { Image(systemName: selection.contains(pack.id) ? "checkmark.circle.fill" : "circle") } }
                             } else {
-                                NavigationLink { StickerPackDetailScreen(library: pack, onUse: onUse, onUseItem: onUseItem) } label: { packCell(pack) }
+                                ZoomNavigationLink { StickerPackDetailScreen(library: pack, onUse: onUse, onUseItem: onUseItem) } label: { packCell(pack) }
                             }
                         }
                     } else {
@@ -220,6 +233,7 @@ struct StickerGalleryScreen: View {
                             Button { if managing { toggle(item.id) } else { preview = item } } label: {
                                 VStack { MaterialThumbnail(item: item).frame(height: 90); Text(item.name).font(.caption).lineLimit(2) }
                                     .overlay(alignment: .topTrailing) { if managing { Image(systemName: selection.contains(item.id) ? "checkmark.circle.fill" : "circle") } }
+                                    .contentZoomSource(id: item.id, in: stickerPreviewTransition)
                             }
                         }
                     }
@@ -234,13 +248,11 @@ struct StickerGalleryScreen: View {
         }
         .background(DiaryLibraryStyle.background).foregroundStyle(DiaryLibraryStyle.ink).tint(DiaryLibraryStyle.accent)
         .scrollDismissesKeyboard(.interactively)
-        .navigationTitle(isSearchPage ? "搜索贴纸" : (mine ? "我的贴纸" : (mode == "单张" ? "单张贴纸" : "贴纸"))).navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if !isSearchPage && showsPersonalLibrary {
                 ToolbarItem(placement: .topBarLeading) {
                     NavigationLink {
                         StickerGalleryScreen(mine: mine, isSearchPage: true, onUse: onUse, onUseItem: onUseItem, initialMode: mode)
-                            .toolbar(.hidden, for: .tabBar)
                     } label: { Image(systemName: "magnifyingglass") }.accessibilityLabel("搜索贴纸")
                 }
             }
@@ -267,6 +279,7 @@ struct StickerGalleryScreen: View {
             else { choosingItemBook = true }
         }) { item in
             MaterialItemPreview(item: item, onUse: { selected in itemToUse = selected; preview = nil })
+                .contentZoomTransition(sourceID: item.id, in: stickerPreviewTransition)
         }
         .sheet(isPresented: $choosingItemBook, onDismiss: { itemToUse = nil }) {
             if let itemToUse { StickerBookChooser(item: itemToUse) }
@@ -325,7 +338,6 @@ struct StickerGalleryScreen: View {
                 Spacer()
                 NavigationLink {
                     StickerGalleryScreen(onUse: onUse, onUseItem: onUseItem, initialMode: "单张")
-                        .toolbar(.hidden, for: .tabBar)
                 } label: {
                     HStack(spacing: 4) { Text("更多"); Image(systemName: "chevron.right").font(.caption) }
                         .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary).frame(minHeight: 44)
@@ -346,6 +358,7 @@ struct StickerGalleryScreen: View {
                                         .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 14))
                                     Text(item.name).font(.caption).lineLimit(1)
                                 }.frame(width: 88)
+                                    .contentZoomSource(id: item.id, in: stickerPreviewTransition)
                             }.buttonStyle(.plain)
                         }
                     }
@@ -478,8 +491,10 @@ struct StickerPackDetailScreen: View {
     @State private var cursor: String?
     @State private var paginationFilter = ""
     @State private var error: String?
+    @Namespace private var stickerPreviewTransition
     @State private var preview: CloudMaterial?
     @State private var choosingBook = false
+    @Namespace private var packPreviewTransition
     @State private var largePreview: MaterialImageResource?
     @State private var category = ""
     @State private var query = ""
@@ -496,6 +511,7 @@ struct StickerPackDetailScreen: View {
                 ForEach(library.previews ?? []) { image in
                     Button { largePreview=image } label: {
                         MaterialResourceImage(resource: image,libraryID:library.id,version:library.version).aspectRatio(CGFloat(image.width)/CGFloat(max(1,image.height)),contentMode: .fit)
+                            .contentZoomSource(id: image.id, in: packPreviewTransition)
                     }.buttonStyle(.plain)
                 }
                 Text("全部贴纸").font(.headline)
@@ -504,7 +520,12 @@ struct StickerPackDetailScreen: View {
                     Text("全部").tag("");Text("插画与装饰").tag("illustration");Text("纸卡与票据").tag("paper");Text("文字贴纸").tag("text");Text("相框与照片卡").tag("photo");Text("品牌标识").tag("branding")
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 80))]) {
-                    ForEach(items) { item in Button { preview = item } label: { MaterialThumbnail(item: item).frame(height: 85) }.buttonStyle(.plain) }
+                    ForEach(items) { item in
+                        Button { preview = item } label: {
+                            MaterialThumbnail(item: item).frame(height: 85)
+                                .contentZoomSource(id: item.id, in: stickerPreviewTransition)
+                        }.buttonStyle(.plain)
+                    }
                 }
                 if loading { ProgressView() }
                 if let cursor { DiaryPaginationFooter(token: query + "|" + category + "|" + cursor, loading: loading, error: error) { await load(more: true) } }
@@ -512,7 +533,6 @@ struct StickerPackDetailScreen: View {
         }
         .background(DiaryLibraryStyle.background)
         .navigationTitle("贴纸详情").navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .tabBar)
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Button(library.is_favorited ? "已收藏" : "收藏贴纸包") { Task { await favorite() } }.disabled(saving)
@@ -522,13 +542,17 @@ struct StickerPackDetailScreen: View {
             }.padding().background(.regularMaterial)
         }
         .task(id:query + "|" + category) { do { try await Task.sleep(for:.milliseconds(300)); await load() } catch {} }
-        .sheet(item:$largePreview) { resource in MaterialLargePreview(resource:resource,library:library) }
+        .sheet(item: $largePreview) { resource in
+            MaterialLargePreview(resource: resource, library: library)
+                .contentZoomTransition(sourceID: resource.id, in: packPreviewTransition)
+        }
         .sheet(item: $preview, onDismiss: {
             if let item = selectedItemToUse { selectedItemToUse = nil; onUseItem?(item) }
         }) { item in
             MaterialItemPreview(item: item, onUse: onUseItem == nil ? nil : { selected in
                 selectedItemToUse = selected; preview = nil
             })
+            .contentZoomTransition(sourceID: item.id, in: stickerPreviewTransition)
         }
         .sheet(isPresented: $choosingBook) { StickerBookChooser(library:library) }
     }

@@ -27,27 +27,27 @@ struct SettingsView: View {
             }.buttonStyle(.plain).accessibilityHint("打开账户管理")
             VStack(alignment: .leading, spacing: 10) {
                 sectionTitle("我的资源")
-                MainNavigationLink { FontGalleryScreen(mine: true) } label: { SupportNavigationRow(title: "我的字体", symbol: "textformat", detail: "已获取、收藏与最近使用") }.buttonStyle(.plain).feedbackPaperCard()
-                MainNavigationLink { StickerGalleryScreen(mine: true) } label: { SupportNavigationRow(title: "我的贴纸", symbol: "heart", detail: "贴纸包与收藏") }.buttonStyle(.plain).feedbackPaperCard()
-                MainNavigationLink { FontGalleryScreen() } label: { SupportNavigationRow(title: "字体集市", symbol: "textformat.abc", detail: "发现适合旅途记录的字体") }.buttonStyle(.plain).feedbackPaperCard()
-                MainNavigationLink { FontStorageScreen() } label: { SupportNavigationRow(title: "字体存储", symbol: "internaldrive", detail: "查看字体下载与占用空间") }.buttonStyle(.plain).feedbackPaperCard()
+                NavigationLink { FontGalleryScreen(mine: true) } label: { SupportNavigationRow(title: "我的字体", symbol: "textformat", detail: "已获取、收藏与最近使用") }.buttonStyle(.plain).feedbackPaperCard()
+                NavigationLink { StickerGalleryScreen(mine: true) } label: { SupportNavigationRow(title: "我的贴纸", symbol: "heart", detail: "贴纸包与收藏") }.buttonStyle(.plain).feedbackPaperCard()
+                NavigationLink { FontGalleryScreen() } label: { SupportNavigationRow(title: "字体集市", symbol: "textformat.abc", detail: "发现适合旅途记录的字体") }.buttonStyle(.plain).feedbackPaperCard()
+                NavigationLink { FontStorageScreen() } label: { SupportNavigationRow(title: "字体存储", symbol: "internaldrive", detail: "查看字体下载与占用空间") }.buttonStyle(.plain).feedbackPaperCard()
                 sectionTitle("通用")
-                MainNavigationLink {
+                NavigationLink {
                     StorageManagementScreen(owner: String(session.accountID), service: storageService).id(session.accountID)
                 } label: { SupportNavigationRow(title: "存储空间", symbol: "internaldrive", detail: "管理本机文件与缓存") }.buttonStyle(.plain).feedbackPaperCard()
             }
             VStack(alignment: .leading, spacing: 10) {
                 sectionTitle("服务")
                 #if DEBUG
-                MainNavigationLink { MembershipPurchaseScreen(owner: String(session.accountID)).id(session.accountID) } label: { SupportNavigationRow(title: "寻寻仔会员", symbol: "crown", detail: "会员状态、订阅与恢复购买") }.buttonStyle(.plain).feedbackPaperCard()
-                MainNavigationLink { DiamondWalletScreen(owner: String(session.accountID)).id(session.accountID) } label: { SupportNavigationRow(title: "我的钻石", symbol: "diamond", detail: "充值、明细与已解锁内容") }.buttonStyle(.plain).feedbackPaperCard()
+                NavigationLink { MembershipPurchaseScreen(owner: String(session.accountID)).id(session.accountID) } label: { SupportNavigationRow(title: "寻寻仔会员", symbol: "crown", detail: "会员状态、订阅与恢复购买") }.buttonStyle(.plain).feedbackPaperCard()
+                NavigationLink { DiamondWalletScreen(owner: String(session.accountID)).id(session.accountID) } label: { SupportNavigationRow(title: "我的钻石", symbol: "diamond", detail: "充值、明细与已解锁内容") }.buttonStyle(.plain).feedbackPaperCard()
                 #endif
                 VStack(spacing: 0) {
-                    MainNavigationLink { PrintOrdersScreen(owner: String(session.accountID)) } label: {
+                    NavigationLink { PrintOrdersScreen(owner: String(session.accountID)) } label: {
                         SupportNavigationRow(title: "我的印制订单", symbol: "shippingbox", detail: "查看印制与配送进度")
                     }
                     cardDivider
-                    MainNavigationLink { HelpCenterScreen(owner: String(session.accountID)) } label: {
+                    NavigationLink { HelpCenterScreen(owner: String(session.accountID)) } label: {
                         SupportNavigationRow(title: "帮助与反馈", symbol: "questionmark.bubble", detail: "使用帮助、建议与问题反馈", badge: help.unread > 0 ? "有新回复" : "")
                     }
                 }.buttonStyle(.plain).feedbackPaperCard()
@@ -59,7 +59,7 @@ struct SettingsView: View {
                     cardDivider
                     Button { legalDocument = IdentifiableURL(url: AppEnvironment.current.termsOfServiceURL) } label: { SupportNavigationRow(title: "用户协议", symbol: "doc.text") }
                     cardDivider
-                    MainNavigationLink { AppVersionScreen() } label: { SupportNavigationRow(title: "版本信息", symbol: "info.circle", badge: AppVersionInformation.title) }
+                    NavigationLink { AppVersionScreen() } label: { SupportNavigationRow(title: "版本信息", symbol: "info.circle", badge: AppVersionInformation.title) }
                 }.buttonStyle(.plain).feedbackPaperCard()
             }
             Text("TravelDiary · 把旅途留在手帐里").font(.caption).foregroundStyle(DiaryLibraryStyle.secondary).frame(maxWidth: .infinity).padding(.top, 4)

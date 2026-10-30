@@ -392,7 +392,7 @@ private struct ModelScenarioBindingForm: View {
             // MARK: 工具选择区
             Section(L10n.text("common.tools", comment: "工具")) {
                 // 跳转到工具多选页面
-                MainNavigationLink {
+                NavigationLink {
                     GroupedToolSelectionView(
                         title: L10n.text("common.tools", comment: "工具"),
                         selectedValues: toolSelection
@@ -412,7 +412,7 @@ private struct ModelScenarioBindingForm: View {
             if smallTasks.isEmpty == false {
                 Section(L10n.text("ai_settings.models.agent.related_tasks.title", fallback: "Related small tasks", comment: "关联小任务")) {
                     // 跳转到关联任务多选页面
-                    MainNavigationLink {
+                    NavigationLink {
                         MultiSelectOptionsView(
                             title: L10n.text("ai_settings.models.agent.related_tasks.title", fallback: "Related small tasks", comment: "关联小任务选择页标题"),
                             options: smallTasks.map { ($0.code, L10n.format("ai_settings.models.agent.related_tasks.option_format", fallback: "%@ (%@)", comment: "关联小任务选项格式", $0.name, $0.code)) },

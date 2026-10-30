@@ -70,7 +70,7 @@ struct APIKeysSettingsView: View {
 
     private func providerRow(_ provider: APIKeys) -> some View {
         HStack(spacing: 12) {
-            MainNavigationLink {
+            NavigationLink {
                 ProviderSettingsEditorView(
                     provider: provider,
                     viewModel: viewModel
