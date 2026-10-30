@@ -5,13 +5,40 @@ import UIKit
 @MainActor
 struct DiaryPhotoFrameTests {
     @Test func bundledFramesHaveValidTransparentOpenings() throws {
-        #expect(DiaryPhotoFrameCatalog.items.count == 55)
+        #expect(DiaryPhotoFrameCatalog.items.count == 3)
         for item in DiaryPhotoFrameCatalog.items {
             let image = try #require(item.image)
             #expect(image.size.width > 0 && image.size.height > 0)
             #expect(item.opening.width > 0 && item.opening.height > 0)
             #expect(CGRect(x: 0, y: 0, width: 1, height: 1).contains(item.opening))
         }
+    }
+
+    @Test func generatedEditsReplaceLayerAndInvalidateCanvas() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = DiaryEditorSession(document: DiaryDocument(), images: [:], store: DiaryDocumentStore(ownerID: "generated-edit", baseDirectory: root))
+        let data = try #require(UIGraphicsImageRenderer(size: CGSize(width: 120, height: 180)).image { c in
+            UIColor.blue.setFill(); c.fill(CGRect(x: 0, y: 0, width: 120, height: 180))
+        }.pngData())
+        #expect(await session.importPhoto(data))
+        let photo = try #require(session.managedPhotos.first)
+        let before = session.document
+        let cache = DiaryCanvasRenderCache()
+        cache.synchronize(document: before, images: session.images, contentID: session.contentID)
+        let version = cache.visualVersion
+        let item = DiaryPhotoFrameCatalog.generated(style: 2, roughness: 0.9, width: 0.12, shade: 0.8, color: 2, seed: 42, ratio: 2.0/3.0)
+        #expect(await session.applyPhotoFrame(item, to: photo.id))
+        let frames = try #require(session.document.objects[photo.ownerID]).layers.filter { $0.frameTargetID == photo.id }
+        #expect(frames.count == 1)
+        #expect(frames.first?.photoFrameCatalogID == item.id)
+        cache.synchronize(document: session.document, images: session.images, contentID: session.contentID)
+        #expect(cache.visualVersion > version)
+        try await session.save()
+        let loaded = try await session.store.load(session.document.id)
+        #expect(loaded.document == session.document)
+        session.undo()
+        #expect(session.document.objects[photo.ownerID]?.layers == before.objects[photo.ownerID]?.layers)
     }
 
     @Test func openingTracksPhotoSizeAndTransform() {

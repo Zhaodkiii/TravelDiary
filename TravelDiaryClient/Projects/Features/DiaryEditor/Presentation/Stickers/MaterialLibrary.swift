@@ -203,6 +203,11 @@ struct MaterialLibraryBrowser: View {
     @State private var adding = false
     @State private var preview: CloudMaterial?
     @State private var requestID = UUID()
+    @State private var additionFeedback = 0
+    @State private var lastAddedID: String?
+    @State private var lastAddedName: String?
+    @FocusState private var searchFocused: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     init(session: DiaryEditorSession? = nil, replacingID: UUID? = nil,
          templateID: String? = nil, templateVersion: Int? = nil,
@@ -229,45 +234,109 @@ struct MaterialLibraryBrowser: View {
     }
     private var filterKey: String { query + "|" + kind + "|" + subcategory + "|" + source + "|" + (selectedLibrary?.id ?? "") + "|" + searchScope }
 
+    private var isStickerPicker: Bool { session != nil && type == "sticker" }
+    private var isCompact: Bool { isStickerPicker && sheetDetent == Self.compactDetent }
+    private var contextTitle: String {
+        if isLocal { return "内置贴纸" }
+        if kind == "frames" { return "相框" }
+        return selectedLibrary?.title ?? (source == "我的" ? "单张收藏" : source == "最近" ? "最近使用" : "手帐配套贴纸")
+    }
+    private var localItems: [DiaryStickerItem] {
+        DiaryStickerCatalog.items.filter { query.isEmpty || ($0.title + $0.category).localizedCaseInsensitiveContains(query) }
+    }
+
     var body: some View {
-        VStack(spacing: 6) {
-            if session != nil && type == "sticker" {
+        VStack(spacing: 8) {
+            if isStickerPicker {
                 HStack {
-                    Picker("来源", selection: Binding(get: { source }, set: { value in
-                        source = value; kind = ""; selectedLibrary = value == "当前手帐" ? currentLibraries.first : nil
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(replacingID == nil ? "添加贴纸" : "替换贴纸").font(.headline)
+                        if !isCompact {
+                            Text(lastAddedName.map { "已添加 · " + $0 } ?? "点击贴纸即可添加")
+                                .font(.caption2).foregroundStyle(DiaryLibraryStyle.secondary).lineLimit(1)
+                        }
+                    }
+                    Spacer()
+                    Button { showGallery = true } label: {
+                        Label("贴纸库", systemImage: "square.grid.2x2")
+                    }.font(.subheadline).frame(minHeight: 44)
+                    Button("完成") { dismiss() }
+                        .font(.subheadline.weight(.semibold)).frame(minWidth: 52, minHeight: 44)
+                        .accessibilityHint("关闭贴纸面板，已添加的贴纸会保留")
+                }.padding(.horizontal, 16).padding(.top, 8)
+                if !isCompact {
+                    Picker("贴纸来源", selection: Binding(get: { source }, set: { value in
+                        source = value; kind = ""; subcategory = ""; searchScope = "本包"
+                        selectedLibrary = value == "当前手帐" ? currentLibraries.first : nil
                     })) {
                         ForEach(["最近", "当前手帐", "我的"], id: \.self) { Text($0).tag($0) }
-                    }.pickerStyle(.segmented)
-                    Button { showGallery = true } label: { Image(systemName: "square.grid.2x2") }.accessibilityLabel("更多贴纸")
-                    Button { showFilters.toggle() } label: { Image(systemName: "line.3.horizontal.decrease") }.accessibilityLabel("分类筛选")
-                }.padding(.horizontal, 16)
-                if source != "最近" {
-                    ScrollView(.horizontal) {
-                        HStack {
-                            if source == "我的" { Button("单张收藏") { selectedLibrary = nil; kind = "" } }
-                            ForEach(source == "我的" ? myLibraries : currentLibraries) { lib in
-                                Button { selectedLibrary = lib; kind = "" } label: {
-                                    VStack(spacing: 2) {
-                                        MaterialResourceImage(resource: lib.cover).frame(width: 34, height: 34)
-                                        Text(lib.title).font(.caption2).lineLimit(1)
-                                    }.frame(width: 65).padding(3)
-                                        .background(selectedLibrary?.id == lib.id ? DiaryLibraryStyle.accent.opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                    }.pickerStyle(.segmented).padding(.horizontal, 16)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            if source == "我的" {
+                                packChip("单张收藏", symbol: "heart", selected: selectedLibrary == nil && kind.isEmpty) {
+                                    selectedLibrary = nil; kind = ""; subcategory = ""
                                 }
                             }
-                            if source == "我的" { Button("全部包") { showAllPacks = true } }
-                            Button("内置") { kind = "builtin"; selectedLibrary = nil }
+                            ForEach(source == "我的" ? myLibraries : source == "当前手帐" ? currentLibraries : []) { lib in
+                                Button {
+                                    selectedLibrary = lib; kind = ""; subcategory = ""; searchScope = "本包"
+                                } label: {
+                                    HStack(spacing: 7) {
+                                        MaterialResourceImage(resource: lib.cover, libraryID: lib.id, version: lib.version)
+                                            .frame(width: 30, height: 30).accessibilityHidden(true)
+                                        Text(lib.title).font(.caption.weight(.medium)).lineLimit(1)
+                                        Text("\(lib.count)").font(.caption2).foregroundStyle(DiaryLibraryStyle.secondary)
+                                    }.padding(.horizontal, 10).frame(minHeight: 44)
+                                        .background(selectedLibrary?.id == lib.id && kind.isEmpty ? DiaryLibraryStyle.accent.opacity(0.12) : DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+                                }.buttonStyle(.plain)
+                                    .accessibilityLabel("\(lib.title)，\(lib.count) 张贴纸")
+                                    .accessibilityAddTraits(selectedLibrary?.id == lib.id && kind.isEmpty ? [.isSelected] : [])
+                            }
+                            packChip("内置贴纸", symbol: "sparkles", selected: isLocal) {
+                                kind = "builtin"; subcategory = ""; selectedLibrary = nil
+                            }
+                            if source == "我的" {
+                                Button("全部贴纸包") { showAllPacks = true }.font(.caption).frame(minHeight: 44)
+                            }
                         }.padding(.horizontal, 16)
                     }
                 }
             }
-            if source == "我的" && !query.isEmpty {
+            if !isCompact && source == "我的" && !query.isEmpty {
                 Picker("搜索范围", selection: $searchScope) { Text(selectedLibrary == nil ? "单张收藏" : "本包").tag("本包"); Text("我的全部贴纸").tag("我的全部") }
                     .pickerStyle(.segmented).padding(.horizontal, 16)
             }
             if catalog.isOffline { Text("离线缓存").font(.caption).foregroundStyle(.secondary) }
-            DiaryLibrarySearch(text: $query, prompt: "搜索\(title)")
-                .padding(.horizontal, 16).padding(.top, 8)
-            if showFilters || session == nil || type != "sticker" {
+            if !isCompact {
+                HStack(spacing: 10) {
+                    DiaryLibrarySearch(text: $query, prompt: isStickerPicker ? "搜索\(contextTitle)" : "搜索\(title)")
+                        .focused($searchFocused)
+                    if isStickerPicker {
+                        Button { showFilters.toggle() } label: {
+                            Image(systemName: "line.3.horizontal.decrease")
+                                .frame(width: 44, height: 48)
+                                .background(showFilters ? DiaryLibraryStyle.accent.opacity(0.12) : DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 14))
+                        }.accessibilityLabel("分类筛选")
+                            .accessibilityValue(showFilters ? "已展开" : "已收起")
+                    }
+                }.padding(.horizontal, 16)
+            }
+            if isCompact {
+                HStack(spacing: 8) {
+                    if let lastAddedName {
+                        Label("已添加 · \(lastAddedName)", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(DiaryLibraryStyle.accent).lineLimit(1)
+                    } else {
+                        Text(contextTitle).lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Button("展开浏览", systemImage: "chevron.up") {
+                        withAnimation { sheetDetent = .fraction(0.66) }
+                    }.frame(minHeight: 44)
+                }.font(.caption).padding(.horizontal, 16)
+            }
+            if (!isCompact && showFilters) || session == nil || type != "sticker" {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(categories, id: \.0) { entry in
@@ -297,11 +366,9 @@ struct MaterialLibraryBrowser: View {
                 if kind == "frames", let session {
                     DiaryPhotoFrameGrid(session: session, query: query).padding(.horizontal, 16)
                 } else {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), spacing: 12) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: dynamicTypeSize.isAccessibilitySize ? 2 : 4), spacing: 12) {
                         if isLocal {
-                            ForEach(DiaryStickerCatalog.items.filter {
-                                query.isEmpty || ($0.title + $0.category).localizedCaseInsensitiveContains(query)
-                            }) { item in
+                            ForEach(localItems) { item in
                                 Button { addition = Task { await addLocal(item) } } label: {
                                     VStack(spacing: 6) {
                                         if let image = item.image() {
@@ -309,10 +376,12 @@ struct MaterialLibraryBrowser: View {
                                                 .frame(height: 84).frame(maxWidth: .infinity)
                                                 .padding(6)
                                                 .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+                                                .overlay { addedOutline(selected: lastAddedID == "local." + item.id) }
                                         }
                                         Text(item.title).font(.caption2).lineLimit(1)
                                     }
                                 }.buttonStyle(.plain).disabled(adding)
+                                .accessibilityLabel("添加\(item.title)")
                                 .contextMenu {
                                     Button(localFavorites.contains(item.id) ? "取消收藏" : "收藏") {
                                         if localFavorites.contains(item.id) { localFavorites.removeAll { $0 == item.id } }
@@ -327,32 +396,40 @@ struct MaterialLibraryBrowser: View {
                             }
                         }
                     }.scrollTargetLayout().padding(.horizontal, 16)
+                    if isLocal && localItems.isEmpty {
+                        ContentUnavailableView.search(text: query)
+                    }
                     if !isLocal {
                         if cursor != nil || nextCursor != nil {
                             DiaryPaginationFooter(token: filterKey + "|" + (nextCursor ?? cursor.map(String.init) ?? ""), loading: loading, error: error) { await loadItems(more: true) }
                         }
                         if loading { ProgressView().padding() }
                         if !loading && items.isEmpty {
-                            Button("搜索全部贴纸") { showGallery = true }
-                            ContentUnavailableView("暂无素材", systemImage: "square.grid.2x2",
-                                description: Text("试试其他分类或搜索词"))
+                            ContentUnavailableView {
+                                Label(query.isEmpty ? "这里还没有贴纸" : "没有找到贴纸", systemImage: "square.grid.2x2")
+                            } description: {
+                                Text(query.isEmpty ? "可以使用内置贴纸，或前往贴纸库挑选。" : "试试其他关键词，或前往贴纸库搜索。")
+                            } actions: {
+                                Button("浏览贴纸库") { showGallery = true }
+                            }
                         }
                     }
                 }
             }
             .scrollPosition(id:$scrollID)
             .scrollDismissesKeyboard(.interactively)
-            DiaryEditorToolFooter(title: title, onBack: { dismiss() }, onDone: { dismiss() })
+            if !isStickerPicker {
+                DiaryEditorToolFooter(title: title, onBack: { dismiss() }, onDone: { dismiss() })
+            }
         }
         .interactiveDismissDisabled(true) // 重点：禁止下拉关闭
         .foregroundStyle(DiaryLibraryStyle.ink)
         .tint(DiaryLibraryStyle.accent)
         .background(DiaryLibraryStyle.background)
-        // The shared footer supplies the clearance above the home indicator.
-        // Extend the layout as well as its background to avoid a second bottom inset.
-        .ignoresSafeArea(.container, edges: .bottom)
+        // Sticker content respects the home indicator; legacy tools retain their footer inset.
+        .ignoresSafeArea(.container, edges: isStickerPicker ? [] : .bottom)
         .presentationBackground(DiaryLibraryStyle.background)
-        .presentationDetents([Self.compactDetent, .fraction(0.66)], selection: $sheetDetent)
+        .presentationDetents([Self.compactDetent, .fraction(0.66), .large], selection: $sheetDetent)
         .presentationDragIndicator(.visible)
         .presentationBackgroundInteraction(keepsOpenAfterAdding ? .enabled(upThrough: Self.compactDetent) : .disabled)
         .task {
@@ -377,6 +454,15 @@ struct MaterialLibraryBrowser: View {
             generation = UUID(); addition?.cancel()
             if let session { catalog.pickerStates[session.id] = .init(source:source,library:selectedLibrary,query:query,kind:kind,subcategory:subcategory,scrollID:scrollID) }
         }
+        .onChange(of: filterKey) { _, _ in
+            requestID = UUID(); items = []; cursor = nil; nextCursor = nil
+            scrollID = nil; error = nil; lastAddedID = nil; lastAddedName = nil
+            loading = !isLocal && kind != "frames"
+        }
+        .onChange(of: searchFocused) { _, focused in
+            if focused { sheetDetent = .large }
+        }
+        .sensoryFeedback(.success, trigger: additionFeedback)
         .task(id: filterKey) {
             do { try await Task.sleep(for: .milliseconds(300)); await loadItems(more: false) } catch { }
         }
@@ -393,6 +479,26 @@ struct MaterialLibraryBrowser: View {
         }
     }
 
+    private func packChip(_ title: String, symbol: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol).font(.caption.weight(.medium))
+                .padding(.horizontal, 12).frame(minHeight: 44)
+                .background(selected ? DiaryLibraryStyle.accent.opacity(0.12) : DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+        }.buttonStyle(.plain).accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
+
+    private func addedOutline(selected: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 12)
+            .strokeBorder(selected ? DiaryLibraryStyle.accent : .clear, lineWidth: 2)
+            .overlay(alignment: .topTrailing) {
+                if selected {
+                    Image(systemName: "checkmark.circle.fill").font(.caption)
+                        .foregroundStyle(DiaryLibraryStyle.accent)
+                        .background(DiaryLibraryStyle.surface, in: Circle()).padding(5)
+                }
+            }
+    }
+
     private func materialCell(_ item: CloudMaterial) -> some View {
         VStack(spacing: 6) {
             Button {
@@ -404,8 +510,9 @@ struct MaterialLibraryBrowser: View {
                     MaterialThumbnail(item: item)
                         .frame(height: 84).frame(maxWidth: .infinity).padding(6)
                         .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+                        .overlay { addedOutline(selected: lastAddedID == item.id) }
                         .overlay(alignment: .topTrailing) {
-                            if item.is_favorited {
+                            if item.is_favorited && lastAddedID != item.id {
                                 Image(systemName: "heart.fill").font(.caption2)
                                     .foregroundStyle(DiaryLibraryStyle.accent).padding(5)
                             }
@@ -422,6 +529,8 @@ struct MaterialLibraryBrowser: View {
                     Text(item.name).font(.caption2).lineLimit(1)
                 }
             }.buttonStyle(.plain).disabled(adding || item.availability == "unavailable")
+            .accessibilityLabel(item.name)
+            .accessibilityHint(item.availability == "unavailable" ? "该贴纸已下架" : session == nil ? "查看贴纸详情" : "点击添加到画布，长按查看详情或收藏")
             .contextMenu {
                 Button(item.is_favorited ? "取消收藏" : "收藏贴纸") { Task { await favoriteItem(item) } }
                 Button("查看详情") { preview = item }
@@ -508,7 +617,10 @@ struct MaterialLibraryBrowser: View {
                 }
                 guard requestID == token, activeFilter == filterKey, !Task.isCancelled else { return }
                 MaterialRecentStore.save(recent,owner:catalog.owner)
-                items = recent.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+                items = recent.filter {
+                    (query.isEmpty || ($0.name + $0.keywords.joined(separator: " ")).localizedCaseInsensitiveContains(query)) &&
+                    (kind.isEmpty || $0.kind == kind) && (subcategory.isEmpty || $0.subcategory == subcategory)
+                }
                 nextCursor = nil; error = nil; return
             }
             if source == "当前手帐", selectedLibrary == nil { items = []; nextCursor = nil; return }
@@ -546,7 +658,8 @@ struct MaterialLibraryBrowser: View {
         UserDefaults.standard.set(localFavorites, forKey: session.store.stickerPreferenceKey + ".favorites")
         UserDefaults.standard.set(localRecent, forKey: session.store.stickerPreferenceKey + ".recent")
     }
-    private func finishAdding() {
+    private func finishAdding(id: String, name: String) {
+        lastAddedID = id; lastAddedName = name; additionFeedback += 1; searchFocused = false
         if keepsOpenAfterAdding {
             withAnimation { sheetDetent = Self.compactDetent }
         } else { dismiss() }
@@ -558,11 +671,17 @@ struct MaterialLibraryBrowser: View {
     }
     private func addLocal(_ item: DiaryStickerItem) async {
         guard !adding, let session, session.store.ownerID == catalog.owner, let data = item.image()?.pngData() else { return }
-        adding = true; defer { adding = false }
-        if await session.importPhoto(data, replacing: replacingID, asSticker: true, stickerName: item.title) {
+        adding = true; error = nil
+        let intent = UUID(); generation = intent
+        let owner = catalog.owner
+        let documentID = session.document.id
+        let contentID = session.contentID
+        defer { if generation == intent { adding = false } }
+        if await session.importPhoto(data, replacing: replacingID, asSticker: true, stickerName: item.title,
+            canCommit: { generation == intent && catalog.owner == owner && session.acceptsMaterialInsertion(documentID: documentID, contentID: contentID, replacingID: replacingID) }) {
             localRecent.removeAll { $0 == item.id }; localRecent.insert(item.id, at: 0); localRecent = Array(localRecent.prefix(30))
             MaterialRecentStore.recordLocal(item,owner:catalog.owner)
-            saveLocalPreferences(); finishAdding()
+            saveLocalPreferences(); finishAdding(id: "local." + item.id, name: item.title)
         } else { error = session.errorMessage }
     }
     private func add(_ item: CloudMaterial) async {
@@ -590,7 +709,7 @@ struct MaterialLibraryBrowser: View {
                     materialSource: DiaryMaterialSource(materialID: item.id, revision: item.revision, libraryID: item.library_id, libraryVersion: item.library_version),
                     canCommit: { generation == intent && catalog.owner == owner && session.acceptsMaterialInsertion(documentID: documentID, contentID: contentID, replacingID: replacingID) })
             }
-            if imported { MaterialRecentStore.record(item, owner: owner); pausedItem = nil; finishAdding() }
+            if imported { MaterialRecentStore.record(item, owner: owner); pausedItem = nil; finishAdding(id: item.id, name: item.name) }
             else { error = session.errorMessage }
         } catch { if generation == intent && !Task.isCancelled { self.error = error.localizedDescription } }
     }

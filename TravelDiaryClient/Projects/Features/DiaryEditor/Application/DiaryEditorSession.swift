@@ -231,7 +231,13 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
 
     /// The photo and its decorative frame live in the same smart object.
     func applyPhotoFrame(_ item: DiaryPhotoFrameCatalog.Item?, to photoID: UUID) async -> Bool {
-        guard !busy, let photo = managedPhotos.first(where: { $0.id == photoID }), !photo.locked else { return false }
+        guard !busy, !closing, !childOpen,
+              let photo = managedPhotos.first(where: { $0.id == photoID }), !photo.locked else {
+            errorMessage = "当前照片无法编辑，请重新选择照片。"
+            return false
+        }
+        errorMessage = nil
+        let expected = document
         busy = true
         defer { busy = false }
         do {
@@ -242,6 +248,10 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                       let data = source.pngData() else { throw DiaryEditorError.invalidImage }
                 let (asset, image) = try await store.importImage(data, documentID: document.id)
                 imported = asset; images[asset.id] = image
+            }
+            guard document == expected else {
+                errorMessage = "页面已变化，请重新打开相框后保存。"
+                return false
             }
             edit {
                 document.objects[photo.ownerID]?.layers.removeAll { $0.frameTargetID == photoID }
@@ -264,6 +274,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                     }
                 }
                 document.update(photoID) { $0.photoFrameIsManual = true }
+                if photo.ownerID != contentID { document.objects[photo.ownerID]?.revision += 1 }
             }
             return true
         } catch { errorMessage = error.localizedDescription; return false }
@@ -1004,6 +1015,40 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     func toggleVisibility(_ id: UUID) { edit { document.update(id) { $0.visible.toggle() } } }
     func toggleLock(_ id: UUID) { edit { document.update(id) { $0.locked.toggle() } } }
     func previewDrawing(_ value: PKDrawing) { document.objects[contentID]?.drawing = value.dataRepresentation() }
+    /// 在独立子会话中替换笔迹；父图层的 ID、变换和排列保持不变，提交作为一次撤销。
+    func saveDrawingEdits(_ drawing: PKDrawing) async -> Bool {
+        guard parent != nil, !busy, !closing, !childOpen,
+              content.role == .canvas, content.layers.isEmpty, content.background == nil else { return false }
+        edit { document.objects[contentID]?.drawing = drawing.dataRepresentation() }
+        return await commitToParent()
+    }
+    /// 每次画笔草稿提交为独立对象，复用通用图层的变换、排序、命中和存档。
+    @discardableResult
+    func addDrawingLayer(_ drawing: PKDrawing) -> UUID? {
+        guard !busy, !closing, !childOpen, !drawing.strokes.isEmpty else { return nil }
+        guard scopeLayers.count < 200 else {
+            errorMessage = "当前对象的图层数量已达上限。"; return nil
+        }
+        let bounds = drawing.bounds.integral
+        guard !bounds.isNull, !bounds.isEmpty,
+              [bounds.minX, bounds.minY, bounds.width, bounds.height].allSatisfy(\.isFinite),
+              bounds.width <= 10000, bounds.height <= 10000 else {
+            errorMessage = "笔迹范围过大，请缩小本次绘画范围。"; return nil
+        }
+        let localDrawing = drawing.transformed(using: CGAffineTransform(translationX: -bounds.minX, y: -bounds.minY))
+        var content = DiaryObjectContent(role: .canvas, referenceSize: bounds.size, layers: [])
+        content.drawing = localDrawing.dataRepresentation()
+        let layer = DiaryLayer(name: "画笔", kind: .object,
+            transform: DiaryTransform(position: CGPoint(x: bounds.midX, y: bounds.midY),
+                                      pivot: CGPoint(x: bounds.width / 2, y: bounds.height / 2)),
+            size: bounds.size, contentID: content.id)
+        edit {
+            document.objects[content.id] = content
+            document.objects[contentID]?.layers.append(layer)
+            selectedID = layer.id
+        }
+        return layer.id
+    }
     func clearDrawing() { edit { document.objects[contentID]?.drawing = PKDrawing().dataRepresentation() } }
     func export() async -> URL? {
         guard !busy else { return nil }

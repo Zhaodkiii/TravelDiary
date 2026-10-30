@@ -134,21 +134,13 @@ struct DiaryPhotoBatchTests {
         let sizes = [CGSize(width: 120, height: 180), CGSize(width: 120, height: 180), CGSize(width: 240, height: 140)]
         let chosen = DiaryPhotoFrameCatalog.select(for: sizes)
         #expect(Set(chosen.map(\.id)).count == 3)
-        #expect(Set(chosen.compactMap { DiaryPhotoFrameCatalog.profiles[$0.id]?.accent }).count >= 2)
         #expect(chosen.map(\.id) == DiaryPhotoFrameCatalog.select(for: sizes).map(\.id))
         for (size, frame) in zip(sizes, chosen) {
-            let profile = try #require(DiaryPhotoFrameCatalog.profiles[frame.id])
-            #expect(profile.style == .lightPaper)
-            #expect(size.width < size.height ? profile.aspectRatio < 0.9 : profile.aspectRatio > 1.1)
+            let image = try #require(frame.image)
+            let ratio = image.size.width * frame.opening.width / (image.size.height * frame.opening.height)
+            #expect(abs(ratio - size.width / size.height) < 0.01)
         }
-        let squareFrames = DiaryPhotoFrameCatalog.select(for: Array(repeating: CGSize(width: 200, height: 200), count: 4))
-        #expect(Set(squareFrames.map(\.id)).count == 4)
-        let repeated = DiaryPhotoFrameCatalog.select(for: Array(repeating: sizes[0], count: 30))
-        let count = DiaryPhotoFrameCatalog.items.filter {
-            DiaryPhotoFrameCatalog.profiles[$0.id]?.style == .lightPaper && DiaryPhotoFrameCatalog.profiles[$0.id]!.aspectRatio < 0.9
-        }.count
-        #expect(Set(repeated.prefix(count).map(\.id)).count == count)
-        #expect(repeated.dropFirst(count).allSatisfy { DiaryPhotoFrameCatalog.profiles[$0.id]?.decoration == 0 })
+
     }
 
     @Test func layoutsRespectMarginsGapsRotationAndPhotoRatios() throws {

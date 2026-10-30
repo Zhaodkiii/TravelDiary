@@ -579,6 +579,7 @@ final class DiaryCanvasSurface: UIView {
 /// 绘画草稿只在“完成”时提交；屏幕点坐标与作品坐标之间可逆转换。
 struct DiaryDrawingSheet: View {
     @ObservedObject var session: DiaryEditorSession
+    let editingExisting: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var drawing: PKDrawing
     @State private var clearConfirmation = false
@@ -589,11 +590,14 @@ struct DiaryDrawingSheet: View {
     @State private var checkpoint: PKDrawing
     @State private var undoDrawings: [PKDrawing] = []
     @State private var redoDrawings: [PKDrawing] = []
+    @State private var submitting = false
 
-    init(session: DiaryEditorSession) {
+    init(session: DiaryEditorSession, editingExisting: Bool = false) {
         self.session = session
-        _drawing = State(initialValue: session.drawing)
-        _checkpoint = State(initialValue: session.drawing)
+        self.editingExisting = editingExisting
+        let initial = editingExisting ? session.drawing : PKDrawing()
+        _drawing = State(initialValue: initial)
+        _checkpoint = State(initialValue: initial)
     }
 
     var body: some View {
@@ -646,9 +650,9 @@ struct DiaryDrawingSheet: View {
                     }
                 }.background(.regularMaterial)
             }
-            .navigationTitle("绘画").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(editingExisting ? "编辑画笔图层" : "新建画笔图层").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("取消", action: cancel) }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") {
                         finish()
@@ -658,13 +662,36 @@ struct DiaryDrawingSheet: View {
                     Button("清空", role: .destructive) { clearConfirmation = true }
                 }
             }
-            .confirmationDialog("清空当前页面的笔迹？", isPresented: $clearConfirmation, titleVisibility: .visible) {
+            .confirmationDialog(editingExisting ? "清空这个图层的笔迹？" : "清空本次绘画的笔迹？", isPresented: $clearConfirmation, titleVisibility: .visible) {
                 Button("清空笔迹", role: .destructive) { drawing = PKDrawing(); recordStroke() }
-            } message: { Text("只清空绘画草稿，点击完成后保存。") }
+            } message: { Text("点击完成后保存，取消可放弃本次修改。") }
+            .alert("画笔", isPresented: Binding(get: { session.errorMessage != nil },
+                set: { if !$0 { session.errorMessage = nil } })) {
+                Button("确定") { session.errorMessage = nil }
+            } message: { Text(session.errorMessage ?? "") }
         }
+        .disabled(submitting || session.busy)
     }
     private func finish() {
-        session.beginInteraction(); session.previewDrawing(drawing); session.finishInteraction(); dismiss()
+        guard !submitting else { return }
+        if editingExisting {
+            submitting = true
+            Task { @MainActor in
+                defer { submitting = false }
+                if await session.saveDrawingEdits(drawing) { dismiss() }
+            }
+        } else if drawing.strokes.isEmpty || session.addDrawingLayer(drawing) != nil { dismiss() }
+    }
+    private func cancel() {
+        guard !submitting else { return }
+        if editingExisting {
+            submitting = true
+            Task { @MainActor in
+                await session.cancelEditor()
+                dismiss()
+                submitting = false
+            }
+        } else { dismiss() }
     }
     private func recordStroke() {
         guard drawing.dataRepresentation() != checkpoint.dataRepresentation() else { return }

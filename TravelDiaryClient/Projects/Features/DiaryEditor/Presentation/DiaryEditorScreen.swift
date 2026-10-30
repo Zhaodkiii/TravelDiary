@@ -12,22 +12,23 @@ struct DiaryEditorScreen: View {
     @State private var showCamera = false
     @State private var capturedPhotos: [UIImage] = []
     @State private var importingCameraPhotos = false
-    @State private var showText = false
+    @State private var textEditor: DiaryTextEditorPresentation?
     @State private var showCrop = false
     @State private var activeTool: DiaryEditorTool?
     @State private var showDrawing = false
+    @State private var drawingEditor: DiaryEditorSession?
     @State private var showStickers = false
 
     private var toolOpen: Bool { activeTool != nil || showStickers }
-    @State private var textLayer: DiaryLayer?
 
     var body: some View {
         NavigationStack {
             editorContent
             .disabled(session.busy || importingCameraPhotos)
-            .navigationTitle(session.isRoot ? "画布编辑器" : "对象编辑器")
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { editorToolbar }
+            .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar(toolOpen ? .hidden : .visible, for: .navigationBar)
             .overlay {
                 if session.busy || importingCameraPhotos {
@@ -45,7 +46,9 @@ struct DiaryEditorScreen: View {
                     showCamera = false
                 }, onClose: { showCamera = false })
             }
-            .fullScreenCover(isPresented: $showText) { DiaryTextEditorSheet(session: session, layer: textLayer) }
+            .fullScreenCover(item: $textEditor) { presentation in
+                DiaryTextEditorSheet(session: session, draft: presentation.draft, initialTab: presentation.initialTab)
+            }
             .sheet(isPresented: $showStickers, onDismiss: { session.finishInteraction() }) {
                 MaterialLibraryBrowser(session: session, keepsOpenAfterAdding: true)
             }
@@ -58,6 +61,11 @@ struct DiaryEditorScreen: View {
                     .presentationDetents([.large])
                     .onDisappear { session.finishFreeTransform(commit: false) }
             .interactiveDismissDisabled()
+            }
+            .sheet(item: $drawingEditor) { child in
+                DiaryDrawingSheet(session: child, editingExisting: true)
+                    .presentationDetents([.large])
+                    .interactiveDismissDisabled()
             }
             .alert("手帐", isPresented: Binding(get: { session.errorMessage != nil }, set: { if !$0 { session.errorMessage = nil } })) {
                 Button("确定") { session.errorMessage = nil }
@@ -97,12 +105,6 @@ struct DiaryEditorScreen: View {
 
     private var editorContent: some View {
             VStack(spacing: 0) {
-                if !toolOpen { HStack {
-                    Text(session.inkMode ? "单指绘画，双指缩放或移动画布" : "单击选择，再点取消；双指缩放或移动画布")
-                    Spacer()
-                    Text(session.saveStatus).foregroundStyle(.secondary)
-                }
-                .font(.caption).padding(.horizontal).padding(.vertical, 8) }
                 GeometryReader { geometry in
                     let size = session.canvasBounds.size
                     // 工具模式用紧凑边距适配全部可见高度，普通模式保留完整手柄空间。
@@ -115,7 +117,7 @@ struct DiaryEditorScreen: View {
                       ZStack(alignment: .topLeading) {
                         DiaryCanvasView(session: session, compactViewport: toolOpen, onEdit: {
                             guard let layer = session.selected else { return }
-                            if layer.kind == .object { childEditor = session.openObject() }
+                            if layer.kind == .object { openSelectedObject() }
                             else if layer.kind == .text { openText() }
                             else if layer.isContentPhoto { showCrop = true }
                             else if layer.kind == .sticker { childEditor = session.openSelectedStickerObject() }
@@ -142,9 +144,12 @@ struct DiaryEditorScreen: View {
                         }
                     }
                     .disabled(session.busy)
-                } else { controls }
+                }
             }
-            .ignoresSafeArea(.container, edges: toolOpen ? .bottom : [])
+            .overlay(alignment: .bottom) {
+                if !toolOpen { controls }
+            }
+            .ignoresSafeArea(.container, edges: toolOpen ? .bottom : .top)
     }
 
     private var controls: some View {
@@ -152,10 +157,10 @@ struct DiaryEditorScreen: View {
             onBackground: { session.finishInteraction(); session.select(nil); activeTool = .background },
             onPhotos: { session.finishInteraction(); showPhotos = true },
             onCamera: { session.finishInteraction(); capturedPhotos = []; showCamera = true },
-            onDrawing: { session.finishInteraction(); session.select(nil); session.inkMode = true; showDrawing = true },
+            onDrawing: { session.finishInteraction(); session.select(nil); showDrawing = true },
             onLayers: { session.finishInteraction(); session.layerMode = true; activeTool = .layers },
             onStickers: { session.finishInteraction(); showStickers = true },
-            onOpenObject: { childEditor = session.openObject() },
+            onOpenObject: openSelectedObject,
             onTransform: { session.beginFreeTransform(); if session.transformDraft != nil { activeTool = .transform } })
     }
     private func importCapturedPhotos() {
@@ -173,8 +178,18 @@ struct DiaryEditorScreen: View {
         }
     }
     private func openText() {
-        textLayer = session.selected?.kind == .text ? session.selected : nil
-        showText = true
+        textEditor = DiaryTextEditorPresentation(session: session, layer: session.selectedEditingLayer)
+    }
+    private func openSelectedObject() {
+        session.finishInteraction()
+        if session.selectedEditingKind == .drawing {
+            guard let child = session.openObject() else { return }
+            child.select(nil)
+            child.inkMode = true
+            drawingEditor = child
+        } else {
+            childEditor = session.openObject()
+        }
     }
     private func closeTool(commit: Bool) {
         if activeTool == .transform { session.finishFreeTransform(commit: commit) }

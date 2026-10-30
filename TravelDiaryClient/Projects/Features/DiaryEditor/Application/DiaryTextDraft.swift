@@ -6,6 +6,15 @@ import Combine
 final class DiaryTextDraft: ObservableObject {
     let preview: DiaryEditorSession
     let targetID: UUID?
+    private var customFont: DiaryFontReference?
+    private var customColor: DiaryColor?
+    private var initialInputFocusConsumed = false
+
+    func consumeInitialInputFocus() -> Bool {
+        guard !initialInputFocusConsumed else { return false }
+        initialInputFocusConsumed = true
+        return true
+    }
     @Published var layer: DiaryLayer { didSet { refresh() } }
 
     init(session: DiaryEditorSession, layer: DiaryLayer?) {
@@ -27,16 +36,100 @@ final class DiaryTextDraft: ObservableObject {
         preview.previewTextDraft(visible, targetID: targetID)
     }
 
-    func apply(_ template: DiaryTextTemplate) {
+    func titleLayer(_ layout: DiaryTitleLayout) -> DiaryLayer {
+        var next = layer
+        var appearance = next.textAppearance ?? DiaryTextAppearance()
+        appearance.titleLayout = layout
+        appearance.vertical = layout == .vertical
+        appearance.bold = layout == .headline
+        next.textAppearance = appearance
+        next.textAlignment = .center
+        next.textLineHeight = layout == .handwriting ? 1.4 : 1.15
+        next.textLetterSpacing = layout == .headline ? 1 : 0
+        let fontID = layout == .handwriting || layout == .vertical ? "handwriting.lxgw.wenkai" : "system"
+        next.font = customFont ?? DiaryFontCatalog.shared.entries.first { $0.id == fontID }?.reference ?? .system
+        let canvas = preview.content.referenceSize
+        next.size.width = min(900, canvas.width * (layout == .vertical ? 0.18 : 0.72))
+        let maximumHeight = canvas.height * (layout == .vertical ? 0.65 : 0.32)
+        var low: CGFloat = 12, high: CGFloat = min(240, canvas.width * 0.14)
+        for _ in 0..<16 {
+            next.fontSize = (low + high) / 2
+            let padding = DiaryPageRenderer.textInsets(next)
+            let string = next.text.isEmpty ? "输入标题" : DiaryPageRenderer.displayedText(next)
+            let measure = (string as NSString).boundingRect(with: CGSize(width: 100000, height: 100000),
+                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: DiaryPageRenderer.textStyle(next), context: nil)
+            if measure.width + padding.left + padding.right <= next.size.width && measure.height + padding.top + padding.bottom <= maximumHeight {
+                low = next.fontSize
+            } else { high = next.fontSize }
+        }
+        next.fontSize = floor(low)
+        return next
+    }
+
+    func applyTitle(_ layout: DiaryTitleLayout) { layer = titleLayer(layout) }
+
+    func applySaved(_ style: DiarySavedTextStyle) {
+        customFont = style.font
+        customColor = style.color
+        var next = layer
+        next.textAppearance = style.appearance; next.font = style.font; next.textColor = style.color
+        next.textAlignment = style.alignment; next.textLineHeight = style.lineHeight
+        next.textLetterSpacing = style.letterSpacing; next.fontSize = style.fontSize
+        next.size.width = min(style.width, preview.content.referenceSize.width * 0.9)
+        layer = next
+    }
+
+    func setText(_ text: String) {
+        guard layer.text != text else { return }
+        layer.text = text
+    }
+
+    func selectFont(_ reference: DiaryFontReference) {
+        customFont = reference
+        layer.font = reference
+    }
+
+    func setTextColor(_ color: DiaryColor) {
+        customColor = color
+        layer.textColor = color
+    }
+
+    func setBackgroundColor(_ color: DiaryColor) {
+        var next = layer
+        var appearance = next.textAppearance ?? DiaryTextAppearance()
+        if var paper = appearance.paper {
+            paper.color = color
+            next.textAppearance = appearance
+            next.textAppearance?.paper = paper
+        } else {
+            appearance.background = color
+            next.textAppearance = appearance
+        }
+        layer = next
+    }
+
+    func selectPaper(_ kind: DiaryTextPaper.Kind?) {
+        var appearance = layer.textAppearance ?? DiaryTextAppearance()
+        if let kind {
+            var paper = appearance.paper ?? DiaryTextPaper(color: appearance.background ?? appearance.template.background)
+            paper.kind = kind
+            appearance.paper = paper
+        } else { appearance.paper = nil }
+        layer.textAppearance = appearance
+    }
+
+    func templateLayer(_ template: DiaryTextTemplate) -> DiaryLayer {
         var next = layer
         next.textAppearance = DiaryTextAppearance(template: template, bold: template == .burst,
             strokeWidth: template == .burst ? 2 : 0)
-        next.textColor = template.textColor
+        next.textColor = customColor ?? template.textColor
         next.textAlignment = .center
         next.textLineHeight = 1.2
         next.textLetterSpacing = 0
         let fontID = template == .postcard || template == .tape ? "handwriting.lxgw.wenkai" : "system"
-        next.font = DiaryFontCatalog.shared.entries.first { $0.id == fontID }?.reference ?? .system
-        layer = next
+        next.font = customFont ?? DiaryFontCatalog.shared.entries.first { $0.id == fontID }?.reference ?? .system
+        return next
     }
+
+    func apply(_ template: DiaryTextTemplate) { layer = templateLayer(template) }
 }

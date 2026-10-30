@@ -2,25 +2,46 @@ import UIKit
 
 extension DiaryPageRenderer {
     static func displayedText(_ layer: DiaryLayer) -> String {
-        guard layer.textAppearance?.vertical == true else { return layer.text }
-        return layer.text.map(String.init).joined(separator: "\n")
+        if layer.textAppearance?.vertical == true {
+            return layer.text.split(separator: "\n", omittingEmptySubsequences: false)
+                .map { $0.map(String.init).joined(separator: "\n") }.joined(separator: "\n\n")
+        }
+        guard layer.textAppearance?.titleLayout == .balanced, !layer.text.contains("\n") else { return layer.text }
+        let characters = Array(layer.text)
+        guard characters.count > 2 else { return layer.text }
+        // Preserve Latin words and avoid placing punctuation at the start of a line.
+        let candidates = (1..<characters.count).filter { index in
+            let a = characters[index-1], b = characters[index]
+            let latinWord = a.isASCII && b.isASCII && a.isLetter && b.isLetter
+            return !latinWord && !"，。！？、；：,.!?;:）】》".contains(b)
+        }
+        guard let split = candidates.min(by: { abs($0 * 2 - characters.count) < abs($1 * 2 - characters.count) }) else { return layer.text }
+        return String(characters[..<split]).trimmingCharacters(in: .whitespaces) + "\n" + String(characters[split...]).trimmingCharacters(in: .whitespaces)
     }
 
-    static func textPadding(_ layer: DiaryLayer) -> CGFloat {
+    static func textInsets(_ layer: DiaryLayer) -> UIEdgeInsets {
         let style = layer.textAppearance ?? DiaryTextAppearance()
-        if style.template != .plain { return max(20, layer.fontSize * (style.template == .burst ? 1.2 : 0.7)) }
-        return style.background == nil ? 0 : layer.fontSize * 0.35
+        if let paper = style.paper {
+            guard paper.kind != .none else { return .zero }
+            return UIEdgeInsets(top: layer.fontSize * paper.verticalPadding, left: layer.fontSize * paper.horizontalPadding,
+                                bottom: layer.fontSize * paper.verticalPadding, right: layer.fontSize * paper.horizontalPadding)
+        }
+        let padding: CGFloat = style.template != .plain ? max(20, layer.fontSize * (style.template == .burst ? 1.2 : 0.7))
+            : (style.background == nil ? 0 : layer.fontSize * 0.35)
+        return UIEdgeInsets(top: padding, left: padding, bottom: padding, right: padding)
     }
+
+    static func textPadding(_ layer: DiaryLayer) -> CGFloat { textInsets(layer).left }
 
     static func textBounds(_ layer: DiaryLayer) -> CGRect {
-        let padding = textPadding(layer)
-        let width = max(1, layer.size.width - padding * 2)
+        let padding = textInsets(layer)
+        let width = max(1, layer.size.width - padding.left - padding.right)
         let measured = (displayedText(layer) as NSString).boundingRect(
             with: CGSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: textStyle(layer), context: nil)
-        let height = max(ceil(measured.height), layer.fontSize * 1.2) + padding * 2
-        let effect: CGFloat = max(CGFloat(layer.textAppearance?.shadowRadius ?? 0) * 2,
-                                  layer.fontSize * CGFloat(layer.textAppearance?.strokeWidth ?? 0) / 100)
+        let height = max(ceil(measured.height), layer.fontSize * 1.2) + padding.top + padding.bottom
+        let effect: CGFloat = max(CGFloat(layer.textAppearance?.paper?.kind == DiaryTextPaper.Kind.none ? 0 : (layer.textAppearance?.paper?.shadow ?? 0)) * 24, max(CGFloat(layer.textAppearance?.shadowRadius ?? 0) * 2,
+                                  layer.fontSize * CGFloat(layer.textAppearance?.strokeWidth ?? 0) / 100))
         return CGRect(x: -effect, y: -effect, width: layer.size.width + effect * 2, height: height + effect * 2)
     }
 
@@ -32,11 +53,15 @@ extension DiaryPageRenderer {
         context.saveGState()
         defer { context.restoreGState() }
         drawTextDecoration(style, rect: rect, in: context)
-        (displayedText(layer) as NSString).draw(with: rect.insetBy(dx: textPadding(layer), dy: textPadding(layer)),
+        (displayedText(layer) as NSString).draw(with: rect.inset(by: textInsets(layer)),
             options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: textStyle(layer), context: nil)
     }
 
     private static func drawTextDecoration(_ style: DiaryTextAppearance, rect: CGRect, in context: CGContext) {
+        if let paper = style.paper {
+            drawPaper(paper, rect: rect, in: context)
+            return
+        }
         guard style.template != .plain || style.background != nil else { return }
         let r = rect.insetBy(dx: 3, dy: 3)
         let path: UIBezierPath
@@ -82,6 +107,58 @@ extension DiaryPageRenderer {
         if style.template == .postcard {
             context.setFillColor(color(.yellow).withAlphaComponent(0.85).cgColor)
             context.fill(CGRect(x: r.midX - r.width * 0.16, y: r.minY, width: r.width * 0.32, height: 12))
+        }
+    }
+
+    private static func drawPaper(_ paper: DiaryTextPaper, rect: CGRect, in context: CGContext) {
+        guard paper.kind != .none else { return }
+        let r = rect.insetBy(dx: 2, dy: 2)
+        let path: UIBezierPath
+        switch paper.kind {
+        case .torn:
+            path = UIBezierPath()
+            let corners = [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
+                           CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
+            for edge in 0..<4 {
+                let a = corners[edge], b = corners[(edge+1)%4]
+                let length = max(1, hypot(b.x-a.x, b.y-a.y))
+                let count = max(2, Int(length / 4))
+                for i in 0..<count {
+                    let t = CGFloat(i)/CGFloat(count)
+                    let phase = Double(i) + Double(paper.seed % 10000)*1.37 + Double(edge)*71
+                    let noise = sin(phase*0.23)*0.55 + sin(phase*1.71)*0.3 + sin(phase*2.93)*0.15
+                    let displacement = CGFloat(noise * paper.roughness) * min(12, r.height * 0.08) * sin(.pi*t)
+                    let point = CGPoint(x: a.x+(b.x-a.x)*t-(b.y-a.y)/length*displacement,
+                                        y: a.y+(b.y-a.y)*t+(b.x-a.x)/length*displacement)
+                    if edge == 0 && i == 0 { path.move(to: point) } else { path.addLine(to: point) }
+                }
+            }
+            path.close()
+        case .tape:
+            path = UIBezierPath()
+            let cut = min(14, r.width * 0.05)
+            path.move(to: CGPoint(x: r.minX+cut, y: r.minY))
+            path.addLine(to: CGPoint(x: r.maxX, y: r.minY+3))
+            path.addLine(to: CGPoint(x: r.maxX-cut, y: r.maxY))
+            path.addLine(to: CGPoint(x: r.minX, y: r.maxY-3)); path.close()
+        default:
+            path = UIBezierPath(roundedRect: r, cornerRadius: min(r.height, r.width) * paper.cornerRadius * 0.5)
+        }
+        context.saveGState()
+        context.setShadow(offset: CGSize(width: 0, height: paper.shadow*5), blur: paper.shadow*12,
+                          color: UIColor.black.withAlphaComponent(paper.shadow*0.4).cgColor)
+        color(paper.color).setFill(); path.fill()
+        context.restoreGState()
+    }
+
+    static func textPreview(_ layer: DiaryLayer) -> UIImage {
+        let bounds = textBounds(layer)
+        let scale = min(1, 600 / max(bounds.width, bounds.height))
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        return UIGraphicsImageRenderer(size: CGSize(width: max(1, bounds.width*scale), height: max(1, bounds.height*scale)), format: format).image { renderer in
+            renderer.cgContext.scaleBy(x: scale, y: scale)
+            renderer.cgContext.translateBy(x: -bounds.minX, y: -bounds.minY)
+            drawText(layer, in: renderer.cgContext)
         }
     }
 

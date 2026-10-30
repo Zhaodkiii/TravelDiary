@@ -442,6 +442,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
                 if let appearance = node.textAppearance {
                     guard appearance.isValid else { throw DiaryEditorError.invalidDocument.logged() }
                     try validateColor(appearance.background)
+                    try validateColor(appearance.paper?.color)
                     try validateColor(appearance.strokeColor)
                     try validateColor(appearance.shadowColor)
                 }

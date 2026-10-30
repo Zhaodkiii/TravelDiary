@@ -2,7 +2,7 @@ import Foundation
 
 /// UI capabilities are resolved from content, not the wrapper's `.object` kind or its display name.
 nonisolated enum DiaryLayerEditingKind: Equatable {
-    case photo, text, textImage, sticker, paper, background, frame, group
+    case photo, text, textImage, sticker, paper, background, frame, drawing, group
 }
 
 extension DiaryEditorSession {
@@ -23,6 +23,9 @@ extension DiaryEditorSession {
     var selectedEditingKind: DiaryLayerEditingKind? {
         guard let outer = selected, let layer = selectedEditingLayer else { return nil }
         if outer.semanticKind == .background || outer.isLibraryBackground == true || layer.semanticKind == .background { return .background }
+        if let id = layer.contentID, outer.contentID == id, let content = document.objects[id],
+           content.role == .canvas, content.layers.isEmpty, content.background == nil,
+           !content.drawing.isEmpty { return .drawing }
         if layer.contentID != nil { return .group }
         if layer.isPhotoFrame { return .frame }
         if layer.kind == .text { return .text }
@@ -85,7 +88,7 @@ nonisolated enum DiaryContextAction: String, Identifiable {
     case addPhotoToFrame
     case transform, background, layers, replacePhoto, crop, frame, opacity, arrange
     case editText, font, fontSize, textColor, typography, replaceMaterial, flip
-    case replaceBackground, placement, lock, unlock, frameColor, frameWidth, editContent
+    case replaceBackground, placement, lock, unlock, frameColor, frameWidth, editContent, editDrawing
     var id: Self { self }
     var title: String {
         switch self {
@@ -111,6 +114,7 @@ nonisolated enum DiaryContextAction: String, Identifiable {
         case .frameColor: "边框颜色"
         case .frameWidth: "边框粗细"
         case .editContent: "编辑内容"
+        case .editDrawing: "重新编辑"
         }
     }
     var symbol: String {
@@ -133,6 +137,7 @@ nonisolated enum DiaryContextAction: String, Identifiable {
         case .lock: "lock"
         case .unlock: "lock.open"
         case .editContent: "square.stack.3d.up"
+        case .editDrawing: "pencil.tip"
         }
     }
 }
@@ -154,6 +159,7 @@ extension DiaryEditorSession {
         case .background: actions = [.replaceBackground, .placement, .opacity, .lock]
         case .frame: actions = selected.assetID != nil ? [.frame, .opacity] : [.frameColor, .frameWidth, .opacity]
         case .group: actions = [.editContent] + (selectedPhotos.isEmpty ? [] : [.replacePhoto]) + [.opacity, .arrange]
+        case .drawing: actions = [.editDrawing, .flip, .opacity, .arrange]
         case nil: actions = [.background, .layers]
         }
         return canTransformSelection ? actions + [.transform] : actions

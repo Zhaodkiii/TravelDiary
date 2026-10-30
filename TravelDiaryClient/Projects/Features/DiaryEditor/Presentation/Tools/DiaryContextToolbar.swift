@@ -13,7 +13,7 @@ struct DiaryContextToolbar: View {
     let onOpenObject: () -> Void
     var onTransform: () -> Void = {}
     @State private var panel: Panel?
-    @State private var textPanel: Panel?
+    @State private var textEditor: DiaryTextEditorPresentation?
     @State private var target: DiaryLayer?
     @State private var cropTarget: DiaryLayer?
     @State private var emptyFrameTarget: DiaryEmptyPhotoFrameTarget?
@@ -21,6 +21,7 @@ struct DiaryContextToolbar: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
     @State private var importing = false
+    @State private var addExpanded = false
 
     private enum Panel: String, Identifiable {
         case replacement, photos
@@ -29,52 +30,68 @@ struct DiaryContextToolbar: View {
     }
 
     var body: some View {
-        VStack(spacing: 6) {
-            // 保留信息行的布局高度，选择切换不会改变画布尺寸或重置浏览倍率。
-            HStack {
-                Text(session.selected?.name ?? "").font(.caption).lineLimit(1).foregroundStyle(.secondary)
-                Spacer()
-                Button(action: onLayers) { Label("图层", systemImage: "square.3.layers.3d") }.font(.caption)
-            }
-            .padding(.horizontal, 16)
-            .opacity(session.selected == nil ? 0 : 1)
-            .allowsHitTesting(session.selected != nil)
-            .accessibilityHidden(session.selected == nil)
-            HStack(spacing: 0) {
-                Menu {
-                    Button(action: onPhotos) { Label("照片（可多选）", systemImage: "photo.on.rectangle") }
-                    Button(action: onCamera) { Label("相机", systemImage: "camera") }
-                        .accessibilityIdentifier("diary.add.camera")
-                    Button { target = nil; textPanel = .editText } label: { Label("文字", systemImage: "textformat") }
-                    Button(action: onStickers) { Label("贴纸", systemImage: "face.smiling") }
-                    Button(action: onBackground) { Label("背景", systemImage: "photo.fill") }
-                    Button(action: onDrawing) { Label("画笔", systemImage: "pencil.tip") }
-                } label: {
-                    VStack(spacing: 5) {
-                        Image(systemName: "plus.circle.fill").font(.system(size: 29)).foregroundStyle(.purple)
-                        Text("添加").font(.caption)
-                    }.frame(width: 66, height: 62).contentShape(Rectangle())
-                }.accessibilityLabel("添加")
-                Divider().frame(height: 38)
+        GlassEffectContainer(spacing: 12) {
+        VStack(spacing: 18) {
+            if session.selected != nil {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 16) {
                         ForEach(session.contextActions) { action in
                             Button { perform(action) } label: {
-                                VStack(spacing: 7) {
-                                    Image(systemName: action.symbol).font(.system(size: 23))
-                                    Text(action == .replaceMaterial && session.selectedEditingKind == .textImage ? "替换素材" : action.title)
-                                        .font(.caption).lineLimit(1)
-                                }.frame(minWidth: 64, minHeight: 62).contentShape(Rectangle())
+                                toolLabel(action.title, symbol: action.symbol)
                             }.accessibilityIdentifier("diary.tool.\(action.rawValue)")
                         }
-                    }.padding(.horizontal, 10)
+                    }.padding(.horizontal, 20)
                 }
             }
+            if addExpanded {
+                HStack(alignment: .top, spacing: 0) {
+                    toolButton("拍照", symbol: "camera", action: onCamera)
+                        .accessibilityIdentifier("diary.add.camera")
+                    toolButton("相册", symbol: "photo.on.rectangle", action: onPhotos)
+                    toolButton("画笔", symbol: "pencil.tip", action: onDrawing)
+                    toolButton("贴纸", symbol: "seal", action: onStickers)
+                    toolButton("背景", symbol: "square.3.layers.3d", action: onBackground)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            HStack(alignment: .top, spacing: 22) {
+                Menu {
+                    Section {
+                        Button { session.undo() } label: { Label("撤销", systemImage: "arrow.uturn.backward") }
+                            .disabled(session.undoStack.isEmpty)
+                        Button { session.redo() } label: { Label("重做", systemImage: "arrow.uturn.forward") }
+                            .disabled(session.redoStack.isEmpty)
+                    }
+                    Section {
+                        Button(action: onBackground) { Label("画布背景", systemImage: "square.3.layers.3d") }
+                        Button(action: onLayers) { Label("图层管理", systemImage: "square.3.layers.3d.top.filled") }
+                        if session.selectedEditingLayer?.kind == .text {
+                            Button { target = session.selectedEditingLayer; presentTextEditor(.font) } label: {
+                                Label("字体", systemImage: "textformat")
+                            }
+                        }
+                    }
+                } label: { toolLabel("更多", symbol: "ellipsis") }
+                Button {
+                    withAnimation(.easeInOut(duration: 0.22)) { addExpanded.toggle() }
+                } label: { toolLabel(addExpanded ? "收起" : "添加", symbol: addExpanded ? "xmark" : "plus") }
+                    .accessibilityIdentifier("diary.add.toggle")
+                Button { openTool(onStickers) } label: { toolLabel("贴纸", symbol: "seal") }
+                Button {
+                    openTool { target = nil; presentTextEditor(.editText) }
+                } label: { toolLabel("文字", symbol: "square.and.pencil") }
+            }
         }
-        .padding(.vertical, 8).foregroundStyle(DiaryLibraryStyle.ink).background(DiaryLibraryStyle.background)
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
+        .frame(maxWidth: .infinity)
+        .foregroundStyle(Color(red: 0.45, green: 0.51, blue: 0.49))
+        }
         .disabled(session.busy || importing)
-        .fullScreenCover(item: $textPanel) { value in
-            DiaryTextEditorSheet(session: session, layer: target, initialTab: textTab(value))
+        .fullScreenCover(item: $textEditor) { presentation in
+            DiaryTextEditorSheet(session: session, draft: presentation.draft, initialTab: presentation.initialTab)
         }
         .sheet(item: $panel) { panel in panelContent(panel) }
         .fullScreenCover(item: $cropTarget) { layer in DiaryCropSheet(session: session, layer: layer) }
@@ -98,6 +115,34 @@ struct DiaryContextToolbar: View {
         .overlay { if importing { ProgressView(emptyFrameTarget == nil ? "正在替换照片…" : "正在添加照片…").padding().background(.regularMaterial, in: Capsule()) } }
     }
 
+    private func toolLabel(_ title: String, symbol: String) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 24, weight: .regular))
+                .frame(width: 46, height: 46)
+                .glassEffect(.regular.interactive(), in: Circle())
+            Text(title).font(.caption).fixedSize(horizontal: true, vertical: false)
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+    }
+
+    private func toolButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
+        Button { openTool(action) } label: {
+            toolLabel(title, symbol: symbol).frame(maxWidth: .infinity)
+        }
+    }
+
+    private func openTool(_ action: () -> Void) {
+        session.finishInteraction()
+        addExpanded = false
+        action()
+    }
+
+    private func presentTextEditor(_ panel: Panel) {
+        textEditor = DiaryTextEditorPresentation(session: session, layer: target, initialTab: textTab(panel))
+    }
+
     private func perform(_ action: DiaryContextAction) {
         session.finishInteraction()
         target = session.selectedEditingLayer
@@ -119,18 +164,18 @@ struct DiaryContextToolbar: View {
             if target?.kind == .photo || target?.isPhotoFrame == true { panel = .frame }
         case .opacity: target = session.selected; panel = .opacity
         case .arrange: target = session.selected; panel = .arrange
-        case .editText: textPanel = .editText
-        case .font: textPanel = .font
-        case .fontSize: textPanel = .fontSize
-        case .textColor: textPanel = .textColor
-        case .typography: textPanel = .typography
+        case .editText: presentTextEditor(.editText)
+        case .font: presentTextEditor(.font)
+        case .fontSize: presentTextEditor(.fontSize)
+        case .textColor: presentTextEditor(.textColor)
+        case .typography: presentTextEditor(.typography)
         case .replaceMaterial: target = session.selectedMaterialLayer; if target != nil { panel = .replacement }
         case .replaceBackground: onBackground()
         case .placement: target = session.selected; panel = .placement
         case .lock, .unlock:
             if let id = session.selectedID { session.toggleLock(id) }
         case .frameColor, .frameWidth: panel = .frame
-        case .editContent: onOpenObject()
+        case .editContent, .editDrawing: onOpenObject()
         case .flip: session.flipSelected(horizontal: true)
         }
     }
@@ -261,8 +306,16 @@ private struct DiaryArrangementPanel: View {
 
 extension DiaryColor {
     @MainActor init(_ color: Color) {
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
-        self.init(red: r, green: g, blue: b, alpha: a)
+        let source = UIColor(color).resolvedColor(with: .current)
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let normalized = source.cgColor.converted(to: space, intent: .defaultIntent, options: nil).map(UIColor.init(cgColor:)) ?? source
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 1
+        if !normalized.getRed(&r, green: &g, blue: &b, alpha: &a) {
+            var white: CGFloat = 0
+            if normalized.getWhite(&white, alpha: &a) { r = white; g = white; b = white }
+        }
+        // The document stores bounded sRGB; ColorPicker may supply extended or Display P3 components.
+        func bounded(_ value: CGFloat) -> Double { value.isFinite ? Double(min(1, max(0, value))) : 0 }
+        self.init(red: bounded(r), green: bounded(g), blue: bounded(b), alpha: bounded(a))
     }
 }
