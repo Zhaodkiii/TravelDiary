@@ -181,12 +181,18 @@ final class BillingStore: ObservableObject {
             var updated = intent; updated.orderID = order.order_id
             UserDefaults.standard.set(try JSONEncoder().encode(updated), forKey: storageKey)
         }
+        invalidateContentCatalogs(owner: expected)
         await refresh(owner: expected)
         return order
     }
 }
 
 extension BillingStore {
+    private func invalidateContentCatalogs(owner: String) {
+        for domain in ["fonts", "materials", "presets"] {
+            CatalogResponseCache.shared.invalidate(owner: owner, domain: domain)
+        }
+    }
     func contentAccess(kind: String, targetID: String, owner: String) async throws -> ContentAccess {
         let path = "content-access/\(kind)/\(targetID)/"
         let initial: ContentAccess = try await request(path, owner: owner)
@@ -224,6 +230,7 @@ extension BillingStore {
     func refreshMembership(owner expected: String) async throws {
         try await ready(owner: expected)
         let value: MembershipStatus = try await request("membership/", owner: expected, method: .post, body: [:])
+        if membership?.active != value.active { invalidateContentCatalogs(owner: expected) }
         membership = value
         if value.active && value.sync_state == "fresh" { setMembershipPending(false) }
     }

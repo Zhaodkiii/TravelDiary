@@ -37,11 +37,13 @@ nonisolated final class ResourceCache: @unchecked Sendable {
     private var maintenanceScheduled = false
     private var revision: UInt64 = 0
     private var scopeRevisions: [String: UInt64] = [:]
+    private var categoryRevisions: [String: UInt64] = [:]
+    private var scopedCategoryRevisions: [String: UInt64] = [:]
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
     var root: URL { paths.cache("Resources") }
     var generation: UInt64 { sessionLock.withLock { revision } }
     func generation(for key: ResourceCacheKey) -> String {
-        sessionLock.withLock { "\(revision):\(scopeRevisions[key.scope, default: 0])" }
+        sessionLock.withLock { "\(revision):\(scopeRevisions[key.scope, default: 0]):\(categoryRevisions[key.category, default: 0]):\(scopedCategoryRevisions[key.scope + "|" + key.category, default: 0])" }
     }
     var capacity: Int64 { locked { limit } }
 
@@ -218,7 +220,12 @@ nonisolated final class ResourceCache: @unchecked Sendable {
     }
     func clear(scope: String? = nil, category: String? = nil) {
         locked {
-            sessionLock.withLock { revision &+= 1 }
+            sessionLock.withLock {
+                if let scope, let category { scopedCategoryRevisions[scope + "|" + category, default: 0] &+= 1 }
+                else if let scope { scopeRevisions[scope, default: 0] &+= 1 }
+                else if let category { categoryRevisions[category, default: 0] &+= 1 }
+                else { revision &+= 1 }
+            }
             for entry in entries() where (scope == nil || entry.scope == scope) && (category == nil || entry.category == category) {
                 _ = remove(id: entry.id)
             }

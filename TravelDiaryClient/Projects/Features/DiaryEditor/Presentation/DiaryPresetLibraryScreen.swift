@@ -274,7 +274,9 @@ struct DiaryPresetLibraryScreen: View {
             remote = value; remoteError = nil
             await Task.detached { PresetLibraryCatalogCache.save(value, ownerID: ownerID) }.value
         } catch is CancellationError { return }
-        catch { remoteError = "在线模板暂时无法更新，请重试；已下载的资源可在下载管理中使用。" }
+        catch {
+            guard !Task.isCancelled, !CatalogLoadError.isCancellation(error) else { return }
+            remoteError = "在线模板暂时无法更新，请重试；已下载的资源可在下载管理中使用。" }
         remoteFinished = true
     }
 }

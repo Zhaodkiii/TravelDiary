@@ -44,7 +44,8 @@ struct FontGalleryScreen: View {
         }
         .onSubmit(of: .search) { Task { await load(reset: true) } }
         .onChange(of: sort) { _, _ in Task { await load(reset: true) } }
-        .task(id: repository.generation) { fonts = []; await load(reset: true) }
+        .task(id: "\(repository.generation)|\(repository.catalogRevision)") { await load(reset: true) }
+        .onChange(of: repository.generation) { _, _ in fonts = []; total = 0; error = nil }
     }
     private var galleryContent: some View {
         ScrollView {
@@ -70,7 +71,7 @@ struct FontGalleryScreen: View {
                                 .toolbar(.hidden, for: .tabBar)
                         } label: {
                             VStack(alignment: .leading, spacing: 6) {
-                                FontSpecimenImage(url: font.content.cover.flatMap { font.images[$0] })
+                                FontSpecimenImage(font: font, resourceID: font.content.cover)
                                     .aspectRatio(1, contentMode: .fit)
                                 Text(font.title).font(.system(size: 13)).foregroundStyle(DiaryLibraryStyle.ink).lineLimit(1)
                                 Text(font.priceLabel).font(.caption)
@@ -86,7 +87,7 @@ struct FontGalleryScreen: View {
                 if mine { NavigationLink("逛字体集市") { FontGalleryScreen(documentID: documentID, onUse: onUse) } }
             }.padding(16)
         }.background(DiaryLibraryStyle.background)
-            .refreshable { await load(reset: true) }
+            .refreshable { await load(reset: true, forceRefresh: true) }
     }
     private var filterChips: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: typeSize.isAccessibilitySize ? 100 : 62), spacing: 10)], alignment: .leading, spacing: 10) {
@@ -109,25 +110,40 @@ struct FontGalleryScreen: View {
             }
         }.padding(.bottom, 6)
     }
-    private func load(reset: Bool) async {
-        let stamp=UUID();requestID=stamp;loading=true
+    private func load(reset: Bool, forceRefresh: Bool = false) async {
+        if !reset && loading { return }
+        let stamp=UUID();requestID=stamp;loading=true;error=nil
+        defer { if requestID == stamp { loading = false } }
         let next=reset ? 1 : page+1
         do {
-            let result=try await repository.list(mine:mine,query:query,sort:sort,page:next)
-            guard requestID==stamp else { return }
+            let result=try await repository.list(mine:mine,query:query,sort:sort,page:next,forceRefresh:forceRefresh, onCached: { cached in
+                guard requestID == stamp, reset else { return }
+                fonts = cached.items; total = cached.count ?? cached.items.count; page = next
+            })
+            guard requestID==stamp, !Task.isCancelled else { return }
             fonts=reset ? result.items : fonts+result.items;total=result.count ?? result.items.count;page=next;error=nil
-        } catch { if requestID==stamp { self.error=error.localizedDescription } }
-        if requestID==stamp { loading=false }
+        } catch {
+            guard requestID == stamp, !Task.isCancelled, !CatalogLoadError.isCancellation(error) else { return }
+            self.error = error.localizedDescription
+        }
     }
 }
 
 private struct FontSpecimenImage: View {
-    let url: String?
+    let font: CloudFont
+    let resourceID: String?
     var body: some View {
-        AsyncImage(url:url.flatMap(URL.init(string:))) { phase in
-            if let image=phase.image { image.resizable().scaledToFit() }
-            else { RoundedRectangle(cornerRadius:20).fill(Color.pink.opacity(0.06)).overlay(Image(systemName:"textformat").foregroundStyle(.secondary)) }
-        }.clipShape(RoundedRectangle(cornerRadius:20))
+        let owner = CloudFontRepository.shared.owner
+        let identity = "\(font.id):\(font.version):\(resourceID ?? "cover")"
+        CachedPreviewImage(request: PreviewImageRequest(
+            key: .account(owner, category: "font-images", identity: identity),
+            url: resourceID.flatMap { font.images[$0] }.flatMap(URL.init(string:)),
+            refreshURL: {
+                let updated: CloudFont = try await CloudFontRepository.shared.request("families/\(font.id)/", forceRefresh: true)
+                guard await CloudFontRepository.shared.owner == owner, updated.version == font.version else { throw CancellationError() }
+                return resourceID.flatMap { updated.images[$0] }.flatMap(URL.init(string:))
+            }))
+            .clipShape(RoundedRectangle(cornerRadius: 20))
     }
 }
 
@@ -148,7 +164,7 @@ struct FontDetailScreen: View {
             VStack(alignment:.leading,spacing:20) {
                 Text(font.title).font(.title.bold())
                 Text(font.content.author).foregroundStyle(.secondary)
-                FontSpecimenImage(url:font.content.cover.flatMap { font.images[$0] }).frame(maxWidth:.infinity).frame(height:280)
+                FontSpecimenImage(font: font, resourceID: font.content.cover).frame(maxWidth:.infinity).frame(height:280)
                 HStack { Text(font.priceLabel).foregroundStyle(.pink);Spacer();Button(favorite ? "已收藏" : "收藏") { Task { do { try await repository.favorite(font,value:!favorite);favorite.toggle() } catch { self.error=error.localizedDescription } } } }
                 Text(font.content.description)
                 Text(font.content.languages.joined(separator:" · ")).font(.caption).foregroundStyle(.secondary)
@@ -158,7 +174,7 @@ struct FontDetailScreen: View {
                     Text(text).font(Font(DiaryFontCatalog.shared.font(selected,size:28)))
                     if let warning=DiaryFontCatalog.shared.warning(selected,text:text) { Text(warning).font(.caption).foregroundStyle(.secondary) }
                 }
-                ForEach(font.content.previews,id:\.self) { id in FontSpecimenImage(url:font.images[id]).frame(maxWidth:.infinity).frame(height:280) }
+                ForEach(font.content.previews,id:\.self) { id in FontSpecimenImage(font: font, resourceID: id).frame(maxWidth:.infinity).frame(height:280) }
                 if let error { Text(error).foregroundStyle(.red).font(.caption) }
                 if downloaded && onUse == nil { Text("字体已加入我的字体。打开手帐的文字编辑器即可使用。") }
             }.padding()

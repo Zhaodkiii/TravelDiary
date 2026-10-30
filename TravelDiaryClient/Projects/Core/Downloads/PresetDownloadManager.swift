@@ -105,8 +105,6 @@ final class PresetDownloadManager: ObservableObject {
     private var engine: SupportNetworkEngine?
     private var running: [UUID: Task<Void, Never>] = [:]
     private var lockedHashes = Set<String>()
-    private var catalogCache: (owner: String, date: Date, value: RemotePresetCatalog)?
-    private var catalogRequest: Task<RemotePresetCatalog, Error>?
     private var catalogGeneration = UUID()
     private var browseRequestIDs: [String: UUID] = [:]
     private var browseCache: [String: RemotePresetBrowse] = [:]
@@ -153,14 +151,14 @@ final class PresetDownloadManager: ObservableObject {
 
     func waitUntilRestored() async { await restoreTask?.value }
     func configure(engine: SupportNetworkEngine) {
-        catalogGeneration = UUID(); catalogCache = nil; catalogRequest?.cancel(); catalogRequest = nil
+        catalogGeneration = UUID()
         for task in browseRequests.values { task.cancel() }; browseRequests.removeAll(); browseRequestIDs.removeAll()
         browseCache.removeAll()
         self.engine = engine
         MaterialCatalogRepository.shared.engine = engine
     }
     func deactivate() {
-        catalogGeneration = UUID(); catalogCache = nil; catalogRequest?.cancel(); catalogRequest = nil
+        catalogGeneration = UUID()
         for task in browseRequests.values { task.cancel() }; browseRequests.removeAll(); browseRequestIDs.removeAll()
         for job in jobs where running[job.id] != nil { pause(job.id) }
         MaterialCatalogRepository.shared.activate("")
@@ -172,7 +170,7 @@ final class PresetDownloadManager: ObservableObject {
         PreviewImagePipeline.shared.activate(owner: owner)
         MaterialCatalogRepository.shared.activate(owner)
         if self.owner != owner {
-            catalogGeneration = UUID(); catalogCache = nil; catalogRequest?.cancel(); catalogRequest = nil
+            catalogGeneration = UUID()
             PresetPreviewRepository.shared.reset()
             for task in browseRequests.values { task.cancel() }; browseRequests.removeAll(); browseRequestIDs.removeAll()
             for job in jobs where running[job.id] != nil { pause(job.id) }
@@ -182,13 +180,29 @@ final class PresetDownloadManager: ObservableObject {
     }
     func request(_ path: String, body: [String: [String]]? = nil, allowETag: Bool = false, queryItems: [URLQueryItem]? = nil) async throws -> Data {
         guard let engine else { throw URLError(.userAuthenticationRequired) }
-        let response = try await engine.sendRaw(SupportNetworkRequest(method: body == nil ? .get : .post,
-            path: "/api/v1/diary-presets/" + path,
-            queryItems: queryItems,
+        let cacheable = body == nil && ["search/", "taxonomy/"].contains(path)
+        let request = SupportNetworkRequest(method: body == nil ? .get : .post,
+            path: "/api/v1/diary-presets/" + path, queryItems: queryItems,
             body: body.map { .json(AnyEncodable($0)) } ?? .none,
-            strategy: NetworkStrategy(requiresAuth: true, allowETag: allowETag, etagTTL: allowETag ? 300 : nil)))
-        return response.data
+            strategy: NetworkStrategy(requiresAuth: true, allowETag: allowETag || cacheable, etagTTL: 300))
+        let context = owner ?? "signed-out"
+        let generation = catalogGeneration
+        let fetch: @MainActor () async throws -> Data = { [self] in
+            guard generation == catalogGeneration else { throw CancellationError() }
+            let response = try await engine.sendRaw(request)
+            guard generation == catalogGeneration else { throw CancellationError() }
+            if path == "search/" { _ = try JSONDecoder().decode(PresetSearchResponse.self, from: response.data) }
+            if path == "taxonomy/" { _ = try JSONDecoder().decode(PresetTaxonomy.self, from: response.data) }
+            return response.data
+        }
+        if cacheable {
+            var parts = URLComponents(); parts.path = path; parts.queryItems = queryItems
+            return try await CatalogResponseCache.shared.load(owner: context, domain: "presets",
+                path: engine.serviceBaseURL.absoluteString + "/presets/" + (parts.string ?? path), fetch: fetch)
+        }
+        return try await fetch()
     }
+
     func importStatisticsContext(for package: DiaryPresetPackage, wholeBook: Bool) -> PresetImportStatisticsContext? {
         guard UUID(uuidString: package.id) != nil, jobs.contains(where: { job in
             guard job.owner == owner, let manifest = try? JSONDecoder().decode(PresetManifest.self, from: job.manifestData) else { return false }
@@ -196,21 +210,20 @@ final class PresetDownloadManager: ObservableObject {
         }) else { return nil }
         return PresetImportStatisticsContext(templateID: package.id, version: package.manifest.packageVersion, wholeBook: wholeBook)
     }
-    func invalidateCatalog() { catalogCache = nil }
+    func invalidateCatalog() { CatalogResponseCache.shared.invalidate(owner: owner ?? "signed-out", domain: "presets") }
     func catalog() async throws -> RemotePresetCatalog {
         let context = owner ?? "signed-out"
-        if let catalogCache, catalogCache.owner == context, Date().timeIntervalSince(catalogCache.date) < 300 { return catalogCache.value }
-        if let catalogRequest { return try await catalogRequest.value }
         let generation = catalogGeneration
-        let task = Task {
-            try JSONDecoder().decode(RemotePresetCatalog.self, from: await request("catalog/", queryItems: [URLQueryItem(name: "schema_max", value: "2"), URLQueryItem(name: "content_kind", value: "all")]))
-        }
-        catalogRequest = task
-        defer { if generation == catalogGeneration { catalogRequest = nil } }
-        let value = try await task.value
+        let data = try await CatalogResponseCache.shared.load(owner: context, domain: "presets",
+            path: (engine?.serviceBaseURL.absoluteString ?? "") + "/catalog/?schema_max=2&content_kind=all") { [self] in
+                guard generation == catalogGeneration, (owner ?? "signed-out") == context else { throw CancellationError() }
+                let data = try await request("catalog/", allowETag: true, queryItems: [URLQueryItem(name: "schema_max", value: "2"), URLQueryItem(name: "content_kind", value: "all")])
+                guard generation == catalogGeneration, (owner ?? "signed-out") == context else { throw CancellationError() }
+                _ = try JSONDecoder().decode(RemotePresetCatalog.self, from: data)
+                return data
+            }
         guard generation == catalogGeneration, (owner ?? "signed-out") == context else { throw CancellationError() }
-        catalogCache = (context, Date(), value)
-        return value
+        return try JSONDecoder().decode(RemotePresetCatalog.self, from: data)
     }
     func browse(_ book: RemotePresetBook, ownerID: String, forceRefresh: Bool = false) async throws -> RemotePresetBrowse {
         let key = "\(ownerID):\(book.id):\(book.version)"

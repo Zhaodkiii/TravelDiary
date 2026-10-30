@@ -119,12 +119,13 @@ struct ETagHTTPInterceptor: Sendable {
         // 若需按更多请求头区分缓存，可在此扩展 fingerprint。
         let urlString = request.url?.absoluteString ?? "missing_url"
         let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""
-        let fingerprint = "\(urlString)|Authorization:\(auth)"
+        let billing = request.value(forHTTPHeaderField: "X-Billing-Session") ?? ""
+        let fingerprint = "\(urlString)|Authorization:\(auth)|Billing:\(billing)"
         let digest = SHA256.hash(data: fingerprint.data(using: .utf8) ?? Data())
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    /// 未过期则设置 `If-None-Match`；已过期则删除本地条目，避免错误复用。
+    /// 有完整缓存体即可条件校验，过期仅表示需要重新验证。
     /// 同时把客户端期望的 ETag 缓存秒数上送给服务端，用于服务端返回匹配的 `Cache-Control`。
     func applyIfNoneMatch(to urlRequest: URLRequest, cacheKey: String, request: SupportNetworkRequest) -> URLRequest {
         var req = urlRequest
@@ -133,14 +134,10 @@ struct ETagHTTPInterceptor: Sendable {
            ttl > 0 {
             req.setValue(String(Int(ttl)), forHTTPHeaderField: "X-Cache-Max-Age")
         }
-        if let record = store.record(forKey: cacheKey) {
-            if record.isExpired() {
-                store.removeCache(forKey: cacheKey)
-                logger.debug(SupportNetworkingStrings.ETag.skipStaleCache(key: cacheKey), module: .cache)
-            } else {
-                req.setValue(record.etag, forHTTPHeaderField: "If-None-Match")
-                logger.debug(SupportNetworkingStrings.ETag.apply(tag: record.etag, key: cacheKey), module: .cache)
-            }
+        // Expired freshness is precisely when a validator is useful. Keep it only
+        // alongside its body; eviction must never produce an unmergeable 304.
+        if let record = store.record(forKey: cacheKey), store.cachedBody(forKey: cacheKey) != nil {
+            req.setValue(record.etag, forHTTPHeaderField: "If-None-Match")
         }
         return req
     }
@@ -155,8 +152,14 @@ struct ETagHTTPInterceptor: Sendable {
     ) -> SupportNetworkResponse {
         let httpResponse = transportResponse.httpResponse
 
+        let noStore = httpResponse.value(forHTTPHeaderField: "Cache-Control")?.lowercased().contains("no-store") == true
+        if noStore { store.removeCache(forKey: cacheKey) }
         if httpResponse.statusCode == 304 {
             if let cached = conditionalBody ?? store.cachedBody(forKey: cacheKey) {
+                if !noStore, let previous = store.record(forKey: cacheKey) {
+                    try? store.store(record: ETagCacheRecord(etag: httpResponse.value(forHTTPHeaderField: "ETag") ?? previous.etag,
+                        lastUpdated: Date(), expirationDate: computeExpirationDate(from: httpResponse, request: request)), body: cached, forKey: cacheKey)
+                }
                 let presentation = JSONPayloadFormatting.prettyUTF8StringForLog(from: cached)
                 logger.verbose(
                     SupportNetworkingStrings.ETag.merged304FullPayload(
@@ -183,7 +186,7 @@ struct ETagHTTPInterceptor: Sendable {
         }
 
         // 成功响应：持久化新 ETag 与 body，供下次条件请求与 304 合并。
-        if (200...299).contains(httpResponse.statusCode) {
+        if (200...299).contains(httpResponse.statusCode), !noStore {
             let maybeETag = httpResponse.value(forHTTPHeaderField: "ETag")
             if let etag = maybeETag, !etag.isEmpty {
                 let expirationDate = self.computeExpirationDate(

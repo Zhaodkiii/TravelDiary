@@ -119,6 +119,7 @@ actor FontDownloadManager {
     static let shared = CloudFontRepository()
     @Published private(set) var owner = ""
     @Published private(set) var generation = UUID()
+    @Published private(set) var catalogRevision = UUID()
     private var engine: SupportNetworkEngine?
     private var subscription: AnyCancellable?
     func configure(engine: SupportNetworkEngine, sessions: AppSessionStore) {
@@ -130,21 +131,42 @@ actor FontDownloadManager {
             owner = next; generation = UUID()
         }
     }
-    func request<T: Decodable>(_ path: String, method: SupportHTTPMethod = .get, body: [String: Any]? = nil) async throws -> T {
+    func request<T: Decodable>(_ path: String, method: SupportHTTPMethod = .get, body: [String: Any]? = nil, forceRefresh: Bool = false, onCached: ((T) -> Void)? = nil) async throws -> T {
         guard let engine, !owner.isEmpty else { throw BillingFailure("请先登录账户") }
         let stamp = generation
         var headers: [String: String] = [:]
         if let session = BillingStore.shared.bootstrapInfo?.session_id { headers["X-Billing-Session"] = session }
         let parts = URLComponents(string: path)
         let data = try body.map { try JSONSerialization.data(withJSONObject: $0, options: .sortedKeys) }
-        let response = try await engine.sendRaw(SupportNetworkRequest(method: method, path: "/api/v1/fonts/" + (parts?.path ?? path), queryItems: parts?.queryItems, headers: headers,
-            body: data.map { .raw($0, contentType: "application/json") } ?? .none, strategy: NetworkStrategy(requiresAuth: true, allowETag: false)))
+        let cacheable = method == .get && (path.hasPrefix("families/") || path == "mine/")
+        let request = SupportNetworkRequest(method: method, path: "/api/v1/fonts/" + (parts?.path ?? path), queryItems: parts?.queryItems, headers: headers,
+            body: data.map { .raw($0, contentType: "application/json") } ?? .none, strategy: NetworkStrategy(requiresAuth: true, allowETag: cacheable))
+        let fetch: @MainActor () async throws -> Data = { [self] in
+            guard stamp == generation else { throw CancellationError() }
+            let response = try await engine.sendRaw(request)
+            guard stamp == generation else { throw CancellationError() }
+            _ = try JSONDecoder().decode(T.self, from: response.data)
+            return response.data
+        }
+        let bytes: Data
+        if cacheable {
+            bytes = try await CatalogResponseCache.shared.load(owner: owner, domain: "fonts",
+                path: engine.serviceBaseURL.absoluteString + "/fonts/" + path + "|billing=" + (headers["X-Billing-Session"] ?? ""), forceRefresh: forceRefresh,
+                onCached: { data in if let value = try? JSONDecoder().decode(T.self, from: data) { onCached?(value) } }, fetch: fetch)
+        } else {
+            bytes = try await fetch()
+            if path.hasSuffix("/favorite/") || path.hasSuffix("/claim/") {
+                CatalogResponseCache.shared.invalidate(owner: owner, domain: "fonts")
+                catalogRevision = UUID()
+            }
+        }
         guard stamp == generation else { throw CancellationError() }
-        return try JSONDecoder().decode(T.self, from: response.data)
+        return try JSONDecoder().decode(T.self, from: bytes)
     }
-    func list(mine: Bool, query: String = "", sort: String = "popular", page: Int = 1) async throws -> FontPage {
+    func list(mine: Bool, query: String = "", sort: String = "popular", page: Int = 1,
+              forceRefresh: Bool = false, onCached: ((FontPage) -> Void)? = nil) async throws -> FontPage {
         let path = mine ? "mine/" : MaterialRoutes.path("families/", ["q": query,"sort":sort,"page":String(page)])
-        return try await request(path)
+        return try await request(path, forceRefresh: forceRefresh, onCached: onCached)
     }
     func favorite(_ font: CloudFont, value: Bool) async throws {
         let _: [String: Bool] = try await request("families/\(font.id)/favorite/",method:.post,body:["favorite":value])

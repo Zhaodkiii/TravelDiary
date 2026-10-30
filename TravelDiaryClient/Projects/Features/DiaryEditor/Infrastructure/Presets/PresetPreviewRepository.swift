@@ -42,7 +42,7 @@ final class PresetPreviewRepository {
         }
     }
     func pageKey(book: RemotePresetBook, ownerID: String, pageID: String?, large: Bool = false) -> ResourceCacheKey {
-        .account(ownerID, category: "preset-images", identity: "\(book.id):\(book.version):\(pageID ?? "cover"):\(large ? "large" : "thumbnail")")
+        .account(ownerID, category: "preset-images", identity: "\(book.id):\(book.version):\(pageID ?? "canonical-cover-v2"):\(large ? "large" : "thumbnail")")
     }
     private func registerAliases(_ browse: RemotePresetBrowse, book: RemotePresetBook, ownerID: String) {
         guard PreviewImagePipeline.shared.owner == ownerID else { return }
@@ -65,15 +65,25 @@ final class PresetPreviewRepository {
                 return URL(string: large ? page.preview_url : page.thumbnail_url)
             })
     }
+    nonisolated static func previewPageID(requested: String?, canonicalCoverID: String?, packageCoverID: String, isComplete: Bool) -> String? {
+        if let requested { return requested }
+        if let canonicalCoverID { return canonicalCoverID }
+        return isComplete ? packageCoverID : nil
+    }
     private func localURL(book: RemotePresetBook, ownerID: String, pageID: String?, large: Bool) async -> URL? {
         let manager = PresetDownloadManager.shared
         await manager.waitUntilRestored()
         // Never activate an old account from a late image task.
         guard PreviewImagePipeline.shared.owner == ownerID else { return nil }
         let packages = manager.previewPackages(book: book, ownerID: ownerID)
+        // A partial package can replace coverPageID with its first selected page.
+        // Only the full browse index can identify the original cover in such a package.
+        let canonicalCoverID = pageID == nil ? await cached(book, ownerID: ownerID)?.cover_page_id : nil
         return await Task.detached {
             for package in packages {
-                let id = pageID ?? package.manifest.coverPageID
+                guard let id = Self.previewPageID(requested: pageID, canonicalCoverID: canonicalCoverID,
+                    packageCoverID: package.manifest.coverPageID,
+                    isComplete: book.page_count > 0 && package.manifest.pages.count == book.page_count) else { continue }
                 guard let reference = package.manifest.pages.first(where: { $0.id == id }),
                       let page = try? package.read(PresetPage.self, reference.path),
                       let url = try? package.url(large ? page.preview.largePath : page.preview.thumbnailPath),

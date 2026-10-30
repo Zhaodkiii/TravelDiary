@@ -257,7 +257,7 @@ struct StickerGalleryScreen: View {
         .onChange(of: repository.owner) { _, _ in packs=[];stickers=[];featuredStickers=[];selection=[];cursor=nil;requestID=UUID() }
         .onChange(of: repository.changeID) { _, _ in Task { await load() } }
         .onChange(of: mode) { _, _ in selection = [] }
-        .refreshable { await load(); if isHome { await loadFeaturedStickers() } }
+        .refreshable { await load(forceRefresh: true); if isHome { await loadFeaturedStickers(forceRefresh: true) } }
         .task(id: "\(repository.owner)|\(repository.changeID)") { if isHome { await loadFeaturedStickers() } }
         .task { if !mine { tags = (try? await repository.request("tags/")) ?? [] } }
         .sheet(isPresented:$showCache) { MaterialCacheScreen() }
@@ -353,16 +353,18 @@ struct StickerGalleryScreen: View {
             }
         }
     }
-    private func loadFeaturedStickers() async {
+    private func loadFeaturedStickers(forceRefresh: Bool = false) async {
         let owner = repository.owner
         featuredLoading = true
         defer { if repository.owner == owner { featuredLoading = false } }
         do {
-            let page: MaterialListPage<CloudMaterial> = try await repository.request(MaterialRoutes.path("items/", ["schema":"2", "type":"sticker", "limit":"12"]))
+            let page: MaterialListPage<CloudMaterial> = try await repository.request(MaterialRoutes.path("items/", ["schema":"2", "type":"sticker", "limit":"12"]), forceRefresh: forceRefresh, onCached: { (cached: MaterialListPage<CloudMaterial>) in
+                guard repository.owner == owner else { return }; featuredStickers = cached.items
+            })
             guard !Task.isCancelled, repository.owner == owner else { return }
             featuredStickers = page.items; featuredError = nil
         } catch {
-            guard !Task.isCancelled, repository.owner == owner else { return }
+            guard !Task.isCancelled, !CatalogLoadError.isCancellation(error), repository.owner == owner else { return }
             featuredError = "单张贴纸加载失败，请重试。"
         }
     }
@@ -384,7 +386,7 @@ struct StickerGalleryScreen: View {
         }
     }
     private func toggle(_ id: String) { if selection.contains(id) { selection.remove(id) } else { selection.insert(id) } }
-    private func load(more: Bool = false) async {
+    private func load(more: Bool = false, forceRefresh: Bool = false) async {
         let activeFilter = filter
         if more { guard !loading, cursor != nil, paginationFilter == activeFilter else { return } }
         else { paginationFilter = activeFilter }
@@ -399,16 +401,28 @@ struct StickerGalleryScreen: View {
         if more { params["cursor"] = cursor }
         do {
             if mode == "包" {
-                let page: MaterialListPage<CloudMaterialLibrary> = try await repository.request(MaterialRoutes.path("libraries/",params))
+                let page: MaterialListPage<CloudMaterialLibrary> = try await repository.request(MaterialRoutes.path("libraries/",params), forceRefresh: forceRefresh, onCached: { (cached: MaterialListPage<CloudMaterialLibrary>) in
+                    guard !more, requestID == token, activeFilter == filter else { return }
+                    packs = cached.items; stickers = []; cursor = cached.next_cursor
+                })
                 guard requestID == token && activeFilter == filter && !Task.isCancelled else { return }
                 packs = more ? packs.appendingUnique(page.items) : page.items; stickers = []; cursor = page.next_cursor == previousCursor ? nil : page.next_cursor
             } else {
-                let page: MaterialListPage<CloudMaterial> = try await repository.request(MaterialRoutes.path("items/",params))
+                let page: MaterialListPage<CloudMaterial> = try await repository.request(MaterialRoutes.path("items/",params), forceRefresh: forceRefresh, onCached: { (cached: MaterialListPage<CloudMaterial>) in
+                    guard !more, requestID == token, activeFilter == filter else { return }
+                    stickers = cached.items; packs = []; cursor = cached.next_cursor
+                })
                 guard requestID == token && activeFilter == filter && !Task.isCancelled else { return }
                 stickers = more ? stickers.appendingUnique(page.items) : page.items; packs = []; cursor = page.next_cursor == previousCursor ? nil : page.next_cursor
             }
             error = nil
-        } catch { if requestID == token && activeFilter == filter && !Task.isCancelled { self.error = error.localizedDescription } }
+        } catch {
+            guard requestID == token, activeFilter == filter, !Task.isCancelled else { return }
+            if more, MaterialPaginationPolicy.shouldRestart(error) {
+                cursor = nil; loading = false
+                await load(more: false, forceRefresh: true)
+            } else if !CatalogLoadError.isCancellation(error) { self.error = error.localizedDescription }
+        }
     }
     private func removeSelected() async {
         removing = true; defer { removing = false }
@@ -518,7 +532,7 @@ struct StickerPackDetailScreen: View {
         }
         .sheet(isPresented: $choosingBook) { StickerBookChooser(library:library) }
     }
-    private func load(more: Bool = false) async {
+    private func load(more: Bool = false, forceRefresh: Bool = false) async {
         let activeFilter = query + "|" + category
         if more { guard !loading, cursor != nil, paginationFilter == activeFilter else { return } }
         else { paginationFilter = activeFilter }
@@ -528,16 +542,22 @@ struct StickerPackDetailScreen: View {
         defer { if requestID==token { loading=false } }
         do {
             if !more {
-                let detail: CloudMaterialLibrary = try await MaterialCatalogRepository.shared.request("libraries/\(library.id)/?version=\(library.version)")
+                let detail: CloudMaterialLibrary = try await MaterialCatalogRepository.shared.request("libraries/\(library.id)/?version=\(library.version)", forceRefresh: forceRefresh)
                 guard requestID==token,activeFilter == query + "|" + category,!Task.isCancelled else { return };library=detail
             }
             guard library.availability != "unavailable" else { error = "该贴纸包已下架"; return }
             var params=["schema":"2","version":String(library.version),"q":query,"kind":category]
             if more { params["cursor"] = cursor }
-            let page: MaterialListPage<CloudMaterial> = try await MaterialCatalogRepository.shared.request(MaterialRoutes.path("libraries/\(library.id)/items/",params))
+            let page: MaterialListPage<CloudMaterial> = try await MaterialCatalogRepository.shared.request(MaterialRoutes.path("libraries/\(library.id)/items/",params), forceRefresh: forceRefresh)
             guard requestID==token,activeFilter == query + "|" + category,!Task.isCancelled else { return }
             items = more ? items.appendingUnique(page.items) : page.items; cursor = page.next_cursor == previousCursor ? nil : page.next_cursor; error = nil
-        } catch { if requestID==token && !Task.isCancelled { self.error = error.localizedDescription } }
+        } catch {
+            guard requestID == token, activeFilter == query + "|" + category, !Task.isCancelled else { return }
+            if more, MaterialPaginationPolicy.shouldRestart(error) {
+                cursor = nil; loading = false
+                await load(more: false, forceRefresh: true)
+            } else if !CatalogLoadError.isCancellation(error) { self.error = error.localizedDescription }
+        }
     }
     private func favorite() async {
         saving = true; defer { saving = false }

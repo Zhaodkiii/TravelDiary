@@ -69,18 +69,26 @@ final class MaterialCatalogRepository: ObservableObject {
         return SupportNetworkRequest(method: method ?? (body == nil ? .get : .post),
             path: "/api/v1/materials/" + parts.path, queryItems: parts.queryItems,
             body: body.map { .json(AnyEncodable($0)) } ?? .none,
-            strategy: NetworkStrategy(requiresAuth: true))
+            strategy: NetworkStrategy(requiresAuth: true, allowETag: (method ?? (body == nil ? .get : .post)) == .get))
     }
     func favoriteLibraries() async throws -> [CloudMaterialLibrary] {
         var result:[CloudMaterialLibrary]=[]
         var cursor:String?
-        repeat {
+        var restarted = false
+        while true {
             try Task.checkCancellation()
             var params=["schema":"2","type":"sticker","favorites":"1","sort":"added","limit":"100"]
             if let cursor { params["cursor"]=cursor }
-            let page:MaterialListPage<CloudMaterialLibrary>=try await request(MaterialRoutes.path("libraries/",params))
-            result += page.items;cursor=page.next_cursor
-        } while cursor != nil
+            do {
+                let page: MaterialListPage<CloudMaterialLibrary> = try await request(MaterialRoutes.path("libraries/",params), forceRefresh: restarted)
+                result += page.items; cursor = page.next_cursor
+                if cursor == nil { break }
+            } catch {
+                guard cursor != nil, !restarted, MaterialPaginationPolicy.shouldRestart(error) else { throw error }
+                restarted = true; result = []; cursor = nil
+                continue
+            }
+        }
         return result
     }
 
@@ -110,34 +118,46 @@ final class MaterialCatalogRepository: ObservableObject {
         return try JSONDecoder().decode(MaterialDownload.self, from: data.data)
     }
 
-    func request<T: Decodable>(_ path: String, body: [String: Bool]? = nil, method: SupportHTTPMethod? = nil) async throws -> T {
+    func request<T: Decodable>(_ path: String, body: [String: Bool]? = nil, method: SupportHTTPMethod? = nil,
+                               forceRefresh: Bool = false, onCached: ((T) -> Void)? = nil) async throws -> T {
         guard let engine else { throw URLError(.userAuthenticationRequired) }
         let cacheable = (method ?? (body == nil ? .get : .post)) == .get
         let capturedOwner = owner
-        let key = SHA256.hash(data: Data((owner + "|" + path).utf8)).map { String(format: "%02x", $0) }.joined()
-        let root = StoragePaths.system.cacheAccount(capturedOwner).appendingPathComponent("MaterialCatalog")
-        let cache = root.appendingPathComponent(key)
-        let cacheKey = ResourceCacheKey.account(capturedOwner, category: "material-catalog", identity: path)
-        let cacheGeneration = ResourceCache.shared.generation(for: cacheKey)
-        do {
-            let response = try await engine.sendRaw(Self.networkRequest(path, body: body, method: method))
-            guard owner == capturedOwner else { throw CancellationError() }
-            let result = try JSONDecoder().decode(T.self, from: response.data)
-            if cacheable {
-                if ResourceCache.shared.store(response.data, for: cacheKey, expectedGeneration: cacheGeneration) != nil {
-                    try? FileManager.default.removeItem(at: cache)
-                }
-            }
-            isOffline = false
-            if !cacheable { changeID = UUID() }
-            return result
-        } catch let error as URLError where cacheable && [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotConnectToHost].contains(error.code) {
-            guard owner == capturedOwner, let data = ResourceCache.shared.data(for: cacheKey) ?? (try? Data(contentsOf: cache)) else { throw error }
-            if ResourceCache.shared.data(for: cacheKey) == nil, FileManager.default.fileExists(atPath: cache.path) { ResourceCache.shared.register(cache, for: cacheKey) }
-            isOffline = true
-            return try JSONDecoder().decode(T.self, from: data)
+        let capturedChange = changeID
+        let cursor = URLComponents(string: path)?.queryItems?.first(where: { $0.name == "cursor" })?.value
+        if let cursor, MaterialPaginationPolicy.expired(cursor) {
+            CatalogResponseCache.shared.invalidate(owner: capturedOwner, domain: "materials")
+            throw MaterialPaginationPolicy.Expired()
         }
+        let fetch: @MainActor () async throws -> Data = { [self] in
+            guard owner == capturedOwner, changeID == capturedChange else { throw CancellationError() }
+            let response = try await engine.sendRaw(Self.networkRequest(path, body: body, method: method))
+            guard owner == capturedOwner, changeID == capturedChange else { throw CancellationError() }
+            _ = try JSONDecoder().decode(T.self, from: response.data)
+            isOffline = false
+            return response.data
+        }
+        let data: Data
+        if cacheable {
+            do {
+                data = try await CatalogResponseCache.shared.load(owner: capturedOwner, domain: "materials",
+                    path: engine.serviceBaseURL.absoluteString + "/materials/" + path, forceRefresh: forceRefresh,
+                    onCached: { data in if let value = try? JSONDecoder().decode(T.self, from: data) { onCached?(value) } }, onOffline: { [weak self] in self?.isOffline = true }, fetch: fetch)
+            } catch {
+                if owner == capturedOwner, cursor != nil, MaterialPaginationPolicy.shouldRestart(error) {
+                    CatalogResponseCache.shared.invalidate(owner: capturedOwner, domain: "materials")
+                }
+                throw error
+            }
+        } else {
+            data = try await fetch()
+            CatalogResponseCache.shared.invalidate(owner: capturedOwner, domain: "materials")
+            changeID = UUID()
+        }
+        guard owner == capturedOwner else { throw CancellationError() }
+        return try JSONDecoder().decode(T.self, from: data)
     }
+
 }
 
 struct MaterialLibraryBrowser: View {
@@ -471,7 +491,7 @@ struct MaterialLibraryBrowser: View {
             items = more ? items.appendingUnique(page.items) : page.items; cursor = page.next == previousCursor ? nil : page.next; error = nil
         } catch { if token == requestID && !Task.isCancelled { self.error = error.localizedDescription } }
     }
-    private func loadStickerItems(more: Bool) async {
+    private func loadStickerItems(more: Bool, forceRefresh: Bool = false) async {
         let activeFilter = filterKey
         let previousCursor = more ? nextCursor : nil
         let token = UUID(); requestID = token; loading = true
@@ -498,10 +518,16 @@ struct MaterialLibraryBrowser: View {
             else if let lib = selectedLibrary { path = "libraries/\(lib.id)/items/"; params["version"] = String(lib.version) }
             else { params["favorites"] = "1" }
             if more { params["cursor"] = nextCursor }
-            let page: MaterialListPage<CloudMaterial> = try await catalog.request(MaterialRoutes.path(path, params))
+            let page: MaterialListPage<CloudMaterial> = try await catalog.request(MaterialRoutes.path(path, params), forceRefresh: forceRefresh)
             guard requestID == token, activeFilter == filterKey, !Task.isCancelled else { return }
             items = more ? items.appendingUnique(page.items) : page.items; nextCursor = page.next_cursor == previousCursor ? nil : page.next_cursor; cursor = nil; error = nil
-        } catch { if requestID == token && !Task.isCancelled { self.error = error.localizedDescription } }
+        } catch {
+            guard requestID == token, activeFilter == filterKey, !Task.isCancelled else { return }
+            if more, MaterialPaginationPolicy.shouldRestart(error) {
+                nextCursor = nil; cursor = nil; loading = false
+                await loadStickerItems(more: false, forceRefresh: true)
+            } else if !CatalogLoadError.isCancellation(error) { self.error = error.localizedDescription }
+        }
     }
 
     private func favoriteItem(_ item: CloudMaterial) async {

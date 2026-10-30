@@ -42,13 +42,26 @@ final class HelpFeedbackService: ObservableObject {
         guard let engine else { throw HelpFailure("服务尚未初始化") }
         let c = URLComponents(string: path)
         let data = try body.map { try JSONSerialization.data(withJSONObject: $0, options: .sortedKeys) }
-        let response = try await engine.sendRaw(SupportNetworkRequest(method: method, path: "/api/v1/support/" + (c?.path ?? path), queryItems: c?.queryItems,
+        // Public help content only. Tickets, messages, unread counts and upload URLs stay live.
+        let cacheable = method == .get && (path == "config/" || path.hasPrefix("help/categories/") || path.hasPrefix("help/articles/"))
+        let request = SupportNetworkRequest(method: method, path: "/api/v1/support/" + (c?.path ?? path), queryItems: c?.queryItems,
             body: data.map { .raw($0, contentType: "application/json") } ?? .none,
-            strategy: NetworkStrategy(requiresAuth: owner != nil, allowETag: false)))
+            strategy: NetworkStrategy(requiresAuth: owner != nil, allowETag: cacheable))
+        let fetch: @MainActor () async throws -> Data = {
+            let response = try await engine.sendRaw(request)
+            _ = try JSONDecoder().decode(T.self, from: response.data)
+            return response.data
+        }
+        let bytes: Data
+        if cacheable {
+            bytes = try await CatalogResponseCache.shared.load(owner: owner ?? "public-help", domain: "help",
+                path: engine.serviceBaseURL.absoluteString + "/support/" + path, fetch: fetch)
+        } else { bytes = try await fetch() }
         try Task.checkCancellation()
         if let owner { try require(owner); guard stamp == generation else { throw CancellationError() } }
-        return try JSONDecoder().decode(T.self, from: response.data)
+        return try JSONDecoder().decode(T.self, from: bytes)
     }
+
     func config() async throws -> HelpServiceConfig { try await request("config/") }
     func categories() async throws -> [HelpCategory] { try await request("help/categories/") }
     func articles(query: String, category: String, cursor: String? = nil) async throws -> SupportPage<HelpArticle> {
