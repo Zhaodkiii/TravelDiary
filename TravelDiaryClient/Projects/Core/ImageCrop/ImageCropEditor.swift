@@ -34,6 +34,7 @@ struct ImageCropEditor: UIViewControllerRepresentable {
     let onComplete: (UIImage, ImageCropParameters) -> Void
     let onCancel: () -> Void
     let onError: (String) -> Void
+    var locksOutputSize = false
 
     init(image: UIImage, parameters: ImageCropParameters?,
          onComplete: @escaping (UIImage, ImageCropParameters) -> Void,
@@ -58,6 +59,7 @@ struct ImageCropEditor: UIViewControllerRepresentable {
     }
     func updateUIViewController(_ controller: SecondCameraImageEditorCropViewController, context: Context) { configure(controller) }
     private func configure(_ controller: SecondCameraImageEditorCropViewController) {
+        controller.locksOutputSize = locksOutputSize
         controller.secondCameraFullScreenCoverDismissHandler = onCancel
         controller.cropCompletionHandler = { transform in
             model.replace(transform: transform)

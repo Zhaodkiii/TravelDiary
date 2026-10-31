@@ -164,6 +164,9 @@ struct SupportMainCoordinatorView: View {
                     onBrowseTemplates: { selectedTab = .diaryPresets })
                     .id(session.accountID)
             }
+//            Tab("随记", systemImage: "camera", value: SupportRootTab.travelCapture) {
+//                TravelCaptureHomeView(ownerID: String(session.accountID)).id(session.accountID)
+//            }
             Tab("素材", systemImage: "books.vertical", value: SupportRootTab.diaryPresets) {
                 DiaryPresetLibraryScreen(ownerID: String(session.accountID), toolbarState: materialToolbar)
                     .id(session.accountID)
@@ -209,10 +212,11 @@ struct SupportMainCoordinatorView: View {
         switch selectedTab {
         case .healthHome: return L10n.tr("home.title", fallback: "首页")
         case .photoEditor: return "照片编辑"
+        case .travelCapture: return "旅行随记"
         case .diaryEditor: return "我的手帐"
         case .diaryPresets: return "旅行素材"
         case .templateSearch: return "搜索模板"
-        case .customization: return "专属定制"
+        case .customization: return "免费定制"
         case .secondCamera: return ""
         case .settings: return L10n.text("settings.title", fallback: "设置")
         }
@@ -289,6 +293,7 @@ private enum SupportRootTab: Hashable {
     case healthHome
     case photoEditor
     case diaryEditor
+    case travelCapture
     case diaryPresets
     case templateSearch
     case customization

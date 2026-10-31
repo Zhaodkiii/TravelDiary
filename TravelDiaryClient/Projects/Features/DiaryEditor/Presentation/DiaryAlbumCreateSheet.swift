@@ -49,5 +49,5 @@ struct DiaryBlankBookSheet: View {
 }
 
 extension DiaryPagePreset {
-    var albumTitle: String { switch self { case .a5: "A5 竖版 · 148 × 210 mm"; case .b5: "B5 竖版 · 176 × 250 mm"; case .portrait: "竖版 · 5:7"; case .square: "正方形 · 1:1" } }
+    var albumTitle: String { switch self { case .a5: "A5 竖版 · 148 × 210 mm"; case .b5: "B5 竖版 · 176 × 250 mm"; case .portrait: "竖版 · 5:7"; case .spread: "完整跨页 · 4370 × 3130"; case .square: "正方形 · 1:1" } }
 }

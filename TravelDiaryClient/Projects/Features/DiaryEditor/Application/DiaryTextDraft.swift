@@ -21,10 +21,13 @@ final class DiaryTextDraft: ObservableObject {
         targetID = layer?.id
         preview = DiaryEditorSession(document: session.document, images: session.images,
             store: session.store, contentID: session.contentID, parent: session.parent)
-        let width = min(900, session.content.referenceSize.width * 0.65)
+        let placement = DiaryStickerPlacement.plan(image: CGSize(width: 650, height: 120),
+            canvas: session.content.referenceSize, viewport: session.stickerInsertionViewport?(), sequence: 0, material: .text)
+        let width = placement?.size.width ?? min(900, session.content.referenceSize.width * 0.65)
+        let height = placement?.size.height ?? 100
         self.layer = layer ?? DiaryLayer(name: "文字", kind: .text,
-            transform: DiaryTransform(position: session.scopeCenter, pivot: CGPoint(x: width / 2, y: 50)),
-            size: CGSize(width: width, height: 100), fontSize: min(90, max(36, width * 0.09)),
+            transform: DiaryTransform(position: placement?.center ?? session.scopeCenter, pivot: CGPoint(x: width / 2, y: height / 2)),
+            size: CGSize(width: width, height: height), fontSize: min(90, max(12, width * 0.09)),
             textAppearance: DiaryTextAppearance())
         preview.selectedID = session.selectedID
         refresh()

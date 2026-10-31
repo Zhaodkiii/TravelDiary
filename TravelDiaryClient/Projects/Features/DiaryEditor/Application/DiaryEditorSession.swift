@@ -11,6 +11,8 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     func acceptsMaterialInsertion(documentID: UUID, contentID: UUID, replacingID: UUID?) -> Bool {
         !closing && !childOpen && document.id == documentID && self.contentID == contentID && document.objects[contentID] != nil && (replacingID == nil || document.layer(replacingID!) != nil)
     }
+    var stickerInsertionViewport: (() -> DiaryStickerPlacement.Viewport?)?
+    private var stickerInsertionSequence = 0
     let id = UUID()
     let contentID: UUID
     let baseRevision: Int
@@ -645,6 +647,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                 for (asset, image) in frameAssets.values { images[asset.id] = image }
                 selectedID = ids.last
             }
+            if stickerInsertionViewport?() != nil { stickerInsertionSequence += ids.count }
             return true
         } catch { errorMessage = error.localizedDescription; return false }
     }
@@ -674,6 +677,18 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             ids.append(photo.id)
             inputs.append(DiaryPhotoBatchLayout.Input(photoSize: photo.size,
                 bounds: DiaryPageRenderer.objectBounds(planned.objects[objectID]!, document: planned)))
+        }
+        if let viewport = stickerInsertionViewport?() {
+            for (index, id) in ids.enumerated() {
+                let bounds = inputs[index].bounds
+                guard let placement = DiaryStickerPlacement.plan(image: bounds.size, canvas: content.referenceSize,
+                    viewport: viewport, sequence: stickerInsertionSequence + index, material: .photo) else { return nil }
+                planned.update(id) {
+                    $0.transform = DiaryTransform(position: placement.center,
+                        pivot: CGPoint(x: bounds.midX, y: bounds.midY), scale: placement.size.width / max(1, bounds.width))
+                }
+            }
+            return (planned, ids)
         }
         guard let placements = DiaryPhotoBatchLayout.plan(inputs, canvas: CGRect(origin: .zero, size: content.referenceSize),
             region: batchPhotoRegion, obstacles: batchPhotoObstacles(excluding: []), foreground: batchPhotoForeground, allowOverlap: true) else {
@@ -819,7 +834,11 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         busy = true
         defer { busy = false }
         do {
-            let (asset, image) = try await store.importImage(data, documentID: document.id)
+            let preparedData: Data
+            if replacing == nil && asSticker, let source = UIImage(data: data),
+               let trimmed = DiaryStickerPlacement.trimmed(source).pngData() { preparedData = trimmed }
+            else { preparedData = data }
+            let (asset, image) = try await store.importImage(preparedData, documentID: document.id)
             if let replacing {
                 guard let target = editableLayer(replacing), target.assetID != nil,
                       target.kind == .photo || target.kind == .sticker else { return false }
@@ -829,6 +848,11 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                 slot = try await store.photoSlot(for: layer, document: document)
             } else { slot = nil }
             guard !Task.isCancelled, !closing, canCommit?() != false else { return false }
+            if replacing == nil && asSticker,
+               DiaryStickerPlacement.plan(image: asset.pixelSize, canvas: content.referenceSize,
+                    viewport: stickerInsertionViewport?(), sequence: stickerInsertionSequence) == nil {
+                errorMessage = "可用画布区域太小，请收起面板或调整视图后再添加。"; return false
+            }
             images[asset.id] = image
             edit {
                 document.assets[asset.id] = asset
@@ -839,11 +863,13 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
                 } else if asSticker {
                     // Use the active canvas coordinate space, including nested object editing.
                     // Fit within 40% of each dimension so tall/wide stickers remain usable.
-                    let canvas = content.referenceSize
-                    let ratio = min(canvas.width * 0.4 / asset.pixelSize.width,
-                                    canvas.height * 0.4 / asset.pixelSize.height)
-                    let size = CGSize(width: asset.pixelSize.width * ratio, height: asset.pixelSize.height * ratio)
-                    let center = scopeCenter
+                    guard let placement = DiaryStickerPlacement.plan(image: asset.pixelSize, canvas: content.referenceSize,
+                        viewport: stickerInsertionViewport?(), sequence: stickerInsertionSequence) else {
+                        errorMessage = "可用画布区域太小，请收起面板或调整视图后再添加。"; return
+                    }
+                    let size = placement.size
+                    let center = placement.center
+                    stickerInsertionSequence += 1
                     var sticker = DiaryLayer(name: stickerName, kind: .sticker,
                                              transform: DiaryTransform(position: center, pivot: CGPoint(x: size.width / 2, y: size.height / 2)),
                                              size: size, assetID: asset.id)

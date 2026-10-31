@@ -46,7 +46,7 @@ extension DiaryPageRenderer {
         return CGRect(x: -effect, y: -effect, width: layer.size.width + effect * 2, height: height + effect * 2)
     }
 
-    static func drawText(_ layer: DiaryLayer, in context: CGContext) {
+    static func drawText(_ layer: DiaryLayer, in context: CGContext, revealedCharacters: Int? = nil) {
         let style = layer.textAppearance ?? DiaryTextAppearance()
         let bounds = textBounds(layer)
         let effect = -bounds.minX
@@ -63,8 +63,15 @@ extension DiaryPageRenderer {
             textRect.origin.y += max(0, (textRect.height - height) / 2)
             textRect.size.height = height
         }
-        (displayedText(layer) as NSString).draw(with: textRect,
-            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: textStyle(layer), context: nil)
+        let text = displayedText(layer)
+        let attributed = NSMutableAttributedString(string: text, attributes: textStyle(layer))
+        if let revealedCharacters {
+            let visibleLength = String(text.prefix(revealedCharacters)).utf16.count
+            let remaining = NSRange(location: visibleLength, length: attributed.length - visibleLength)
+            attributed.addAttributes([.foregroundColor: UIColor.clear, .strokeColor: UIColor.clear], range: remaining)
+            attributed.removeAttribute(.shadow, range: remaining)
+        }
+        attributed.draw(with: textRect, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
     }
 
     private static func drawTextDecoration(_ style: DiaryTextAppearance, rect: CGRect, in context: CGContext) {

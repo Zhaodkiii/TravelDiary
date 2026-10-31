@@ -192,9 +192,11 @@ private struct StorageCategoryScreen: View {
             Section {
                 Text(category.explanation)
                 Text("本机占用 \(storageBytes(model.snapshot?.totals[category, default: 0] ?? 0))").font(.headline)
+                #if DEBUG
                 if category == .printOrders {
                     NavigationLink("管理我的印制订单") { PrintOrdersScreen(owner: model.owner) }
                 }
+                #endif
             }
             if !items.isEmpty {
                 Section("可管理的本地文件") {

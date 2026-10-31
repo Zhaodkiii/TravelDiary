@@ -5,6 +5,7 @@ import PencilKit
 struct DiaryCanvasView: UIViewRepresentable {
     @ObservedObject var session: DiaryEditorSession
     var compactViewport = false
+    var stagesEntrance = false
     var showsSelection = true
     var editingTextLayer: DiaryLayer? = nil
     var lockedTextID: UUID? = nil
@@ -13,15 +14,31 @@ struct DiaryCanvasView: UIViewRepresentable {
     var onSelectionViewportRect: ((CGRect?) -> Void)? = nil
     var onEdit: () -> Void = {}
     func makeUIView(context: Context) -> DiaryCanvasSurface {
-        let view = DiaryCanvasSurface(); view.session = session; view.compactViewport = compactViewport; view.editingTextLayer = editingTextLayer; view.lockedTextID = lockedTextID; view.onTextAdjustment = onTextAdjustment; view.showsSelection = showsSelection; view.focusedLayerID = focusedLayerID; view.onEdit = onEdit; view.onSelectionViewportRect = onSelectionViewportRect; return view
+        let view = DiaryCanvasSurface(); view.stagesEntrance = stagesEntrance; view.session = session; view.compactViewport = compactViewport; view.editingTextLayer = editingTextLayer; view.lockedTextID = lockedTextID; view.onTextAdjustment = onTextAdjustment; view.showsSelection = showsSelection; view.focusedLayerID = focusedLayerID; view.onEdit = onEdit; view.onSelectionViewportRect = onSelectionViewportRect; return view
     }
     func updateUIView(_ view: DiaryCanvasSurface, context: Context) {
-        view.session = session; view.compactViewport = compactViewport; view.editingTextLayer = editingTextLayer; view.lockedTextID = lockedTextID; view.onTextAdjustment = onTextAdjustment; view.showsSelection = showsSelection; view.focusedLayerID = focusedLayerID; view.onEdit = onEdit; view.onSelectionViewportRect = onSelectionViewportRect; view.refresh()
+        view.stagesEntrance = stagesEntrance; view.session = session; view.compactViewport = compactViewport; view.editingTextLayer = editingTextLayer; view.lockedTextID = lockedTextID; view.onTextAdjustment = onTextAdjustment; view.showsSelection = showsSelection; view.focusedLayerID = focusedLayerID; view.onEdit = onEdit; view.onSelectionViewportRect = onSelectionViewportRect; view.refresh()
     }
 }
 
 /// 每个对象使用独立设计坐标；视口可包含负坐标，装饰伸出照片时仍保留原位置。
 final class DiaryCanvasSurface: UIView {
+    var stagesEntrance = false
+    private var entranceFinished = false
+    private var entrancePlaying = false
+    private let entranceTextHaptic = UIImpactFeedbackGenerator(style: .light)
+    private let entrancePhotoHaptic = UIImpactFeedbackGenerator(style: .medium)
+    private let entranceStickerHaptic = UIImpactFeedbackGenerator(style: .rigid)
+    private var lastEntranceHaptic = -Double.infinity
+    private func playEntranceHaptic(_ kind: Int) {
+        guard window != nil, UIApplication.shared.applicationState == .active,
+              CACurrentMediaTime() - lastEntranceHaptic >= 0.075 else { return }
+        lastEntranceHaptic = CACurrentMediaTime()
+        let generator = kind == 0 ? entranceTextHaptic : (kind == 1 ? entrancePhotoHaptic : entranceStickerHaptic)
+        generator.impactOccurred(intensity: kind == 0 ? 0.65 : 0.85)
+        generator.prepare()
+    }
+    private var entranceWork: [DispatchWorkItem] = []
     weak var session: DiaryEditorSession?
     var compactViewport = false {
         didSet { if compactViewport != oldValue { refresh(force: true) } }
@@ -175,7 +192,85 @@ final class DiaryCanvasSurface: UIView {
         selectionOverlay.setNeedsDisplay()
     }
 
+    private func isEntranceBackground(_ layer: DiaryLayer) -> Bool {
+        layer.semanticKind == .background || layer.isLibraryBackground == true
+    }
+    func finishEntrance() {
+        entranceFinished = true
+        entrancePlaying = false
+        entranceWork.forEach { $0.cancel() }; entranceWork.removeAll()
+        for layer in retainedLayers.values { layer.removeAnimation(forKey: "travel.materialEntrance"); layer.mask = nil }
+        refresh(force: true)
+    }
+    /// 只改变呈现层；背景先显示，其余按文字、照片、贴纸、其他顺序入场。
+    func animateMaterialEntrance() {
+        guard stagesEntrance, !entranceFinished, !entrancePlaying else { return }
+        guard !UIAccessibility.isReduceMotionEnabled else { finishEntrance(); return }
+        entrancePlaying = true
+        entranceTextHaptic.prepare(); entrancePhotoHaptic.prepare(); entranceStickerHaptic.prepare()
+        let entries = renderCache.ordered.filter { !isEntranceBackground($0.source) && $0.source.visible }
+        func rank(_ layer: DiaryLayer) -> Int {
+            if layer.kind == .text || layer.category == .textImage || layer.semanticKind == .text { return 0 }
+            if layer.isContentPhoto { return 1 }
+            if layer.kind == .sticker { return 2 }
+            return 3
+        }
+        var delay = 0.0
+        for entry in entries.sorted(by: { rank($0.source) < rank($1.source) }) {
+            guard let layer = retainedLayers[entry.id] else { continue }
+            let text = rank(entry.source) == 0
+            let count = max(1, min(100, entry.source.text.count))
+            let duration = text ? min(4, Double(count) * 0.10) : 0.40
+            let work = DispatchWorkItem { [weak self, weak layer] in
+                guard let self, let layer, self.window != nil else { return }
+                CATransaction.begin(); CATransaction.setDisableActions(true)
+                layer.opacity = Float(entry.source.effectiveOpacity)
+                CATransaction.commit()
+                if text {
+                    if entry.source.kind == .text {
+                        for character in 1...count {
+                            let step = DispatchWorkItem { [weak self, weak layer] in
+                                guard let self, let layer else { return }
+                                let format = UIGraphicsImageRendererFormat(); format.scale = min(2, 1800 / max(1, entry.rect.width))
+                                let image = UIGraphicsImageRenderer(size: entry.rect.size, format: format).image { context in
+                                    context.cgContext.translateBy(x: -entry.rect.minX, y: -entry.rect.minY)
+                                    DiaryPageRenderer.drawText(entry.source, in: context.cgContext, revealedCharacters: character)
+                                }
+                                CATransaction.begin(); CATransaction.setDisableActions(true); layer.contents = image.cgImage; CATransaction.commit()
+                                let characters = Array(entry.source.text)
+                                if character <= characters.count, !characters[character - 1].isWhitespace { self.playEntranceHaptic(0) }
+                            }
+                            self.entranceWork.append(step)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + Double(character - 1) * duration / Double(count), execute: step)
+                        }
+                    } else {
+                        let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = layer.opacity; fade.duration = 0.4
+                        layer.add(fade, forKey: "travel.materialEntrance")
+                    }
+                    if entry.source.kind != .text { self.playEntranceHaptic(0) }
+                } else {
+                    let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = layer.opacity
+                    let movement = CABasicAnimation(keyPath: "transform.translation.y")
+                    movement.isAdditive = true; movement.fromValue = rank(entry.source) == 2 ? -5 : -12; movement.toValue = 0
+                    let group = CAAnimationGroup(); group.animations = [fade, movement]; group.duration = duration
+                    group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    layer.add(group, forKey: "travel.materialEntrance")
+                    let landing = DispatchWorkItem { [weak self] in self?.playEntranceHaptic(rank(entry.source) == 1 ? 1 : 2) }
+                    self.entranceWork.append(landing)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + duration * 0.7, execute: landing)
+                }
+            }
+            entranceWork.append(work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+            delay += text ? duration + 0.12 : 0.18
+        }
+        let finish = DispatchWorkItem { [weak self] in self?.finishEntrance() }
+        entranceWork.append(finish)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.5, execute: finish)
+    }
+
     private func updateArtwork() {
+        guard !entrancePlaying else { return }
         CATransaction.begin(); CATransaction.setDisableActions(true)
         let ids = Set(renderCache.ordered.map(\.id))
         for id in Array(retainedLayers.keys) where !ids.contains(id) {
@@ -187,7 +282,7 @@ final class DiaryCanvasSurface: UIView {
             layer.name = entry.id.uuidString
             layer.zPosition = CGFloat(index)
             layer.isHidden = artwork.composited || !entry.source.visible
-            layer.opacity = Float(entry.source.effectiveOpacity)
+            layer.opacity = stagesEntrance && !entranceFinished && !isEntranceBackground(entry.source) ? 0 : Float(entry.source.effectiveOpacity)
             layer.contents = entry.image?.cgImage
             layer.contentsGravity = .resize
             if entry.source.displayBounds != nil, let child = entry.source.contentID,
@@ -277,6 +372,8 @@ final class DiaryCanvasSurface: UIView {
 
     /// Report the selection in viewport points so the floating tools keep their size while zooming.
     func publishSelectionViewportRect() {
+        session?.stickerInsertionViewport = { [weak self] in self?.insertionViewport() }
+
         guard let callback = onSelectionViewportRect else { return }
         guard showsSelection, let session, !session.inkMode, !session.layerMode,
               session.transformDraft == nil, let layer = displayedSelection,
@@ -290,6 +387,19 @@ final class DiaryCanvasSurface: UIView {
         callback(CGRect(x: left - scroll.bounds.minX, y: top - scroll.bounds.minY,
                         width: (points.map(\.x).max() ?? left) - left,
                         height: (points.map(\.y).max() ?? top) - top))
+    }
+
+    private func insertionViewport() -> DiaryStickerPlacement.Viewport? {
+        guard let session, window != nil, fit > 0 else { return nil }
+        var ancestor = superview
+        while let view = ancestor, !(view is UIScrollView) { ancestor = view.superview }
+        guard let scroll = ancestor as? UIScrollView else { return nil }
+        // 视口已由编辑器扣除贴纸面板占位，额外避开顶部导航与底部浮动工具。
+        let safe = scroll.bounds.inset(by: UIEdgeInsets(top: 56, left: 0, bottom: compactViewport ? 8 : 90, right: 0))
+        let local = convert(safe, from: scroll)
+        let origin = designPoint(local.origin)
+        let end = designPoint(CGPoint(x: local.maxX, y: local.maxY))
+        return DiaryStickerPlacement.Viewport(rect: CGRect(x: origin.x, y: origin.y, width: end.x-origin.x, height: end.y-origin.y).intersection(session.canvasBounds), pointsPerUnit: fit * viewportZoom)
     }
 
     private func selectionRect(_ layer: DiaryLayer) -> CGRect? {

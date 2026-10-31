@@ -10,7 +10,11 @@ struct FeedbackRelatedPicker: View {
     let owner: String
     let select: (String, String, String) -> Void
     @Environment(\.dismiss) private var dismiss
+    #if DEBUG
     @State private var kind = "order"
+    #else
+    @State private var kind = "customization"
+    #endif
     @State private var values: [FeedbackRelatedRecord] = []
     @State private var error: String?
     @State private var next = 0
@@ -23,7 +27,9 @@ struct FeedbackRelatedPicker: View {
                 LazyVStack(alignment: .leading, spacing: 20) {
                     Text("关联相关记录，方便我们更快了解情况。")
                         .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
+                    #if DEBUG
                     Picker("记录类型", selection: $kind) { Text("印制订单").tag("order"); Text("专属定制").tag("customization") }.pickerStyle(.segmented)
+                    #endif
                     ForEach(values) { value in
                         Button { select(kind, value.id, value.title); dismiss() } label: {
                             HStack(spacing: 12) {

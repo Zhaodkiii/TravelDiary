@@ -19,6 +19,7 @@ struct DiaryPhysicalBookScreen: View {
     @State private var spread = 0
     @State private var turningCover = false
     @State private var editor: DiaryEditorSession?
+    @State private var editingRightHalf = false
     @State private var loadingEditor = false
     @State private var editingReaderPhotos = false
     @State private var errorMessage: String?
@@ -26,12 +27,15 @@ struct DiaryPhysicalBookScreen: View {
     @State private var photo: PhotosPickerItem?
     @State private var choosingPreset = false
     @State private var showingExport = false
+    private var continuousSpread: Bool { abs(book.defaultPageSize.width / max(1, book.defaultPageSize.height) - 4370.0 / 3130.0) < 0.000001 }
+    private var readingLeaves: [DiaryReadingLeaf] { DiaryReadingLeaf.project(book.contentPages) }
     private var innerPages: [DiaryPageEntry] { book.contentPages }
-    private var contentSpreadCount: Int { (innerPages.count + 2) / 2 }
+    private var contentSpreadCount: Int { continuousSpread ? readingLeaves.count / 2 : (innerPages.count + 2) / 2 }
     // An odd number of pages needs one virtual blank spread; an even number already
     // has a padded blank leaf on its final spread. Neither case gets a spread after it.
-    private var spreadCount: Int { contentSpreadCount + (innerPages.count.isMultiple(of: 2) ? 0 : 1) }
+    private var spreadCount: Int { continuousSpread ? max(1, contentSpreadCount) : contentSpreadCount + (innerPages.count.isMultiple(of: 2) ? 0 : 1) }
     private var paperRatio: CGFloat {
+        if continuousSpread { return 2185.0 / 3130.0 }
         let size = innerPages.first?.size ?? book.defaultPageSize
         return max(size.width, 1) / max(size.height, 1)
     }
@@ -60,7 +64,7 @@ struct DiaryPhysicalBookScreen: View {
                             Image(systemName: "chevron.left")
                         }.disabled(!opened || (spread == 0 && book.shell == nil)).accessibilityLabel(spread == 0 ? "合上手帐" : "上一跨页")
                         Spacer()
-                        Text(opened ? (spread >= contentSpreadCount ? "添加页面" : "\(spreadTitle(spread)) / \(innerPages.count)") : "外壳")
+                        Text(opened ? (spread >= contentSpreadCount ? "添加页面" : "\(spreadTitle(spread)) / \(continuousSpread ? readingLeaves.count : innerPages.count)") : "外壳")
                             .font(.subheadline.monospacedDigit())
                         Spacer()
                         Button { if opened { spread += 1 } else { openBook() } } label: {
@@ -143,7 +147,7 @@ struct DiaryPhysicalBookScreen: View {
             .fullScreenCover(item: $editor, onDismiss: {
                 Task { await refreshAfterEditing() }
             }) { session in
-                DiaryEditorScreen(session: session)
+                DiaryEditorScreen(session: session, entranceOnRightPage: editingRightHalf)
             }
             .alert("无法打开页面", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("确定") { errorMessage = nil }
@@ -206,8 +210,15 @@ struct DiaryPhysicalBookScreen: View {
                     if opened && !turningCover {
                         let size = DiaryBookStageLayout.openSize(viewport: stageViewport, paperRatio: paperRatio)
                         HStack(alignment: .top, spacing: 16) {
-                            readerPhotos(at: spread * 2 - 1, title: "左页照片")
-                            readerPhotos(at: spread * 2, title: "右页照片")
+                            if continuousSpread {
+                                let ids = Set(readingLeaves[(spread * 2)..<min(spread * 2 + 2, readingLeaves.count)].compactMap { $0.page?.id })
+                                ForEach(innerPages.filter { ids.contains($0.id) }) { page in
+                                    readerPhotos(at: innerPages.firstIndex(where: { $0.id == page.id }) ?? 0, title: "当前页面照片")
+                                }
+                            } else {
+                                readerPhotos(at: spread * 2 - 1, title: "左页照片")
+                                readerPhotos(at: spread * 2, title: "右页照片")
+                            }
                         }
                         .padding(.horizontal, 12)
                         .frame(width: size.width)
@@ -246,7 +257,7 @@ struct DiaryPhysicalBookScreen: View {
     }
 
     private var curlBook: some View {
-        DiaryCurlBook(pages: innerPages, store: store, spreadCount: readerSpreadCount, spread: $spread,
+        DiaryCurlBook(pages: innerPages, leaves: readingLeaves, continuousSpread: continuousSpread, store: store, spreadCount: readerSpreadCount, spread: $spread,
             allowsEditing: !isImmersive, reduceMotion: reduceMotion, plainPaper: usesPlainPaper,
             onSelectPage: openEditor, onAddPage: handleAdd)
             .id(book.catalogRevision)
@@ -271,7 +282,7 @@ struct DiaryPhysicalBookScreen: View {
         }
     }
     private func reveal(_ id: UUID) {
-        if let index = innerPages.firstIndex(where: { $0.id == id }) { spread = (index + 1) / 2 }
+        if let index = innerPages.firstIndex(where: { $0.id == id }) { spread = continuousSpread ? (readingLeaves.firstIndex(where: { $0.page?.id == id }) ?? 0) / 2 : (index + 1) / 2 }
         opened = true
     }
     private func createPage(data: Data?) async {
@@ -292,12 +303,14 @@ struct DiaryPhysicalBookScreen: View {
             try await store.save(document)
             book = try await store.loadBook()
             reveal(document.id)
+            editingRightHalf = false
             editor = DiaryEditorSession(document: document, images: images, store: store)
         } catch { errorMessage = error.localizedDescription }
     }
 
-    private func openEditor(_ page: DiaryPageEntry) {
+    private func openEditor(_ page: DiaryPageEntry, rightHalf: Bool) {
         guard opened, !turningCover, !loadingEditor, editor == nil else { return }
+        editingRightHalf = rightHalf
         loadingEditor = true
         Task { @MainActor in
             defer { loadingEditor = false }
@@ -312,8 +325,8 @@ struct DiaryPhysicalBookScreen: View {
         guard opened else { return }
         // 当前跨页先完成，避免预取抢在可见页面之前排入素材读取队列。
         let pages = innerPages
-        let current = [spread * 2 - 1, spread * 2]
-        let neighbors = [spread * 2 + 1, spread * 2 + 2, spread * 2 - 3, spread * 2 - 2]
+        let current = continuousSpread ? [spread] : [spread * 2 - 1, spread * 2]
+        let neighbors = continuousSpread ? [spread - 1, spread + 1] : [spread * 2 + 1, spread * 2 + 2, spread * 2 - 3, spread * 2 - 2]
         do {
             for index in current where pages.indices.contains(index) {
                 try Task.checkCancellation()
@@ -345,7 +358,13 @@ struct DiaryPhysicalBookScreen: View {
     }
 
     @ViewBuilder private func thumbnail(_ index: Int) -> some View {
-        if index == -1 {
+        if continuousSpread, readingLeaves.indices.contains(index + 1) {
+            let leaf = readingLeaves[index + 1]
+            if let page = leaf.page {
+                if let left = leaf.left { DiarySpreadHalfPreview(page: page, store: store, left: left).frame(width: 50, height: 76) }
+                else { DiaryPagePreview(page: page, store: store).frame(width: 50, height: 76) }
+            } else { Color(red: 0.96, green: 0.92, blue: 0.82).frame(width: 50, height: 76) }
+        } else if index == -1 {
             DiaryBookLining().frame(width: 50, height: 76)
         } else if innerPages.indices.contains(index) {
             DiaryPagePreview(page: innerPages[index], store: store).frame(width: 50, height: 76)
@@ -354,6 +373,7 @@ struct DiaryPhysicalBookScreen: View {
         }
     }
     private func spreadTitle(_ index: Int) -> String {
+        if continuousSpread { return "第 \(index * 2 + 1)–\(index * 2 + 2) 页" }
         if index >= contentSpreadCount { return "添加页面" }
         if index == 0 { return innerPages.isEmpty ? "添加页面" : "第 1 页" }
         let first = index * 2
@@ -408,20 +428,22 @@ private enum DiaryReaderAddAction { case blank, photo, preset }
 
 private struct DiaryCurlBook: View {
     let pages: [DiaryPageEntry]
+    let leaves: [DiaryReadingLeaf]
+    let continuousSpread: Bool
     let store: DiaryDocumentStore
     let spreadCount: Int
     @Binding var spread: Int
     let allowsEditing: Bool
     let reduceMotion: Bool
     let plainPaper: Bool
-    let onSelectPage: (DiaryPageEntry) -> Void
+    let onSelectPage: (DiaryPageEntry, Bool) -> Void
     let onAddPage: (DiaryReaderAddAction) -> Void
 
     var body: some View {
         DiaryPageCurlReader(spreadCount: spreadCount, spread: $spread, reduceMotion: reduceMotion, allowsPageActions: allowsEditing, showsBinding: true) { index, canSelect in
-            DiaryPaperController(index: index, page: pages.indices.contains(index - 1) ? pages[index - 1] : nil,
+            DiaryPaperController(index: index, page: continuousSpread ? (leaves.indices.contains(index) ? leaves[index].page : nil) : (pages.indices.contains(index - 1) ? pages[index - 1] : nil), continuousSpread: continuousSpread, splitHalf: continuousSpread && leaves.indices.contains(index) ? leaves[index].left : nil,
                 store: store, plainPaper: plainPaper, showsAddPlaceholder: allowsEditing, canSelect: canSelect, onAdd: { if canSelect() { onAddPage($0) } },
-                onSelect: { if canSelect() { onSelectPage($0) } })
+                onSelect: { if canSelect() { onSelectPage($0, continuousSpread && leaves.indices.contains(index) && leaves[index].left == false) } })
         }
     }
 }
@@ -693,13 +715,13 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
     private let selectedPage: DiaryPageEntry?
     private let onSelect: (DiaryPageEntry) -> Void
     private let onAdd: (DiaryReaderAddAction) -> Void
-    init(index: Int, page: DiaryPageEntry?, store: DiaryDocumentStore, plainPaper: Bool, showsAddPlaceholder: Bool, canSelect: @escaping () -> Bool, onAdd: @escaping (DiaryReaderAddAction) -> Void, onSelect: @escaping (DiaryPageEntry) -> Void) {
+    init(index: Int, page: DiaryPageEntry?, continuousSpread: Bool, splitHalf: Bool?, store: DiaryDocumentStore, plainPaper: Bool, showsAddPlaceholder: Bool, canSelect: @escaping () -> Bool, onAdd: @escaping (DiaryReaderAddAction) -> Void, onSelect: @escaping (DiaryPageEntry) -> Void) {
         self.index = index
         self.canSelect = canSelect
         self.selectedPage = page
         self.onSelect = onSelect
         self.onAdd = onAdd
-        super.init(rootView: DiaryBookPaper(page: page, store: store, left: index.isMultiple(of: 2), insideCover: index == 0, showsAddPlaceholder: showsAddPlaceholder, plainPaper: plainPaper))
+        super.init(rootView: DiaryBookPaper(page: page, store: store, left: index.isMultiple(of: 2), insideCover: !continuousSpread && index == 0, splitHalf: splitHalf, showsAddPlaceholder: showsAddPlaceholder, plainPaper: plainPaper))
         view.backgroundColor = .clear
         safeAreaRegions = []
         if showsAddPlaceholder && (page != nil || index > 0) {
@@ -747,6 +769,7 @@ private struct DiaryBookPaper: View {
     let store: DiaryDocumentStore
     let left: Bool
     let insideCover: Bool
+    let splitHalf: Bool?
     let showsAddPlaceholder: Bool
     let plainPaper: Bool
     var body: some View {
@@ -757,7 +780,8 @@ private struct DiaryBookPaper: View {
                 DiaryBookLining()
                     .accessibilityLabel("内封皮")
             } else if let page {
-                DiaryPagePreview(page: page, store: store, large: true, undecorated: true)
+                if let splitHalf { DiarySpreadHalfPreview(page: page, store: store, left: splitHalf) }
+                else { DiaryPagePreview(page: page, store: store, large: true, undecorated: true) }
             } else if showsAddPlaceholder {
                 Label("添加页面", systemImage: "plus.circle").font(.caption).foregroundStyle(.brown.opacity(0.5))
             }
@@ -779,5 +803,37 @@ private struct DiaryBookPaper: View {
         .shadow(color: .black.opacity(plainPaper ? 0 : 0.35), radius: 1.5, x: left ? 1.5 : -1.5)
         .frame(width: geometry.size.width, height: geometry.size.height, alignment: left ? .leading : .trailing)
         }
+    }
+}
+
+/// 同一完整文档只读裁切；左右半页共用版本与预览缓存。
+private struct DiarySpreadHalfPreview: View {
+    let page: DiaryPageEntry
+    let store: DiaryDocumentStore
+    let left: Bool
+    var body: some View {
+        GeometryReader { geometry in
+            DiaryPagePreview(page: page, store: store, large: true, undecorated: true)
+                .frame(width: geometry.size.width * 2, height: geometry.size.height)
+                .offset(x: left ? 0 : -geometry.size.width)
+        }.clipped()
+    }
+}
+
+/// 单页保持完整；只有完整跨页比例生成两个裁切投影。
+private struct DiaryReadingLeaf {
+    let page: DiaryPageEntry?
+    let left: Bool?
+    static func project(_ pages: [DiaryPageEntry]) -> [Self] {
+        var result: [Self] = []
+        for page in pages {
+            let spread = page.size.height > 0 && abs(page.size.width / page.size.height - 4370.0 / 3130.0) < 0.000001
+            if spread {
+                if !result.count.isMultiple(of: 2) { result.append(Self(page: nil, left: nil)) }
+                result.append(Self(page: page, left: true)); result.append(Self(page: page, left: false))
+            } else { result.append(Self(page: page, left: nil)) }
+        }
+        if !result.count.isMultiple(of: 2) { result.append(Self(page: nil, left: nil)) }
+        return result
     }
 }

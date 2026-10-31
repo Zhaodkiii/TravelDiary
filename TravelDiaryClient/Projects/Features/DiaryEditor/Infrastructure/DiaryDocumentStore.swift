@@ -373,6 +373,45 @@ nonisolated final class DiaryDocumentStore: Sendable {
         return parent.appendingPathComponent(id.uuidString, isDirectory: true)
     }
     private func assetDirectory(_ id: UUID) -> URL { bookID == nil ? directory(id) : root }
+    #if DEBUG
+    /// Copy the active catalog and each referenced immutable revision into a portable folder.
+    func exportSourceFiles(_ book: DiaryBook, to destination: URL) async throws {
+        try await run {
+            guard self.bookID == book.id else { throw DiaryEditorError.invalidDocument.logged() }
+            let fm = FileManager.default
+            try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+            try JSONEncoder().encode(book).write(to: destination.appendingPathComponent("book.json"), options: .atomic)
+            let pagesRoot = destination.appendingPathComponent("pages", isDirectory: true)
+            try fm.createDirectory(at: pagesRoot, withIntermediateDirectories: true)
+            for page in book.pages + book.trashedPages.map(\.entry) {
+                try Task.checkCancellation()
+                let sourcePage = self.directory(page.id)
+                let targetPage = pagesRoot.appendingPathComponent(page.id.uuidString, isDirectory: true)
+                try fm.createDirectory(at: targetPage, withIntermediateDirectories: true)
+                let revision = "revisions/\(page.revisionID.uuidString)"
+                let manifestURL = try self.resolve(revision + "/manifest.json", in: sourcePage)
+                let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: manifestURL))
+                guard manifest.documentID == page.id, manifest.bookID == book.id else { throw DiaryEditorError.invalidDocument.logged() }
+                try fm.createDirectory(at: targetPage.appendingPathComponent(revision), withIntermediateDirectories: true)
+                try fm.copyItem(at: manifestURL, to: targetPage.appendingPathComponent(revision + "/manifest.json"))
+                for object in manifest.objects {
+                    for path in [object.path, object.drawingPath] {
+                        let source = try self.resolve(path, in: sourcePage)
+                        let target = try self.resolve(path, in: targetPage)
+                        try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        try fm.copyItem(at: source, to: target)
+                    }
+                }
+                for asset in manifest.assets.values {
+                    let source = try self.resolve(asset.path, in: self.root)
+                    let target = try self.resolve(asset.path, in: destination)
+                    try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    if !fm.fileExists(atPath: target.path) { try fm.copyItem(at: source, to: target) }
+                }
+            }
+        }
+    }
+    #endif
     private func resolve(_ path: String, in directory: URL) throws -> URL {
         try StoragePaths.resolve(path, within: directory)
     }

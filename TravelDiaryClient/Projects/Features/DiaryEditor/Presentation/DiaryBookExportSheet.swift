@@ -38,12 +38,23 @@ struct DiaryBookExportSheet: View {
     @State private var videoProgress: (String, Double)?
     @State private var pdf: DiaryBookPDFExport?
     @State private var pdfDirectory: URL?
+    #if DEBUG
+    @State private var sourceArchive: URL?
+    #endif
     @State private var message: String?
     private let ink = Color(red: 0.23, green: 0.36, blue: 0.31)
 
+    private var exportTitle: String {
+        #if DEBUG
+        "导出与印制"
+        #else
+        "导出"
+        #endif
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
-            page(title: "导出与印制") {
+            page(title: exportTitle) {
                 DiaryExportFormatPage(book: book,
                     onSelectSpreads: { path.append(.spreads) },
                     onSelectPages: { path.append(.singlePages) },
@@ -53,12 +64,19 @@ struct DiaryBookExportSheet: View {
                         videoOptions.lastSpread = max(0, DiaryBookImageExporter.spreadPages(book).count - 1)
                         path.append(.video)
                     }, onSelectPrint: {
+                        #if DEBUG
                         if accountLoginContext?.isDeviceAccount == true {
                             showingLogin = true
                         } else {
                             showingPrint = true
                         }
-                    })
+                        #endif
+                    }, onExportSourceFiles: {
+                        #if DEBUG
+                        startSourceExport()
+                        #endif
+                    }
+                )
             }
             .navigationDestination(for: Route.self) { route in
                 page(title: route.title) {
@@ -97,7 +115,9 @@ struct DiaryBookExportSheet: View {
                 }
             }
         }
+        #if DEBUG
         .fullScreenCover(isPresented: $showingPrint) { PrintCheckoutScreen(book: book, store: store) }
+        #endif
         .sheet(isPresented: $showingLogin) {
             if let accountLoginContext {
                 LoginView(viewModel: accountLoginContext.viewModel, mode: .upgradeDeviceAccount)
@@ -111,6 +131,13 @@ struct DiaryBookExportSheet: View {
             if let pdfDirectory { try? FileManager.default.removeItem(at: pdfDirectory) }
             pdfDirectory = nil
         }) { DiaryBookPDFPreview(export: $0) }
+        #if DEBUG
+        .sheet(isPresented: Binding(get: { sourceArchive != nil }, set: { if !$0 { cleanupSourceArchive() } })) {
+            if let sourceArchive {
+                DiarySourceShareSheet(url: sourceArchive)
+            }
+        }
+        #endif
         .alert("导出提示", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("知道了") { message = nil }
         } message: { Text(message ?? "") }
@@ -122,6 +149,9 @@ struct DiaryBookExportSheet: View {
             if let result { try? FileManager.default.removeItem(at: result.directory) }
             if let pdfDirectory { try? FileManager.default.removeItem(at: pdfDirectory) }
             if let videoResult { try? FileManager.default.removeItem(at: videoResult.directory) }
+            #if DEBUG
+            cleanupSourceArchive()
+            #endif
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background && busy && !saving && videoProgress != nil {
@@ -242,4 +272,33 @@ struct DiaryBookExportSheet: View {
             catch { message = error.localizedDescription }
         }
     }
+
+    #if DEBUG
+    private func startSourceExport() {
+        guard !busy else { return }
+        busy = true
+        task = Task { @MainActor in
+            defer { busy = false }
+            do {
+                sourceArchive = try await DiaryBookSourceExporter.export(book: book, store: store)
+            } catch is CancellationError { }
+            catch { message = error.localizedDescription }
+        }
+    }
+
+    private func cleanupSourceArchive() {
+        if let sourceArchive { try? FileManager.default.removeItem(at: sourceArchive.deletingLastPathComponent()) }
+        sourceArchive = nil
+    }
+    #endif
 }
+
+#if DEBUG
+private struct DiarySourceShareSheet: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+#endif

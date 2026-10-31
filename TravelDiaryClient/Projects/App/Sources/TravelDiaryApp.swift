@@ -11,6 +11,7 @@ struct TravelDiaryApp: App {
         WindowGroup {
             ContentView(dependencies: container.contentDependencies)
                 .environment(\.managedObjectContext, container.coreDataStack.viewContext)
+                #if DEBUG
                 .onOpenURL { url in
                     if let link = PrintProbeLink(url) { paymentProbe = link; return }
                     if !AlipayPrintPayment.shared.handle(url) { WeChatPrintPayment.shared.handle(url) }
@@ -27,6 +28,7 @@ struct TravelDiaryApp: App {
                 }
                 .sheet(item: $paymentProbe) { PrintProbeScreen(link: $0) }
                 .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { WeChatPrintPayment.shared.handle($0) }
+                #endif
         }
     }
 }

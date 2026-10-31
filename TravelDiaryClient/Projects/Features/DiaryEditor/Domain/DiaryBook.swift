@@ -23,6 +23,7 @@ nonisolated struct DiaryBook: Codable, Identifiable, Equatable, Sendable {
     var effectiveCover: DiaryPageEntry? { pages.first { $0.id == coverPageID } ?? pages.first }
     /// Explicit template pairs take precedence over legacy physical page parity.
     var readingSpreads: [[DiaryPageEntry?]] {
+        if defaultPageSize == CGSize(width: 4370, height: 3130) { return contentPages.map { [$0, nil] } }
         let content = contentPages
         guard content.contains(where: { $0.presetSpreadID != nil }) else {
             return (0..<((content.count + 2) / 2)).map { spread in
@@ -68,10 +69,11 @@ nonisolated struct DiaryTrashedPage: Codable, Identifiable, Equatable, Sendable 
 
 /// 新建本子的标准页面规格；设计坐标直接采用 A5 在 300 DPI 下的整数像素。
 nonisolated enum DiaryPagePreset: String, CaseIterable, Identifiable, Sendable {
-    case a5, b5, portrait, square
+    case a5, b5, portrait, square, spread
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .spread: "完整跨页｜4370 × 3130 px"
         case .a5: "A5｜148 × 210 mm @300 DPI"
         case .b5: "B5（ISO）｜176 × 250 mm @300 DPI"
         case .portrait: "竖版｜1000 × 1400 px"
@@ -80,6 +82,7 @@ nonisolated enum DiaryPagePreset: String, CaseIterable, Identifiable, Sendable {
     }
     var size: CGSize {
         switch self {
+        case .spread: CGSize(width: 4370, height: 3130)
         case .a5: CGSize(width: 1748, height: 2480)
         case .b5: CGSize(width: 2079, height: 2953)
         case .portrait: CGSize(width: 1000, height: 1400)

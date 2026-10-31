@@ -43,10 +43,12 @@ struct SettingsView: View {
                 NavigationLink { DiamondWalletScreen(owner: String(session.accountID)).id(session.accountID) } label: { SupportNavigationRow(title: "我的钻石", symbol: "diamond", detail: "充值、明细与已解锁内容") }.buttonStyle(.plain).feedbackPaperCard()
                 #endif
                 VStack(spacing: 0) {
+                    #if DEBUG
                     NavigationLink { PrintOrdersScreen(owner: String(session.accountID)) } label: {
                         SupportNavigationRow(title: "我的印制订单", symbol: "shippingbox", detail: "查看印制与配送进度")
                     }
                     cardDivider
+                    #endif
                     NavigationLink { HelpCenterScreen(owner: String(session.accountID)) } label: {
                         SupportNavigationRow(title: "帮助与反馈", symbol: "questionmark.bubble", detail: "使用帮助、建议与问题反馈", badge: help.unread > 0 ? "有新回复" : "")
                     }

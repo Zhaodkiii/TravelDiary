@@ -23,6 +23,8 @@ private extension CGFloat {
 class SecondCameraImageEditorCropViewController: SecondCameraEditorViewController {
 
     /// 通用调用方接收完成操作并负责保存和关闭；相机原有流程继续使用模型提交。
+    var locksOutputSize = false
+
     var cropCompletionHandler: ((SecondCameraImageEditorTransform) -> Void)?
 
     private let model: SecondCameraImageEditorModel
@@ -608,7 +610,7 @@ class SecondCameraImageEditorCropViewController: SecondCameraEditorViewControlle
         case .began:
             gestureStartTransform = transform
             // Pans that start near the crop rectangle should be treated as crop gestures.
-            panCropRegion = cropRegion(forGestureRecognizer: gestureRecognizer)
+            panCropRegion = locksOutputSize ? nil : cropRegion(forGestureRecognizer: gestureRecognizer)
 
         case .changed, .ended:
             if let panCropRegion {
@@ -873,7 +875,7 @@ extension SecondCameraImageEditorCropViewController: SecondCameraImageEditorBott
         )
         aspectRatioButton.addTarget(self, action: #selector(didTapChooseAspectRatio), for: .touchUpInside)
 
-        return [rotateButton, flipButton, aspectRatioButton]
+        return locksOutputSize ? [flipButton] : [rotateButton, flipButton, aspectRatioButton]
     }
 }
 
@@ -1052,7 +1054,9 @@ extension SecondCameraImageEditorCropViewController {
 
     @objc
     private func didTapReset() {
-        let newTransform = SecondCameraImageEditorTransform.defaultTransform(srcImageSizePixels: model.srcImageSizePixels)
+        let newTransform = locksOutputSize
+            ? SecondCameraImageEditorTransform(outputSizePixels: model.currentTransform().outputSizePixels, unitTranslation: .zero, rotationRadians: 0, scaling: 1, isFlipped: false).normalize(srcImageSizePixels: model.srcImageSizePixels)
+            : SecondCameraImageEditorTransform.defaultTransform(srcImageSizePixels: model.srcImageSizePixels)
         applyTransformWithAnimation(newTransform)
     }
 

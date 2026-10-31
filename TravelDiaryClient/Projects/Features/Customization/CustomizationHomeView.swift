@@ -70,7 +70,7 @@ struct CustomizationHomeView: View {
             Text("选好照片，讲讲故事，由制作方为你排版。成品可加入书架，继续编辑。")
                 .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
             Button { Task { await create() } } label: {
-                HStack { if creating { ProgressView() }; Text(creating ? "正在创建草稿…" : "开始我的定制") }
+                HStack { if creating { ProgressView() }; Text(creating ? "正在创建草稿…" : "开始我的免费定制") }
                     .frame(maxWidth: .infinity, minHeight: 44)
             }.buttonStyle(.borderedProminent).controlSize(.large).disabled(creating)
         }

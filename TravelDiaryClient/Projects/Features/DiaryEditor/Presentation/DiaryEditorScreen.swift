@@ -5,8 +5,10 @@ import UIKit
 /// 主编辑页面只组织工具与状态；数据修改和保存均交给 Session。
 struct DiaryEditorScreen: View {
     @ObservedObject var session: DiaryEditorSession
+    var entranceOnRightPage = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @State private var showsSpreadShell = false
     @State private var childEditor: DiaryEditorSession?
     @State private var showPhotos = false
     @State private var showCamera = false
@@ -86,6 +88,19 @@ struct DiaryEditorScreen: View {
         }
     }
 
+    /// 仅完整跨页比例启用外壳预览，等比例的不同分辨率同样适用。
+    private var supportsSpreadPreview: Bool {
+        let size = session.document.root.referenceSize
+        guard session.isRoot, size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0 else { return false }
+        return abs(size.width / size.height - 4370.0 / 3130.0) < 0.000001
+    }
+
+    private var supportsSinglePageViewport: Bool {
+        let size = session.document.root.referenceSize
+        return session.isRoot && size.height > 0 && abs(size.width / size.height - 2185.0 / 3130.0) < 0.000001
+    }
+
     @ToolbarContentBuilder
     private var editorToolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
@@ -96,6 +111,11 @@ struct DiaryEditorScreen: View {
             .disabled(session.busy || importingCameraPhotos)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
+            if supportsSpreadPreview {
+                Button { session.finishInteraction(); showsSpreadShell.toggle() } label: { Image(systemName: showsSpreadShell ? "eye.fill" : "eye") }
+                    .accessibilityLabel(showsSpreadShell ? "隐藏画布外壳" : "显示画布外壳")
+                    .disabled(session.busy || importingCameraPhotos)
+            }
             Button { session.undo() } label: { Image(systemName: "arrow.uturn.backward") }
                 .disabled(session.undoStack.isEmpty || session.busy || importingCameraPhotos).accessibilityLabel("撤销")
             Button { session.redo() } label: { Image(systemName: "arrow.uturn.forward") }
@@ -109,14 +129,20 @@ struct DiaryEditorScreen: View {
                 GeometryReader { geometry in
                     let size = session.canvasBounds.size
                     // 工具模式用紧凑边距适配全部可见高度，普通模式保留完整手柄空间。
-                    let margin = toolOpen ? DiaryCanvasSurface.toolControlMargin : DiaryCanvasSurface.controlMargin
+                    let margin = toolOpen || session.layerMode ? DiaryCanvasSurface.toolControlMargin : DiaryCanvasSurface.controlMargin
                     let horizontalPadding: CGFloat = toolOpen ? margin * 2 : 40
                     let verticalPadding: CGFloat = toolOpen ? 0 : 24
                     let scale = max(0.01, min((geometry.size.width - horizontalPadding) / size.width,
                                              (geometry.size.height - margin * 2 - verticalPadding) / size.height))
-                    DiaryZoomableCanvas(contentSize: CGSize(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2), sessionID: session.id, inkMode: session.inkMode, minimumScale: 0.65, toolViewport: toolOpen) {
+                    DiaryZoomableCanvas(contentSize: CGSize(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2), sessionID: session.id, inkMode: session.inkMode, minimumScale: 0.65, toolViewport: toolOpen, contentRevision: (showsSpreadShell ? 1 : 0) + (session.layerMode ? 2 : 0), entranceFocusRect: supportsSpreadPreview ? CGRect(x: margin + (entranceOnRightPage ? size.width * scale / 2 : 0), y: margin, width: size.width * scale / 2, height: size.height * scale) : nil, preservedCanvasRect: supportsSinglePageViewport ? CGRect(x: margin, y: margin, width: size.width * scale, height: size.height * scale) : nil) {
                       ZStack(alignment: .topLeading) {
-                        DiaryCanvasView(session: session, compactViewport: toolOpen, onSelectionViewportRect: { rect in
+                        if supportsSpreadPreview && showsSpreadShell {
+                            DiaryLiveSpreadShell()
+                                .frame(width: size.width * scale, height: size.height * scale)
+                                .offset(x: margin, y: margin)
+                                .allowsHitTesting(false).accessibilityHidden(true)
+                        }
+                        DiaryCanvasView(session: session, compactViewport: toolOpen, stagesEntrance: supportsSpreadPreview, onSelectionViewportRect: { rect in
                             DispatchQueue.main.async {
                                 if selectionViewportRect != rect { selectionViewportRect = rect }
                             }
@@ -128,7 +154,12 @@ struct DiaryEditorScreen: View {
                             else if layer.kind == .sticker { childEditor = session.openSelectedStickerObject() }
                         })
                             .frame(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)
-
+                        if supportsSpreadPreview && showsSpreadShell {
+                            LinearGradient(colors: [.clear, .black.opacity(0.16), .clear], startPoint: .leading, endPoint: .trailing)
+                                .frame(width: max(2, size.width * scale * 0.018), height: size.height * scale)
+                                .offset(x: margin + size.width * scale * (0.5 - 0.009), y: margin)
+                                .allowsHitTesting(false).accessibilityHidden(true)
+                        }
                       }
                       .frame(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)
                     }
@@ -143,6 +174,8 @@ struct DiaryEditorScreen: View {
                         }
                     }
                 }
+                // 画布可延伸至 Home 指示器区域；外层工具栏仍按安全区定位。
+                .ignoresSafeArea(.container, edges: toolOpen ? [] : .bottom)
                 .background(DiaryLibraryStyle.background)
                 if showStickers {
                     // Reserve the compact native sheet's space so the existing tool
@@ -277,6 +310,25 @@ struct DiaryCropSheet: View {
                     }, onCancel: { dismiss() }, onError: { message in error = message; editor = nil })
             } catch is CancellationError { }
             catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
+/// 只装饰画布外围，与画布共用缩放容器，不参与图层和命中测试。
+private struct DiaryLiveSpreadShell: View {
+    var body: some View {
+        GeometryReader { geometry in
+            let rim = geometry.size.width * 0.0225
+            Image("DiaryBookLeather").resizable()
+                .frame(width: geometry.size.width + rim * 2, height: geometry.size.height + rim * 2)
+                .mask {
+                    Path { path in
+                        path.addRect(CGRect(x: 0, y: 0, width: geometry.size.width + rim * 2, height: geometry.size.height + rim * 2))
+                        path.addRect(CGRect(x: rim, y: rim, width: geometry.size.width, height: geometry.size.height))
+                    }.fill(style: FillStyle(eoFill: true))
+                }
+                .offset(x: -rim, y: -rim)
+                .shadow(color: .black.opacity(0.18), radius: 5, y: 3)
         }
     }
 }
