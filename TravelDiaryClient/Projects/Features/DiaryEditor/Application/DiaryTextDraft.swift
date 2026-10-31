@@ -30,10 +30,56 @@ final class DiaryTextDraft: ObservableObject {
         refresh()
     }
 
+    private var parentProjection: DiaryProjection {
+        var visited = Set<UUID>()
+        func find(_ contentID: UUID, _ projection: DiaryProjection) -> DiaryProjection? {
+            guard visited.insert(contentID).inserted,
+                  let content = preview.document.objects[contentID] else { return nil }
+            for candidate in content.layers {
+                if candidate.id == layer.id { return projection }
+                if let child = candidate.contentID,
+                   let found = find(child, projection.multiplied(by: candidate.transform.projection)) { return found }
+            }
+            return nil
+        }
+        return find(preview.contentID, DiaryProjection()) ?? DiaryProjection()
+    }
+
+    /// The overlay uses page coordinates; persisted text stays in its owner's coordinates.
+    var canvasLayer: DiaryLayer {
+        var result = layer
+        result.transform = mappedTransform(layer.transform, through: parentProjection)
+        return result
+    }
+
+    func adjustCanvasLayer(_ value: DiaryLayer) {
+        var next = value
+        next.id = layer.id
+        next.text = layer.text
+        next.transform = mappedTransform(value.transform, through: parentProjection.inverse)
+        layer = next
+    }
+
+    private func mappedTransform(_ transform: DiaryTransform, through parent: DiaryProjection) -> DiaryTransform {
+        if parent == DiaryProjection() { return transform }
+        let projection = parent.multiplied(by: transform.projection)
+        let reference = DiaryPageRenderer.textBounds(layer)
+        let bounds = projection.bounds(reference)
+        guard bounds.width > 0, bounds.height > 0 else { return transform }
+        var warp = DiaryQuadWarp(reference: reference)
+        warp.corners = reference.diaryCorners.map {
+            let point = projection.point($0)
+            return CGPoint(x: (point.x - bounds.minX) / bounds.width, y: (point.y - bounds.minY) / bounds.height)
+        }
+        return DiaryTransform(position: bounds.origin, pivot: reference.origin,
+                              stretch: CGSize(width: bounds.width / reference.width, height: bounds.height / reference.height), warp: warp)
+    }
+
     func refresh() {
         var visible = layer
         if visible.text.isEmpty { visible.text = "输入文字" }
         preview.previewTextDraft(visible, targetID: targetID)
+        preview.selectedID = layer.id
     }
 
     func titleLayer(_ layout: DiaryTitleLayout) -> DiaryLayer {

@@ -12,6 +12,7 @@ struct DiaryContextToolbar: View {
     let onStickers: () -> Void
     let onOpenObject: () -> Void
     var onTransform: () -> Void = {}
+    var selectionToolsOnly = false
     @State private var panel: Panel?
     @State private var textEditor: DiaryTextEditorPresentation?
     @State private var target: DiaryLayer?
@@ -32,17 +33,21 @@ struct DiaryContextToolbar: View {
     var body: some View {
         GlassEffectContainer(spacing: 12) {
         VStack(spacing: 18) {
-            if session.selected != nil {
+            if selectionToolsOnly, session.selected != nil {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 16) {
+                    HStack(spacing: 18) {
                         ForEach(session.contextActions) { action in
                             Button { perform(action) } label: {
-                                toolLabel(action.title, symbol: action.symbol)
+                                VStack(spacing: 4) {
+                                    Image(systemName: action.symbol).font(.system(size: 20))
+                                    Text(action.title).font(.system(size: 11)).fixedSize()
+                                }.frame(minWidth: 38, minHeight: 48).contentShape(Rectangle())
                             }.accessibilityIdentifier("diary.tool.\(action.rawValue)")
                         }
                     }.padding(.horizontal, 20)
                 }
             }
+            if !selectionToolsOnly {
             if addExpanded {
                 HStack(alignment: .top, spacing: 0) {
                     toolButton("拍照", symbol: "camera", action: onCamera)
@@ -81,14 +86,19 @@ struct DiaryContextToolbar: View {
                     openTool { target = nil; presentTextEditor(.editText) }
                 } label: { toolLabel("文字", symbol: "square.and.pencil") }
             }
+            }
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 12)
-        .padding(.top, 16)
-        .padding(.bottom, 12)
+        .padding(.top, selectionToolsOnly ? 6 : 16)
+        .padding(.bottom, selectionToolsOnly ? 6 : 12)
         .frame(maxWidth: .infinity)
         .foregroundStyle(Color(red: 0.45, green: 0.51, blue: 0.49))
         }
+        .background {
+            if selectionToolsOnly { Capsule().fill(.regularMaterial).overlay(Capsule().stroke(.white.opacity(0.8), lineWidth: 1)) }
+        }
+        .shadow(color: .black.opacity(selectionToolsOnly ? 0.12 : 0), radius: 12, y: 6)
         .disabled(session.busy || importing)
         .fullScreenCover(item: $textEditor) { presentation in
             DiaryTextEditorSheet(session: session, draft: presentation.draft, initialTab: presentation.initialTab)

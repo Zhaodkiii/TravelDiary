@@ -18,9 +18,12 @@ nonisolated struct DiaryTextAppearance: Codable, Equatable, Sendable {
     // Optional fields preserve decoding of existing documents.
     var titleLayout: DiaryTitleLayout? = nil
     var paper: DiaryTextPaper? = nil
+    /// User-set card height; content may grow beyond it without clipping.
+    var minimumCardHeight: Double? = nil
 
     var isValid: Bool {
-        (paper?.isValid ?? true) && opacity.isFinite && (0...1).contains(opacity)
+        (minimumCardHeight.map { $0.isFinite && (0...20000).contains($0) } ?? true)
+        && (paper?.isValid ?? true) && opacity.isFinite && (0...1).contains(opacity)
         && strokeWidth.isFinite && (0...12).contains(strokeWidth)
         && shadowRadius.isFinite && (0...30).contains(shadowRadius)
     }

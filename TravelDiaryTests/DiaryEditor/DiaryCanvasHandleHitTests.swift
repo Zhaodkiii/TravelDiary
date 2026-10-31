@@ -29,7 +29,18 @@ struct DiaryCanvasHandleHitTests {
         var point = CGPoint.zero
         override func location(in view: UIView?) -> CGPoint { point }
     }
-    @Test @MainActor func actualCanvasEditDuplicateAndDeleteButtonsWorkNearTheirVisibleEdges() throws {
+    @MainActor private final class Pan: UIPanGestureRecognizer {
+        var point = CGPoint.zero
+        var offset = CGPoint.zero
+        var phase: UIGestureRecognizer.State = .began
+        override var state: UIGestureRecognizer.State {
+            get { phase }
+            set { phase = newValue }
+        }
+        override func location(in view: UIView?) -> CGPoint { point }
+        override func translation(in view: UIView?) -> CGPoint { offset }
+    }
+    @Test @MainActor func actualCanvasEditMoveAndDeleteControlsWorkNearTheirVisibleEdges() throws {
         var document = DiaryDocument()
         document.objects[document.rootContentID]?.referenceSize = CGSize(width: 200, height: 200)
         var text = DiaryLayer(name: "文字", kind: .text,
@@ -57,9 +68,26 @@ struct DiaryCanvasHandleHitTests {
         let edit = screen(CGPoint(x: rect.maxX, y: rect.minY))
         tap(CGPoint(x: edit.x + 17, y: edit.y - 2))
         #expect(edited)
-        let duplicate = screen(CGPoint(x: rect.minX, y: rect.maxY))
-        tap(CGPoint(x: duplicate.x - 17, y: duplicate.y + 2))
-        #expect(session.scopeLayers.count == 2)
+        let move = screen(CGPoint(x: rect.minX, y: rect.maxY))
+        let origin = CGPoint(x: move.x - 17, y: move.y + 2)
+        tap(origin)
+        #expect(session.scopeLayers.count == 1)
+        #expect(session.selectedID == id)
+        let pan = Pan()
+        pan.point = origin
+        _ = surface.perform(NSSelectorFromString("panned:"), with: pan)
+        pan.phase = .changed
+        pan.offset = CGPoint(x: 20 * fit, y: 15 * fit)
+        pan.point = CGPoint(x: origin.x + pan.offset.x, y: origin.y + pan.offset.y)
+        _ = surface.perform(NSSelectorFromString("panned:"), with: pan)
+        pan.phase = .ended
+        _ = surface.perform(NSSelectorFromString("panned:"), with: pan)
+        let moved = try #require(session.selected)
+        #expect(abs(moved.transform.position.x - transform.position.x - 20) < 0.001)
+        #expect(abs(moved.transform.position.y - transform.position.y - 15) < 0.001)
+        #expect(moved.transform.scale == transform.scale)
+        #expect(session.scopeLayers.count == 1)
+        session.undo()
         session.select(id); surface.refresh(force: true)
         let delete = screen(CGPoint(x: rect.minX, y: rect.minY))
         tap(CGPoint(x: delete.x - 17, y: delete.y - 2))

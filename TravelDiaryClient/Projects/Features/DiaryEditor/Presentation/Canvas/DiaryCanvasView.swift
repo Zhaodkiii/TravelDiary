@@ -5,12 +5,18 @@ import PencilKit
 struct DiaryCanvasView: UIViewRepresentable {
     @ObservedObject var session: DiaryEditorSession
     var compactViewport = false
+    var showsSelection = true
+    var editingTextLayer: DiaryLayer? = nil
+    var lockedTextID: UUID? = nil
+    var onTextAdjustment: ((DiaryLayer) -> Void)? = nil
+    var focusedLayerID: UUID? = nil
+    var onSelectionViewportRect: ((CGRect?) -> Void)? = nil
     var onEdit: () -> Void = {}
     func makeUIView(context: Context) -> DiaryCanvasSurface {
-        let view = DiaryCanvasSurface(); view.session = session; view.compactViewport = compactViewport; view.onEdit = onEdit; return view
+        let view = DiaryCanvasSurface(); view.session = session; view.compactViewport = compactViewport; view.editingTextLayer = editingTextLayer; view.lockedTextID = lockedTextID; view.onTextAdjustment = onTextAdjustment; view.showsSelection = showsSelection; view.focusedLayerID = focusedLayerID; view.onEdit = onEdit; view.onSelectionViewportRect = onSelectionViewportRect; return view
     }
     func updateUIView(_ view: DiaryCanvasSurface, context: Context) {
-        view.session = session; view.compactViewport = compactViewport; view.onEdit = onEdit; view.refresh()
+        view.session = session; view.compactViewport = compactViewport; view.editingTextLayer = editingTextLayer; view.lockedTextID = lockedTextID; view.onTextAdjustment = onTextAdjustment; view.showsSelection = showsSelection; view.focusedLayerID = focusedLayerID; view.onEdit = onEdit; view.onSelectionViewportRect = onSelectionViewportRect; view.refresh()
     }
 }
 
@@ -20,14 +26,24 @@ final class DiaryCanvasSurface: UIView {
     var compactViewport = false {
         didSet { if compactViewport != oldValue { refresh(force: true) } }
     }
+    var editingTextLayer: DiaryLayer?
+    var lockedTextID: UUID?
+    var onTextAdjustment: ((DiaryLayer) -> Void)?
+    var focusedLayerID: UUID? {
+        didSet { if focusedLayerID != oldValue { refresh(force: true) } }
+    }
+    var showsSelection = true {
+        didSet { selectionOverlay.isHidden = !showsSelection }
+    }
+    var onSelectionViewportRect: ((CGRect?) -> Void)?
     var onEdit: () -> Void = {}
     private enum Handle: CaseIterable {
-        case delete, edit, duplicate, scale, top, bottom, left, right, rotate
+        case delete, edit, move, scale, top, bottom, left, right, rotate
         var symbol: String {
             switch self {
             case .delete: "xmark"
             case .edit: "pencil"
-            case .duplicate: "plus.square.on.square"
+            case .move: "arrow.up.and.down.and.arrow.left.and.right"
             case .scale: "arrow.up.left.and.arrow.down.right"
             case .rotate: "arrow.clockwise"
             case .left, .right: "minus"
@@ -46,7 +62,7 @@ final class DiaryCanvasSurface: UIView {
     private var renderTask: Task<Void, Never>?
     private var resolutionTask: Task<Void, Never>?
     private var preview: DiaryLayer?
-    private var displayedSelection: DiaryLayer? { preview ?? session?.transformDraft?.layer ?? session?.selected }
+    private var displayedSelection: DiaryLayer? { preview ?? editingTextLayer ?? session?.transformDraft?.layer ?? session?.selected }
     private var lastDraftLayer: DiaryLayer?
     private var warpHandle: Int?
     private var warpStart: DiaryLayer?
@@ -121,10 +137,28 @@ final class DiaryCanvasSurface: UIView {
                 sqrt(4 * 1024 * 1024 / max(1, session.canvasBounds.width * session.canvasBounds.height))))
             artwork.layer.position = CGPoint(x: contentMargin, y: contentMargin)
             artwork.transform = CGAffineTransform(scaleX: fit, y: fit)
+            var previewScale = fit
+            // Focus changes only the viewport; the draft's size and position remain untouched.
+            if let id = focusedLayerID, let entry = renderCache.entries[id] {
+                let rect = entry.rect
+                let projection = displayTransform(entry.source).projection
+                let points = [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
+                              CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY)].map { projection.point($0) }
+                let left = points.map(\.x).min() ?? 0
+                let top = points.map(\.y).min() ?? 0
+                let width = max(1, (points.map(\.x).max() ?? left) - left)
+                let height = max(1, (points.map(\.y).max() ?? top) - top)
+                let focusScale = max(0.01, min((bounds.width - 64) / width, (bounds.height - 64) / height, 2))
+                artwork.transform = CGAffineTransform(scaleX: focusScale, y: focusScale)
+                artwork.layer.position = CGPoint(
+                    x: bounds.midX - (left + width / 2 - session.canvasBounds.minX) * focusScale,
+                    y: bounds.midY - (top + height / 2 - session.canvasBounds.minY) * focusScale)
+                previewScale = focusScale
+            }
             artwork.cache = renderCache
             artwork.composited = renderCache.ordered.contains { $0.source.visible && ($0.source.blendMode ?? .normal) != .normal }
             CATransaction.commit()
-            let pixelsPerPoint = fit * (window?.screen.scale ?? traitCollection.displayScale) * viewportZoom
+            let pixelsPerPoint = previewScale * (window?.screen.scale ?? traitCollection.displayScale) * viewportZoom
             renderCache.prepareResolution(pointsToPixels: pixelsPerPoint)
             session.requestEditorImages(longestEdge: max(session.canvasBounds.width, session.canvasBounds.height) * pixelsPerPoint)
             updateArtwork()
@@ -137,6 +171,7 @@ final class DiaryCanvasSurface: UIView {
             inkLayer.isHidden = session.inkMode || artwork.composited
         }
         lastDraftLayer = session.transformDraft?.layer
+        publishSelectionViewportRect()
         selectionOverlay.setNeedsDisplay()
     }
 
@@ -166,7 +201,7 @@ final class DiaryCanvasSurface: UIView {
         inkLayer.isHidden = session?.inkMode == true || artwork.composited
         place(inkLayer, rect: renderCache.inkRect.isNull ? .zero : renderCache.inkRect, matrix: .identity)
         CATransaction.commit()
-        artwork.preview = preview ?? session?.transformDraft?.layer
+        artwork.preview = lockedTextID == nil ? (preview ?? session?.transformDraft?.layer) : nil
         artwork.invalidateContentIfNeeded()
     }
 
@@ -210,6 +245,7 @@ final class DiaryCanvasSurface: UIView {
     }
 
     func viewportDidZoom() {
+        publishSelectionViewportRect()
         selectionOverlay.setNeedsDisplay()
         resolutionTask?.cancel()
         resolutionTask = Task { @MainActor [weak self] in
@@ -233,18 +269,41 @@ final class DiaryCanvasSurface: UIView {
             if let retained = retainedLayers[entry.id] { place(retained, rect: entry.rect, projection: displayTransform(entry.source).projection) }
         }
         CATransaction.commit()
-        artwork.preview = preview ?? session?.transformDraft?.layer
+        artwork.preview = lockedTextID == nil ? (preview ?? session?.transformDraft?.layer) : nil
         if artwork.composited { artwork.setNeedsDisplay() }
+        publishSelectionViewportRect()
         selectionOverlay.setNeedsDisplay()
+    }
+
+    /// Report the selection in viewport points so the floating tools keep their size while zooming.
+    func publishSelectionViewportRect() {
+        guard let callback = onSelectionViewportRect else { return }
+        guard showsSelection, let session, !session.inkMode, !session.layerMode,
+              session.transformDraft == nil, let layer = displayedSelection,
+              layer.visible, let rect = selectionRect(layer) else { callback(nil); return }
+        var ancestor = superview
+        while let view = ancestor, !(view is UIScrollView) { ancestor = view.superview }
+        guard let scroll = ancestor as? UIScrollView else { callback(nil); return }
+        let points = rect.diaryCorners.map { screenPoint(displayTransform(layer).projection.point($0)) }
+            .map { convert($0, to: scroll) }
+        let left = points.map(\.x).min() ?? 0, top = points.map(\.y).min() ?? 0
+        callback(CGRect(x: left - scroll.bounds.minX, y: top - scroll.bounds.minY,
+                        width: (points.map(\.x).max() ?? left) - left,
+                        height: (points.map(\.y).max() ?? top) - top))
+    }
+
+    private func selectionRect(_ layer: DiaryLayer) -> CGRect? {
+        if layer.id == lockedTextID { return DiaryPageRenderer.textBounds(layer) }
+        return renderCache.entries[layer.id]?.rect
     }
 
     func drawSelection(in context: CGContext) {
         guard let session, fit > 0 else { return }
         if session.transformDraft != nil { drawWarpControls(in: context); return }
         if !session.inkMode, let layer = displayedSelection, layer.visible,
-           let entry = renderCache.entries[layer.id] {
+           let rect = selectionRect(layer) {
             context.saveGState()
-            let bounds = entry.rect.insetBy(dx: -3, dy: -3)
+            let bounds = rect.insetBy(dx: -3, dy: -3)
             let projection = displayTransform(layer).projection
             let corners = [CGPoint(x: bounds.minX, y: bounds.minY),
                            CGPoint(x: bounds.maxX, y: bounds.minY),
@@ -278,12 +337,12 @@ final class DiaryCanvasSurface: UIView {
         if let handle = handleHit(gesture.location(in: self)) {
             switch handle {
             case .delete: session.removeSelected()
-            case .duplicate: session.duplicateSelected()
             case .edit: onEdit()
             default: break
             }
             return
         }
+        guard lockedTextID == nil else { return }
         let target = hit(gesture.location(in: self))
         // 再次单击当前素材取消选中；选择状态仅影响编辑，不改变作品数据。
         session.select(target == session.selectedID && !session.layerMode ? nil : target)
@@ -300,14 +359,13 @@ final class DiaryCanvasSurface: UIView {
             let location = gesture.location(in: self)
             let translation = gesture.translation(in: self)
             let touchOrigin = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
-            guard let layer = session.selected, layer.visible, !layer.locked, !layer.isPhotoFrame else { return }
+            guard let layer = editingTextLayer ?? session.selected, layer.visible, !layer.locked, !layer.isPhotoFrame else { return }
             activeHandle = handleHit(touchOrigin)
-            if let handle = activeHandle, [.delete, .edit, .duplicate].contains(handle) { return }
-            let selectionBounds = renderCache.entries[layer.id]?.rect ?? CGRect(origin: .zero, size: layer.size)
+            if let handle = activeHandle, [.delete, .edit].contains(handle) { return }
+            let selectionBounds = selectionRect(layer) ?? CGRect(origin: .zero, size: layer.size)
             let localOrigin = displayTransform(layer).projection.inverse.point(designPoint(touchOrigin))
             if activeHandle == nil {
-                guard let entry = renderCache.entries[layer.id],
-                      renderCache.contains(localOrigin, entry: entry), hit(touchOrigin) == layer.id else { return }
+                guard selectionBounds.contains(localOrigin), (lockedTextID == layer.id || hit(touchOrigin) == layer.id) else { return }
             }
             initialLayer = layer
             initialBounds = selectionBounds
@@ -321,8 +379,8 @@ final class DiaryCanvasSurface: UIView {
             parentAtStart = .identity
         case .changed:
             guard let startPosition, let draggingID, session.selectedID == draggingID,
-                  let layer = session.selected, layer.visible, !layer.locked else { return }
-            if let handle = activeHandle {
+                  let layer = editingTextLayer ?? session.selected, layer.visible, !layer.locked else { return }
+            if let handle = activeHandle, handle != .move {
                 updateHandle(handle, point: designPoint(gesture.location(in: self)))
                 return
             }
@@ -332,9 +390,13 @@ final class DiaryCanvasSurface: UIView {
             let shifted = CGPoint(x: translation.x / fit, y: translation.y / fit).applying(inverse)
             var moved = initialLayer ?? layer
             moved.transform.position = CGPoint(x: startPosition.x + shifted.x - origin.x, y: startPosition.y + shifted.y - origin.y)
+            if lockedTextID == moved.id { onTextAdjustment?(moved) }
             showPreview(moved)
         case .ended:
-            if let preview { session.commitTransform(preview) }
+            if let preview {
+                if lockedTextID == preview.id { onTextAdjustment?(preview) }
+                else { session.commitTransform(preview) }
+            }
             preview = nil
             startPosition = nil; draggingID = nil; activeHandle = nil; initialLayer = nil
             refresh(force: true)
@@ -343,7 +405,8 @@ final class DiaryCanvasSurface: UIView {
             startPosition = nil; draggingID = nil; activeHandle = nil; initialLayer = nil
             updateArtwork()
             if artwork.composited { artwork.setNeedsDisplay() }
-            selectionOverlay.setNeedsDisplay()
+            publishSelectionViewportRect()
+        selectionOverlay.setNeedsDisplay()
         default: break
         }
     }
@@ -413,6 +476,7 @@ final class DiaryCanvasSurface: UIView {
             preview=nil; warpStart=nil; warpHandle=nil
             refresh(force:true)
         case .cancelled, .failed:
+            if lockedTextID != nil, let initialLayer { onTextAdjustment?(initialLayer) }
             preview=nil; warpStart=nil; warpHandle=nil
             updateArtwork(); selectionOverlay.setNeedsDisplay()
         default: break
@@ -438,11 +502,11 @@ final class DiaryCanvasSurface: UIView {
     }
     private func handles() -> [(Handle, CGPoint)] {
         guard let session, !session.inkMode, let layer = displayedSelection, layer.visible, !layer.locked else { return [] }
-        guard let rect = renderCache.entries[layer.id]?.rect else { return [] }
+        guard let rect = selectionRect(layer) else { return [] }
         // 与选框共用外扩边界，角点和边中点始终落在白线上。
         let b = rect.insetBy(dx: -3, dy: -3)
         var points: [(Handle, CGPoint)] = [(.delete, CGPoint(x:b.minX,y:b.minY)), (.edit, CGPoint(x:b.maxX,y:b.minY)),
-            (.duplicate, CGPoint(x:b.minX,y:b.maxY)), (.scale, CGPoint(x:b.maxX,y:b.maxY))]
+            (.move, CGPoint(x:b.minX,y:b.maxY)), (.scale, CGPoint(x:b.maxX,y:b.maxY))]
         if layer.isPhotoFrame {
             points = [(.delete, CGPoint(x:b.minX,y:b.minY))]
         } else {
@@ -450,16 +514,27 @@ final class DiaryCanvasSurface: UIView {
                        (.left, CGPoint(x:b.minX,y:b.midY)), (.right, CGPoint(x:b.maxX,y:b.midY)),
                        (.rotate, CGPoint(x:b.maxX + 28 / max(0.01, fit * viewportZoom * layer.transform.scale * layer.transform.stretchX),y:b.midY))]
         }
+        if lockedTextID != nil { points.removeAll { ![.left, .right, .top, .bottom, .scale].contains($0.0) } }
         if session.layerMode { points.removeAll { $0.0 != .scale && $0.0 != .rotate } }
         if layer.id == session.content.primaryLayerID { points.removeAll { $0.0 == .delete } }
-        return points.map { ($0.0, screenPoint(displayTransform(layer).projection.point($0.1))) }
+        let mapped = points.map { ($0.0, screenPoint(displayTransform(layer).projection.point($0.1))) }
+        guard lockedTextID != nil else { return mapped }
+        // Keep controls outside tiny text boxes, with screen-space separation at every zoom.
+        let center = screenPoint(displayTransform(layer).projection.point(CGPoint(x: b.midX, y: b.midY)))
+        return mapped.map { handle, point in
+            let dx = point.x - center.x, dy = point.y - center.y
+            let distance = max(0.001, hypot(dx, dy))
+            let offset: CGFloat = (handle == .scale ? 22 : 14) / viewportZoom
+            return (handle, CGPoint(x: point.x + dx / distance * offset,
+                                    y: point.y + dy / distance * offset))
+        }
     }
     private func handleHit(_ p: CGPoint) -> Handle? {
         let matrix = displayedSelection.map { displayMatrix($0) } ?? .identity
         let insideSelection: Bool
-        if let layer = displayedSelection, let entry = renderCache.entries[layer.id] {
+        if let layer = displayedSelection, let rect = selectionRect(layer) {
             let local = displayTransform(layer).projection.inverse.point(designPoint(p))
-            insideSelection = entry.rect.contains(local)
+            insideSelection = rect.contains(local)
         } else { insideSelection = false }
         return handles().compactMap { handle, center -> (Handle, CGFloat)? in
             let offset = CGPoint(x: (p.x - center.x) * viewportZoom, y: (p.y - center.y) * viewportZoom)
@@ -547,6 +622,28 @@ final class DiaryCanvasSurface: UIView {
             layer.transform.rotationDegrees -= 180
             let moved = layer.transform.projection.point(center)
             layer.transform.position.x += fixed.x-moved.x; layer.transform.position.y += fixed.y-moved.y
+        } else if lockedTextID == layer.id && layer.kind == .text {
+            let dx = local.x - localStart.x, dy = local.y - localStart.y
+            let anchor = CGPoint(x: handle == .left ? b.maxX : b.minX,
+                                 y: handle == .top ? b.maxY : b.minY)
+            let fixed = layer.transform.projection.point(anchor)
+            if handle == .left || handle == .right {
+                let insets = DiaryPageRenderer.textInsets(layer)
+                let minimumWidth = insets.left + insets.right + layer.fontSize
+                layer.size.width = max(minimumWidth, layer.size.width + (handle == .left ? -dx : dx))
+            } else {
+                var appearance = layer.textAppearance ?? DiaryTextAppearance()
+                let currentBounds = DiaryPageRenderer.textBounds(layer)
+                let cardHeight = currentBounds.height + currentBounds.minY * 2
+                appearance.minimumCardHeight = Double(min(20000, max(0, cardHeight + (handle == .top ? -dy : dy))))
+                layer.textAppearance = appearance
+            }
+            let next = DiaryPageRenderer.textBounds(layer).insetBy(dx: -3, dy: -3)
+            let nextAnchor = CGPoint(x: handle == .left ? next.maxX : next.minX,
+                                     y: handle == .top ? next.maxY : next.minY)
+            let moved = layer.transform.projection.point(nextAnchor)
+            layer.transform.position.x += fixed.x - moved.x
+            layer.transform.position.y += fixed.y - moved.y
         } else {
             // 边中点只改变一个轴的比例，不裁剪照片、不重排文字、不改内部图层。
             // 投影到手势开始时的局部坐标，避免素材旋转后手柄偏离自身方向。
@@ -571,6 +668,7 @@ final class DiaryCanvasSurface: UIView {
             }
             layer.transform.stretchAxis(horizontal: horizontal, ratio: ratio, anchor: anchor)
         }
+        if lockedTextID == layer.id { onTextAdjustment?(layer); refresh(force: true) }
         showPreview(layer)
     }
 

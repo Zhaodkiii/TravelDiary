@@ -13,6 +13,87 @@ struct DiaryTextEditorTests {
                 baseDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)))
     }
 
+    @Test func wrappedTextPreviewSelectsLeafInItsOwningCoordinateSpace() throws {
+        let source = session()
+        let text = DiaryTextDraft(session: source, layer: nil).layer
+        let wrapperID = source.document.appendObject(containing: text)
+        source.selectedID = wrapperID
+        let leaf = try #require(source.selectedEditingLayer)
+        let draft = DiaryTextDraft(session: source, layer: leaf)
+        #expect(draft.targetID == leaf.id)
+        #expect(draft.preview.selectedID == leaf.id)
+        #expect(draft.preview.contentID == source.contentID)
+        #expect(draft.canvasLayer.id == leaf.id)
+        draft.setText("编辑包装内的文字")
+        #expect(draft.preview.document.layer(leaf.id)?.text == "编辑包装内的文字")
+        #expect(source.document.layer(leaf.id)?.text == leaf.text)
+    }
+
+    @Test func initialCanvasFocusDoesNotRepeatWhenTextBoundsChange() {
+        let coordinator = DiaryZoomableCanvas<Color>.Coordinator(content: .clear)
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 360))
+        scroll.minimumZoomScale = 0.5
+        scroll.maximumZoomScale = 8
+        coordinator.size = CGSize(width: 390, height: 700)
+        coordinator.host.view.frame = CGRect(origin: .zero, size: coordinator.size)
+        scroll.addSubview(coordinator.host.view)
+        scroll.contentSize = coordinator.size
+        scroll.delegate = coordinator
+        coordinator.initialFocusRect = CGRect(x: 120, y: 200, width: 100, height: 40)
+        coordinator.center(scroll)
+        let zoom = scroll.zoomScale
+        let offset = scroll.contentOffset
+        coordinator.initialFocusRect = CGRect(x: 120, y: 200, width: 180, height: 160)
+        coordinator.center(scroll)
+        #expect(scroll.zoomScale == zoom)
+        #expect(scroll.contentOffset == offset)
+        #expect(coordinator.appliedInitialFocus)
+    }
+
+    @Test(arguments: [false, true])
+    func canvasCanPanInEveryDirectionAtFitScale(toolViewport: Bool) {
+        let coordinator = DiaryZoomableCanvas<Color>.Coordinator(content: .clear)
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 700))
+        coordinator.size = CGSize(width: 350, height: 600)
+        coordinator.toolViewport = toolViewport
+        scroll.contentSize = coordinator.size
+        coordinator.center(scroll)
+        let initial = scroll.contentOffset
+        #expect(initial == CGPoint(x: -20, y: toolViewport ? 0 : -50))
+        let minimum = CGPoint(x: -scroll.contentInset.left, y: -scroll.contentInset.top)
+        let maximum = CGPoint(x: scroll.contentSize.width - scroll.bounds.width + scroll.contentInset.right,
+                              y: scroll.contentSize.height - scroll.bounds.height + scroll.contentInset.bottom)
+        #expect(minimum.x < initial.x && maximum.x > initial.x)
+        #expect(minimum.y < initial.y && maximum.y > initial.y)
+        // 布局刷新不能把已平移的视口重新拉回初始位置。
+        let moved = CGPoint(x: initial.x + 80, y: initial.y - 80)
+        scroll.setContentOffset(moved, animated: false)
+        coordinator.center(scroll)
+        #expect(scroll.contentOffset == moved)
+    }
+
+    @Test func cardHeightPreservesWhitespaceAndGrowsForReflow() throws {
+        let draft = DiaryTextDraft(session: session(), layer: nil)
+        draft.setText(String(repeating: "山川与日常，", count: 20))
+        draft.layer.fontSize = 30
+        draft.layer.size.width = 400
+        var appearance = DiaryTextAppearance()
+        appearance.minimumCardHeight = 500
+        draft.layer.textAppearance = appearance
+        let wide = DiaryPageRenderer.textBounds(draft.layer)
+        #expect(wide.height >= 500)
+        let originalText = draft.layer.text
+        draft.layer.size.width = 90
+        let narrow = DiaryPageRenderer.textBounds(draft.layer)
+        #expect(narrow.height > wide.height)
+        #expect(draft.layer.fontSize == 30)
+        #expect(draft.layer.text == originalText)
+        let data = try JSONEncoder().encode(appearance)
+        #expect(try JSONDecoder().decode(DiaryTextAppearance.self, from: data).minimumCardHeight == 500)
+        appearance.minimumCardHeight = -1
+        #expect(!appearance.isValid)
+    }
+
     @Test func markedChineseTextSurvivesInlineColorChangesAndFocusRestorationIsRejected() async throws {
         let source = session()
         let presentation = DiaryTextEditorPresentation(session: source, layer: nil)

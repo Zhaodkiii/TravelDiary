@@ -2,15 +2,16 @@ import SwiftUI
 import UIKit
 
 enum DiaryTextEditorTab: String, CaseIterable {
-    case content = "键盘", templates = "模板", style = "效果", font = "字体"
+    case content = "键盘", templates = "样式", style = "效果", font = "字体"
     // Existing toolbar entry points map into the matching style section.
-    case size = "字号", color = "颜色", layout = "排版", background = "背景"
-    static let mainTabs: [Self] = [.templates, .font, .color, .layout, .background, .style]
+    case size = "字号", color = "颜色", layout = "排版", background = "底纸"
+    static let mainTabs: [Self] = [.content, .font, .size, .color, .layout, .templates, .background, .style]
     var symbol: String {
         switch self {
         case .content: "keyboard"
         case .templates: "square.grid.2x2"
-        case .font: "textformat"
+        case .font: "textformat.abc"
+        case .size: "textformat.size"
         case .color: "paintpalette"
         case .layout: "text.alignleft"
         case .background: "square.on.square"
@@ -35,6 +36,10 @@ struct DiaryTextEditorSheet: View {
     @StateObject private var draft: DiaryTextDraft
     @Environment(\.dismiss) private var dismiss
     @State private var keyboard = false
+    @State private var wholePage = true
+    @State private var initialCanvasFocus = true
+    @State private var expandedInput = false
+    @State private var inputHeight: CGFloat = 28
     @State private var tab: DiaryTextEditorTab
     @State private var styleSection: TextStyleSection
     @State private var category = ""
@@ -65,29 +70,17 @@ struct DiaryTextEditorSheet: View {
     init(session: DiaryEditorSession, draft: DiaryTextDraft, initialTab: DiaryTextEditorTab = .content) {
         self.session = session
         _draft = StateObject(wrappedValue: draft)
-        _tab = State(initialValue: initialTab == .size ? .style : initialTab)
+        _tab = State(initialValue: initialTab)
         _styleSection = State(initialValue: initialTab == .layout ? .layout : .text)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             canvasPreview
-            VStack(spacing: 10) {
-                inputBar
-                HStack(spacing: 0) {
-                    ForEach(DiaryTextEditorTab.mainTabs, id: \.self) { value in
-                        Button {
-                            finishTextInput()
-                            tab = value
-                        } label: {
-                            VStack(spacing: 5) {
-                                Image(systemName: value.symbol).font(.system(size: 21))
-                                Text(value.rawValue).font(.caption)
-                            }.frame(maxWidth: .infinity).frame(height: 52)
-                                .foregroundStyle(tab == value ? DiaryLibraryStyle.accent : DiaryLibraryStyle.secondary)
-                        }.accessibilityAddTraits(tab == value ? [.isSelected] : [])
-                    }
-                }
+                .overlay(alignment: .top) { editorHeader }
+            VStack(spacing: 6) {
+                if tab == .content { inputBar }
+                toolStrip
                 if tab != .content {
                     Group {
                         switch tab {
@@ -98,14 +91,10 @@ struct DiaryTextEditorSheet: View {
                             ScrollView { colorButton(.text).padding(.horizontal, 4).padding(.bottom, 12) }
                         default: styles
                         }
-                    }.frame(height: 270)
-                } else if !keyboard {
-                    Text("点击输入框继续输入，文字会实时显示在画布中")
-                        .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary).padding(.vertical, 16)
+                    }.frame(height: 250)
                 }
             }
             .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
-            .background(DiaryLibraryStyle.background)
             .disabled(saving || committed)
         }
         .background(DiaryLibraryStyle.background)
@@ -138,6 +127,12 @@ struct DiaryTextEditorSheet: View {
             guard !Task.isCancelled, reference == (draft.layer.font ?? .system) else { return }
             draft.refresh()
         }
+        .sheet(isPresented: $expandedInput, onDismiss: { keyboard = tab == .content }) {
+            DiaryExpandedTextInput(text: Binding(get: { draft.layer.text }, set: { draft.setText($0) }),
+                                   onClose: { expandedInput = false })
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $showFontGallery) {
             NavigationStack {
                 FontGalleryScreen(documentID: session.document.id) { reference in
@@ -154,67 +149,129 @@ struct DiaryTextEditorSheet: View {
         } message: { Text(error ?? "") }
     }
 
+    private var editorHeader: some View {
+        HStack {
+            Button("取消") { finishTextInput(); dismiss() }
+                .frame(minWidth: 44, minHeight: 44)
+                .disabled(saving || committed)
+            Spacer()
+            Button { finishTextInput(); save() } label: {
+                HStack(spacing: 6) {
+                    if saving { ProgressView().tint(.white) }
+                    Text("完成").fontWeight(.semibold)
+                }
+                .padding(.horizontal, 18).frame(height: 44)
+                .foregroundStyle(.white)
+                .background(DiaryLibraryStyle.accent, in: Capsule())
+            }
+            .disabled(saving || committed || draft.layer.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || session.busy)
+            .accessibilityIdentifier("diary.text.done")
+        }.padding(.horizontal, 16).padding(.vertical, 4)
+    }
+
+    private var previewHeader: some View {
+        HStack {
+            Text("双指缩放 · 单指调整文字").font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Button { initialCanvasFocus = false; wholePage.toggle() } label: {
+                Label("恢复整页", systemImage: "arrow.up.left.and.arrow.down.right")
+                    .font(.caption).frame(minHeight: 44)
+            }.accessibilityIdentifier("diary.text.previewMode")
+        }.padding(.horizontal, 20)
+    }
+
     private var canvasPreview: some View {
         GeometryReader { geometry in
             let bounds = draft.preview.canvasBounds
             let margin = DiaryCanvasSurface.toolControlMargin
-            let scale = max(0.01, min((geometry.size.width - 32) / (bounds.width + margin * 2),
-                                     (geometry.size.height - 24) / (bounds.height + margin * 2)))
-            DiaryCanvasView(session: draft.preview, compactViewport: true)
-                .frame(width: bounds.width * scale + margin * 2, height: bounds.height * scale + margin * 2)
-                .allowsHitTesting(false)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.clipped().accessibilityLabel("文字实时画布预览")
+            let scale = max(0.01, (geometry.size.width - 32) / bounds.width)
+            let size = CGSize(width: bounds.width * scale + margin * 2,
+                              height: bounds.height * scale + margin * 2)
+            let textBounds = DiaryPageRenderer.textBounds(draft.layer)
+            let corners = [CGPoint(x: textBounds.minX, y: textBounds.minY), CGPoint(x: textBounds.maxX, y: textBounds.minY),
+                           CGPoint(x: textBounds.maxX, y: textBounds.maxY), CGPoint(x: textBounds.minX, y: textBounds.maxY)]
+                .map { draft.canvasLayer.transform.projection.point($0) }
+            let left = corners.map(\.x).min() ?? 0
+            let top = corners.map(\.y).min() ?? 0
+            let focus = CGRect(x: (left - bounds.minX) * scale + margin, y: (top - bounds.minY) * scale + margin,
+                               width: ((corners.map(\.x).max() ?? left) - left) * scale,
+                               height: ((corners.map(\.y).max() ?? top) - top) * scale)
+            let fullPageScale = min(1, max(0.01, geometry.size.height / size.height))
+            DiaryZoomableCanvas(contentSize: size, sessionID: draft.preview.id, inkMode: false,
+                                minimumScale: fullPageScale, refreshContent: true,
+                                initialFocusRect: initialCanvasFocus ? focus : CGRect(origin: .zero, size: size)) {
+                DiaryCanvasView(session: draft.preview, compactViewport: true, showsSelection: true,
+                                editingTextLayer: draft.canvasLayer, lockedTextID: draft.layer.id, onTextAdjustment: { adjusted in
+                    draft.adjustCanvasLayer(adjusted)
+                })
+                .frame(width: size.width, height: size.height)
+            }.id(wholePage)
+                .overlay(alignment: .bottomTrailing) {
+                    Button { initialCanvasFocus = false; wholePage.toggle() } label: {
+                        Image(systemName: "arrow.counterclockwise").frame(width: 44, height: 44)
+                    }.accessibilityLabel("恢复整页")
+                }
+        }.clipped().accessibilityLabel("文字编辑画布，双指缩放与移动，单指调整当前文字")
+    }
+
+    private var toolStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(DiaryTextEditorTab.mainTabs, id: \.self) { value in
+                    Button {
+                        finishTextInput()
+                        tab = value
+                        if value == .content { keyboard = true }
+                    } label: {
+                        VStack(spacing: 5) {
+                            Image(systemName: value.symbol).font(.system(size: 19))
+                            Text(value == .content ? "输入" : value.rawValue).font(.caption)
+                        }.frame(width: 56, height: 46)
+                            .foregroundStyle(tab == value ? DiaryLibraryStyle.accent : DiaryLibraryStyle.secondary)
+                            .background(tab == value ? DiaryLibraryStyle.accent.opacity(0.12) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 12))
+                    }.buttonStyle(.plain)
+                        .accessibilityAddTraits(tab == value ? [.isSelected] : [])
+                }
+            }
+        }
     }
 
     private var inputBar: some View {
-        HStack(spacing: 10) {
-            Button { finishTextInput(); dismiss() } label: {
-                Image(systemName: "chevron.left").font(.title3).frame(width: 44, height: 44)
-                    .background(DiaryLibraryStyle.surface, in: Circle())
-            }.accessibilityLabel("取消文字修改")
-            HStack {
-                DiaryTextInput(text: Binding(get: { draft.layer.text }, set: { draft.setText($0) }), isFocused: $keyboard)
-                    .frame(minHeight: 24, maxHeight: 76)
-                    .overlay(alignment: .leading) {
-                        if draft.layer.text.isEmpty {
-                            Text("记录此刻的心情…").foregroundStyle(.tertiary).allowsHitTesting(false)
-                        }
+        VStack(spacing: 4) {
+            DiaryTextInput(text: Binding(get: { draft.layer.text }, set: { draft.setText($0) }), isFocused: $keyboard,
+                           maximumHeight: 120, onHeightChange: { inputHeight = $0 })
+                .frame(height: inputHeight)
+                .overlay(alignment: .topLeading) {
+                    if draft.layer.text.isEmpty {
+                        Text("写点什么…").foregroundStyle(.secondary).allowsHitTesting(false)
                     }
-                    .allowsHitTesting(!showFontGallery)
-                    .simultaneousGesture(TapGesture().onEnded {
-                        guard !showFontGallery else { return }
-                        keyboard = true
-                        tab = .content
-                    })
-                    .accessibilityAction {
-                        guard !showFontGallery else { return }
-                        keyboard = true
-                        tab = .content
-                    }
-                    .accessibilityIdentifier("diary.text.input")
-                if !draft.layer.text.isEmpty {
-                    Button { finishTextInput(); draft.setText(""); keyboard = true } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }.accessibilityLabel("清空文字")
                 }
-            }.padding(.horizontal, 14).padding(.vertical, 12)
-                .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 22))
-            Button { finishTextInput(); save() } label: {
-                Group {
-                    if saving { ProgressView() }
-                    else { Image(systemName: "checkmark").font(.title3) }
-                }.frame(width: 44, height: 44).background(DiaryLibraryStyle.surface, in: Circle())
-            }.disabled(draft.layer.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || session.busy)
-                .accessibilityLabel("完成文字编辑")
+                .simultaneousGesture(TapGesture().onEnded { keyboard = true })
+                .accessibilityAction { keyboard = true }
+                .accessibilityIdentifier("diary.text.input")
+                .padding(.horizontal, 14).padding(.top, 12)
+            HStack(spacing: 8) {
+                Button { finishTextInput() } label: {
+                    Image(systemName: "keyboard.chevron.compact.down").frame(width: 44, height: 44)
+                }.accessibilityLabel("收起键盘")
+                Spacer()
+                if !draft.layer.text.isEmpty {
+                    Text("\(draft.layer.text.count) 字").font(.caption).foregroundStyle(.secondary)
+                }
+                Button { finishTextInput(); expandedInput = true } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 44, height: 44)
+                }.accessibilityLabel("展开长文编辑")
+            }.padding(.horizontal, 4)
         }
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22))
     }
 
     private var templates: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Text("文字模板").font(.headline)
+                    Text("文字样式").font(.headline)
                     Spacer()
                     Button("保存我的样式") { finishTextInput(); styleName = "我的标题 \(savedStyles.count + 1)"; namingStyle = true }.font(.caption)
                 }
@@ -354,7 +411,7 @@ struct DiaryTextEditorSheet: View {
             }
             ScrollView {
                 VStack(spacing: 16) {
-                    switch tab == .color ? .text : (tab == .layout ? .layout : styleSection) {
+                    switch (tab == .color || tab == .size) ? .text : (tab == .layout ? .layout : styleSection) {
                     case .text:
                         colorButton(.text)
                         HStack { Text("字号 \(Int(draft.layer.fontSize))"); Slider(value: $draft.layer.fontSize, in: 12...300, step: 1) }
@@ -377,9 +434,9 @@ struct DiaryTextEditorSheet: View {
                         Picker("对齐", selection: Binding(get: { draft.layer.textAlignment ?? .center }, set: { draft.layer.textAlignment = $0 })) {
                             ForEach(DiaryTextAlignment.allCases, id: \.self) { Text($0.title).tag($0) }
                         }.pickerStyle(.segmented)
-                        HStack { Text("行距"); Slider(value: Binding(get: { draft.layer.textLineHeight ?? 1.2 }, set: { draft.layer.textLineHeight = $0 }), in: 0.8...3, step: 0.1) }
-                        HStack { Text("字距"); Slider(value: Binding(get: { draft.layer.textLetterSpacing ?? 0 }, set: { draft.layer.textLetterSpacing = $0 }), in: -2...20, step: 0.5) }
-                        HStack { Text("文字宽度"); Slider(value: $draft.layer.size.width, in: 120...max(121, session.content.referenceSize.width * 0.9)) }
+                        HStack { Text("行距 \(String(format: "%.1f", draft.layer.textLineHeight ?? 1.2))"); Slider(value: Binding(get: { draft.layer.textLineHeight ?? 1.2 }, set: { draft.layer.textLineHeight = $0 }), in: 0.8...3, step: 0.1) }
+                        HStack { Text("字距 \(String(format: "%.1f", draft.layer.textLetterSpacing ?? 0))"); Slider(value: Binding(get: { draft.layer.textLetterSpacing ?? 0 }, set: { draft.layer.textLetterSpacing = $0 }), in: -2...20, step: 0.5) }
+                        HStack { Text("宽度 \(Int(draft.layer.size.width))"); Slider(value: $draft.layer.size.width, in: 120...max(121, session.content.referenceSize.width * 0.9)) }
                         Toggle("逐字竖排", isOn: appearanceBinding(\.vertical))
                     }
                 }.font(.subheadline).padding(.horizontal, 4).padding(.bottom, 12)
@@ -475,15 +532,54 @@ struct DiaryTextEditorSheet: View {
     }
 }
 
+/// Change this one flag to compare both implementations using the same draft and toolbar.
+private enum DiaryTextInputImplementation {
+    case uiKit, nativeSwiftUI
+    static let current: Self = .nativeSwiftUI // Switch to .nativeSwiftUI for the native multiline TextField.
+}
+
+private struct DiaryComparisonTextInput: View {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+    @FocusState private var nativeFocused: Bool
+
+    var body: some View {
+        Group {
+            switch DiaryTextInputImplementation.current {
+            case .uiKit:
+                DiaryTextInput(text: $text, isFocused: $isFocused,
+                               placeholder: "写点什么…", maximumHeight: 72)
+            case .nativeSwiftUI:
+                TextField("写点什么…", text: $text, axis: .vertical)
+                    .font(.body)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...3)
+                    .focused($nativeFocused)
+                    .onAppear { nativeFocused = isFocused }
+                    .onChange(of: isFocused) { _, value in
+                        if nativeFocused != value { nativeFocused = value }
+                    }
+                    .onChange(of: nativeFocused) { _, value in
+                        if isFocused != value { isFocused = value }
+                    }
+            }
+        }
+    }
+}
+
 /// Own the text-input lifecycle instead of replacing a SwiftUI TextField's entire layer binding.
 /// Style changes never write back into an active IME composition.
 struct DiaryTextInput: UIViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
+    var placeholder: String = ""
+    var maximumHeight: CGFloat = 76
+    var onHeightChange: ((CGFloat) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+        let view = DiaryFocusTextView()
+        view.shouldRequestFocus = { [weak coordinator = context.coordinator] in coordinator?.parent.isFocused == true }
         view.delegate = context.coordinator
         view.backgroundColor = .clear
         view.font = .preferredFont(forTextStyle: .body)
@@ -494,15 +590,19 @@ struct DiaryTextInput: UIViewRepresentable {
         view.accessibilityIdentifier = "diary.text.input"
         view.accessibilityLabel = "文字内容"
         view.text = text
+        view.updatePlaceholder(placeholder)
         context.coordinator.synchronizedText = text
         return view
     }
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.parent = self
+        context.coordinator.measure(view)
+        (view as? DiaryFocusTextView)?.updatePlaceholder(placeholder)
         // Only intentional external edits (such as Clear) replace text. A redraw while typing does not.
         if text != context.coordinator.synchronizedText, view.markedTextRange == nil {
             view.text = text
             context.coordinator.synchronizedText = text
+            (view as? DiaryFocusTextView)?.updatePlaceholder(placeholder)
         }
         if isFocused && !view.isFirstResponder && view.window != nil {
             view.becomeFirstResponder()
@@ -514,13 +614,30 @@ struct DiaryTextInput: UIViewRepresentable {
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
         let width = proposal.width ?? 200
         let height = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
-        return CGSize(width: width, height: min(76, max(24, height)))
+        context.coordinator.publishHeight(min(maximumHeight, max(28, height)))
+        return CGSize(width: width, height: min(maximumHeight, max(28, height)))
     }
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: DiaryTextInput
         var synchronizedText = ""
+        private var reportedHeight: CGFloat = 0
+        func publishHeight(_ height: CGFloat) {
+            guard abs(height - reportedHeight) > 0.5 else { return }
+            reportedHeight = height
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.reportedHeight == height else { return }
+                self.parent.onHeightChange?(height)
+            }
+        }
+        func measure(_ view: UITextView) {
+            guard view.bounds.width > 0 else { return }
+            let height = view.sizeThatFits(CGSize(width: view.bounds.width, height: .greatestFiniteMagnitude)).height
+            publishHeight(min(parent.maximumHeight, max(28, ceil(height))))
+        }
         init(_ parent: DiaryTextInput) { self.parent = parent }
         func textViewDidChange(_ textView: UITextView) {
+            measure(textView)
+            (textView as? DiaryFocusTextView)?.updatePlaceholder(parent.placeholder)
             synchronizedText = textView.text ?? ""
             if parent.text != synchronizedText { parent.text = synchronizedText }
         }
@@ -542,5 +659,78 @@ struct DiaryTextInput: UIViewRepresentable {
             textViewDidChange(textView)
             if parent.isFocused { parent.isFocused = false }
         }
+    }
+}
+
+private final class DiaryFocusTextView: UITextView {
+    private let placeholderLabel = UILabel()
+
+    override init(frame: CGRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        placeholderLabel.textColor = .placeholderText
+        placeholderLabel.numberOfLines = 0
+        placeholderLabel.isUserInteractionEnabled = false
+        placeholderLabel.isAccessibilityElement = false
+        addSubview(placeholderLabel)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func updatePlaceholder(_ value: String) {
+        placeholderLabel.text = value
+        placeholderLabel.font = font
+        placeholderLabel.adjustsFontForContentSizeCategory = true
+        placeholderLabel.isHidden = !text.isEmpty || value.isEmpty
+        setNeedsLayout()
+    }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let inset = textContainerInset
+        let x = inset.left + textContainer.lineFragmentPadding
+        let width = max(0, bounds.width - x - inset.right - textContainer.lineFragmentPadding)
+        let size = placeholderLabel.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        placeholderLabel.frame = CGRect(x: x, y: inset.top, width: width, height: size.height)
+    }
+
+    var shouldRequestFocus: (() -> Bool)?
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window != nil, self.shouldRequestFocus?() == true else { return }
+            self.becomeFirstResponder()
+        }
+    }
+}
+
+private struct DiaryExpandedTextInput: View {
+    @Binding var text: String
+    let onClose: () -> Void
+    @FocusState private var focused: Bool
+    @State private var confirmClear = false
+    var body: some View {
+        VStack(spacing: 8) {
+            TextEditor(text: $text)
+                .font(.body).focused($focused)
+                .scrollContentBackground(.hidden)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityLabel("完整文字内容")
+            HStack {
+                Button { confirmClear = true } label: {
+                    Image(systemName: "trash").frame(width: 44, height: 44)
+                }.disabled(text.isEmpty).accessibilityLabel("清空文字")
+                Spacer()
+                Text("\(text.count) 字").font(.caption).foregroundStyle(.secondary)
+                Button { focused = false; onClose() } label: {
+                    Label("收起", systemImage: "chevron.down").frame(minHeight: 44)
+                }
+            }.padding(.horizontal, 12)
+                .background(.thinMaterial, in: Capsule())
+        }.padding(16).padding(.top, 12)
+            .background(Color(uiColor: .systemGroupedBackground))
+            .tint(DiaryLibraryStyle.accent)
+            .task { focused = true }
+            .confirmationDialog("清空这段文字？", isPresented: $confirmClear, titleVisibility: .visible) {
+                Button("清空文字", role: .destructive) { text = "" }
+            }
     }
 }

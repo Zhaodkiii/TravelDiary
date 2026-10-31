@@ -18,6 +18,7 @@ struct DiaryEditorScreen: View {
     @State private var showDrawing = false
     @State private var drawingEditor: DiaryEditorSession?
     @State private var showStickers = false
+    @State private var selectionViewportRect: CGRect?
 
     private var toolOpen: Bool { activeTool != nil || showStickers }
 
@@ -115,7 +116,11 @@ struct DiaryEditorScreen: View {
                                              (geometry.size.height - margin * 2 - verticalPadding) / size.height))
                     DiaryZoomableCanvas(contentSize: CGSize(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2), sessionID: session.id, inkMode: session.inkMode, minimumScale: 0.65, toolViewport: toolOpen) {
                       ZStack(alignment: .topLeading) {
-                        DiaryCanvasView(session: session, compactViewport: toolOpen, onEdit: {
+                        DiaryCanvasView(session: session, compactViewport: toolOpen, onSelectionViewportRect: { rect in
+                            DispatchQueue.main.async {
+                                if selectionViewportRect != rect { selectionViewportRect = rect }
+                            }
+                        }, onEdit: {
                             guard let layer = session.selected else { return }
                             if layer.kind == .object { openSelectedObject() }
                             else if layer.kind == .text { openText() }
@@ -128,6 +133,15 @@ struct DiaryEditorScreen: View {
                       .frame(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)
                     }
                     .clipped()
+                    .overlay(alignment: .topLeading) {
+                        if !toolOpen, session.selected != nil, let rect = selectionViewportRect {
+                            let width = min(geometry.size.width - 24, CGFloat(session.contextActions.count) * 56 + 32)
+                            controls(selectionToolsOnly: true)
+                                .frame(width: max(1, width), height: 64)
+                                .position(x: min(max(rect.midX, width / 2 + 12), geometry.size.width - width / 2 - 12),
+                                          y: min(max(44, rect.minY - 52), max(44, geometry.size.height - 150)))
+                        }
+                    }
                 }
                 .background(DiaryLibraryStyle.background)
                 if showStickers {
@@ -147,12 +161,12 @@ struct DiaryEditorScreen: View {
                 }
             }
             .overlay(alignment: .bottom) {
-                if !toolOpen { controls }
+                if !toolOpen { controls() }
             }
             .ignoresSafeArea(.container, edges: toolOpen ? .bottom : .top)
     }
 
-    private var controls: some View {
+    private func controls(selectionToolsOnly: Bool = false) -> some View {
         DiaryContextToolbar(session: session,
             onBackground: { session.finishInteraction(); session.select(nil); activeTool = .background },
             onPhotos: { session.finishInteraction(); showPhotos = true },
@@ -161,7 +175,8 @@ struct DiaryEditorScreen: View {
             onLayers: { session.finishInteraction(); session.layerMode = true; activeTool = .layers },
             onStickers: { session.finishInteraction(); showStickers = true },
             onOpenObject: openSelectedObject,
-            onTransform: { session.beginFreeTransform(); if session.transformDraft != nil { activeTool = .transform } })
+            onTransform: { session.beginFreeTransform(); if session.transformDraft != nil { activeTool = .transform } },
+            selectionToolsOnly: selectionToolsOnly)
     }
     private func importCapturedPhotos() {
         guard !capturedPhotos.isEmpty else { return }

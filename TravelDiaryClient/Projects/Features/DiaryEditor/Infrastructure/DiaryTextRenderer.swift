@@ -39,7 +39,8 @@ extension DiaryPageRenderer {
         let measured = (displayedText(layer) as NSString).boundingRect(
             with: CGSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: textStyle(layer), context: nil)
-        let height = max(ceil(measured.height), layer.fontSize * 1.2) + padding.top + padding.bottom
+        let naturalHeight = max(ceil(measured.height), layer.fontSize * 1.2) + padding.top + padding.bottom
+        let height = max(naturalHeight, CGFloat(layer.textAppearance?.minimumCardHeight ?? 0))
         let effect: CGFloat = max(CGFloat(layer.textAppearance?.paper?.kind == DiaryTextPaper.Kind.none ? 0 : (layer.textAppearance?.paper?.shadow ?? 0)) * 24, max(CGFloat(layer.textAppearance?.shadowRadius ?? 0) * 2,
                                   layer.fontSize * CGFloat(layer.textAppearance?.strokeWidth ?? 0) / 100))
         return CGRect(x: -effect, y: -effect, width: layer.size.width + effect * 2, height: height + effect * 2)
@@ -53,7 +54,16 @@ extension DiaryPageRenderer {
         context.saveGState()
         defer { context.restoreGState() }
         drawTextDecoration(style, rect: rect, in: context)
-        (displayedText(layer) as NSString).draw(with: rect.inset(by: textInsets(layer)),
+        var textRect = rect.inset(by: textInsets(layer))
+        if style.minimumCardHeight != nil {
+            let measured = (displayedText(layer) as NSString).boundingRect(
+                with: CGSize(width: max(1, textRect.width), height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: textStyle(layer), context: nil)
+            let height = max(ceil(measured.height), layer.fontSize * 1.2)
+            textRect.origin.y += max(0, (textRect.height - height) / 2)
+            textRect.size.height = height
+        }
+        (displayedText(layer) as NSString).draw(with: textRect,
             options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: textStyle(layer), context: nil)
     }
 
