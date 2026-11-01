@@ -13,7 +13,6 @@ final class SupportBackend {
     let files: SupportFileAPI
     let oss: SupportOSSAPI
     let ocr: SupportOCRAPI
-    let aiConfig: SupportAIConfigAPI
     let deactivation: SupportDeactivationAPI
     let accountIdentity: SupportAccountIdentityAPI
 
@@ -57,7 +56,6 @@ final class SupportBackend {
         self.files = SupportFileAPI(configuration: configuration)
         self.oss = SupportOSSAPI(configuration: configuration)
         self.ocr = SupportOCRAPI(configuration: configuration)
-        self.aiConfig = SupportAIConfigAPI(configuration: configuration)
         self.deactivation = SupportDeactivationAPI(configuration: configuration)
         self.accountIdentity = SupportAccountIdentityAPI(configuration: configuration)
         logger.info(SupportNetworkingStrings.Backend.initialized, module: .network)
@@ -81,7 +79,6 @@ final class SupportBackend {
         self.files = SupportFileAPI(configuration: configuration)
         self.oss = SupportOSSAPI(configuration: configuration)
         self.ocr = SupportOCRAPI(configuration: configuration)
-        self.aiConfig = SupportAIConfigAPI(configuration: configuration)
         self.deactivation = SupportDeactivationAPI(configuration: configuration)
         self.accountIdentity = SupportAccountIdentityAPI(configuration: configuration)
         logger.info(SupportNetworkingStrings.Backend.initialized, module: .network)

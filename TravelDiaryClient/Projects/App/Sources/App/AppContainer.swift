@@ -17,7 +17,6 @@ struct AppCoordinatorDependencies {
     let lifecycle: AppLifecycleCoordinator
     let authRepository: AuthRepository
     let accountManagementRepository: AccountManagementRepository
-    let makeAISettingsViewModel: (Int64) -> AISettingsViewModel
     let makeLoginViewModel: () -> LoginViewModel
     let makeAccountManagementViewModel: () -> AccountManagementViewModel
     let notificationStore: NotificationStore
@@ -29,9 +28,6 @@ final class AppContainer {
     let backend: SupportBackend
     let coreDataStack: CoreDataStack
     let contentDependencies: AppContentDependencies
-    let aiSettingsRepository: any AISettingsRepository
-    let aiRuntimeStore: AIRuntimeConfigStore
-    let aiConfigCenter: AIConfigCenter
     let ossConfigurationStore: SupportOSSConfigurationStore
     let fileCacheManager: FileCacheManager
     let fileTransferService: FileTransferService
@@ -39,16 +35,12 @@ final class AppContainer {
     let accountSessionRuntime: AccountSessionRuntime
 
     private let logger: ConsoleLogger
-    private var aiSettingsViewModelCache = AccountScopedCache<AISettingsViewModel>()
 
     private init(
         environment: SupportAppEnvironment,
         backend: SupportBackend,
         coreDataStack: CoreDataStack,
         contentDependencies: AppContentDependencies,
-        aiSettingsRepository: any AISettingsRepository,
-        aiRuntimeStore: AIRuntimeConfigStore,
-        aiConfigCenter: AIConfigCenter,
         ossConfigurationStore: SupportOSSConfigurationStore,
         fileCacheManager: FileCacheManager,
         fileTransferService: FileTransferService,
@@ -69,9 +61,6 @@ final class AppContainer {
         BillingStore.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
         self.coreDataStack = coreDataStack
         self.contentDependencies = contentDependencies
-        self.aiSettingsRepository = aiSettingsRepository
-        self.aiRuntimeStore = aiRuntimeStore
-        self.aiConfigCenter = aiConfigCenter
         self.ossConfigurationStore = ossConfigurationStore
         self.fileCacheManager = fileCacheManager
         self.fileTransferService = fileTransferService
@@ -99,13 +88,6 @@ final class AppContainer {
         )
         let auth = AuthAssembly.makeCore(backend: backend, logger: logger)
         let notification = NotificationAssembly.makeCore(logger: logger)
-        let ai = AIAssembly.makeCore(
-            coreDataStack: coreDataStack,
-            backend: backend,
-            sessionSnapshotStore: auth.sessionSnapshotStore,
-            logger: logger
-        )
-
         let tokenProvider = backend.tokenProvider()
         let sessionStore = AppSessionStore(
             snapshotStore: auth.sessionSnapshotStore,
@@ -116,7 +98,6 @@ final class AppContainer {
 
         logger.info("AppAssembly 装配启动协调器", module: .app)
         let bootstrapper = AppBootstrapper(
-            aiConfigCenter: ai.aiConfigCenter,
             ossConfigurationStore: infrastructure.ossConfigurationStore,
             ossAPI: backend.oss,
             logger: logger
@@ -126,9 +107,7 @@ final class AppContainer {
         let accountSessionRuntime = AccountSessionRuntime(
             routeCoordinator: notification.routeCoordinator,
             storageRegistry: infrastructure.storageRegistry,
-            aiConfigCenter: ai.aiConfigCenter,
-            logger: logger,
-            clearSessionScopedViewModels: { container.clearSessionCaches() }
+            logger: logger
         )
         let lifecycle = AppLifecycleCoordinator(
             sessionStore: sessionStore,
@@ -155,9 +134,6 @@ final class AppContainer {
                     lifecycle: lifecycle,
                     authRepository: auth.authRepository,
                     accountManagementRepository: auth.accountManagementRepository,
-                    makeAISettingsViewModel: { ownerAccountID in
-                        container.makeAISettingsViewModel(ownerAccountID: ownerAccountID)
-                    },
                     makeLoginViewModel: {
                         LoginViewModel(
                             signInWithAppleUseCase: SignInWithAppleUseCase(authRepository: auth.authRepository),
@@ -203,9 +179,6 @@ final class AppContainer {
                     notificationStore: notification.notificationStore
                 )
             ),
-            aiSettingsRepository: ai.aiSettingsRepository,
-            aiRuntimeStore: ai.aiRuntimeConfigStore,
-            aiConfigCenter: ai.aiConfigCenter,
             ossConfigurationStore: infrastructure.ossConfigurationStore,
             fileCacheManager: infrastructure.fileCacheManager,
             fileTransferService: infrastructure.fileTransferService,
@@ -217,27 +190,4 @@ final class AppContainer {
         return container
     }
 
-    func clearSessionCaches() {
-        aiSettingsViewModelCache.clear()
-        logger.info("账号级 ViewModel 与主 Tab 依赖缓存已清理", module: .auth)
-    }
-
-    func makeAISettingsViewModel(ownerAccountID: Int64) -> AISettingsViewModel {
-        if aiSettingsViewModelCache.matches(ownerAccountID),
-           let cached = aiSettingsViewModelCache.value {
-            return cached
-        }
-        let created = AISettingsViewModel(
-            loadUseCase: LoadAISettingsUseCase(repository: aiSettingsRepository),
-            saveUseCase: SaveAISettingsUseCase(repository: aiSettingsRepository),
-            localModelService: LocalModelService(),
-            ownerAccountIDForLoad: ownerAccountID,
-            coreDataStack: coreDataStack,
-            aiConfigAPI: backend.aiConfig,
-            aiConfigCenter: aiConfigCenter,
-            promptTooling: DefaultAISettingsPromptTooling(ocrOrchestrator: ocrOrchestrator)
-        )
-        aiSettingsViewModelCache.store(created, ownerAccountID: ownerAccountID)
-        return created
-    }
 }

@@ -12,12 +12,6 @@ struct AuthFeatureDependencies {
     let makeLoginViewModel: @MainActor () -> LoginViewModel
 }
 
-struct AIConfigFacade {
-    let configCenter: AIConfigCenter
-    let runtimeStore: AIRuntimeStore
-    let makeSettingsViewModel: @MainActor (_ ownerAccountID: Int64) -> AISettingsViewModel
-}
-
 struct NotificationFeatureDependencies {
     let notificationStore: NotificationStore
     let notificationClient: any NotificationClient
@@ -31,16 +25,6 @@ struct AuthAssemblyFacade: FeatureAssembly {
 
     func makeFacade() -> AuthFeatureDependencies {
         dependencies
-    }
-}
-
-@MainActor
-struct AIAssemblyFacade: FeatureAssembly {
-    let scope: DependencyScope = .accountScoped
-    let facade: AIConfigFacade
-
-    func makeFacade() -> AIConfigFacade {
-        facade
     }
 }
 

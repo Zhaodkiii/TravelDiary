@@ -2,7 +2,6 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var accountManagementViewModel: AccountManagementViewModel
-    @ObservedObject var aiSettingsViewModel: AISettingsViewModel
     let session: UserSession
     let storageService: StorageService
     let onAccountEntryTap: () -> Void

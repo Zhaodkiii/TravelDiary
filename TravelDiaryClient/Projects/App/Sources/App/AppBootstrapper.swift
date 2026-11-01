@@ -1,7 +1,6 @@
 import Foundation
 
 actor AppBootstrapper {
-    private let aiConfigCenter: AIConfigCenter
     private let ossConfigurationStore: SupportOSSConfigurationStore
     private let ossAPI: SupportOSSAPI
     private let logger: Logger
@@ -9,12 +8,10 @@ actor AppBootstrapper {
     private var bootstrappedAccountIDs = Set<Int64>()
 
     init(
-        aiConfigCenter: AIConfigCenter,
         ossConfigurationStore: SupportOSSConfigurationStore,
         ossAPI: SupportOSSAPI,
         logger: Logger
     ) {
-        self.aiConfigCenter = aiConfigCenter
         self.ossConfigurationStore = ossConfigurationStore
         self.ossAPI = ossAPI
         self.logger = logger
@@ -44,13 +41,6 @@ actor AppBootstrapper {
             return
         }
 
-        logger.debug("会话流程：准备步骤 AI prewarm 开始 accountID=\(accountID)", module: .aiConfig)
-        await aiConfigCenter.prewarm(ownerAccountID: accountID)
-
-        // 启动阶段暂不拉取远程 AI 配置（AIConfig.Bootstrap）。
-        // logger.debug("会话流程：准备步骤 remote AI config 开始 accountID=\(accountID)", module: .aiConfig)
-        // await aiConfigCenter.refreshRemoteConfig(ownerAccountID: accountID)
-
         logger.debug(
             "会话流程：准备步骤 OSS STS prefetch 开始 accountID=\(accountID) phase=bootstrapIfNeeded",
             module: .oss
@@ -62,6 +52,6 @@ actor AppBootstrapper {
         )
 
         bootstrappedAccountIDs.insert(accountID)
-        logger.info("Account \(accountID) bootstrap complete", module: .aiConfig)
+        logger.info("Account \(accountID) bootstrap complete", module: .lifecycle)
     }
 }

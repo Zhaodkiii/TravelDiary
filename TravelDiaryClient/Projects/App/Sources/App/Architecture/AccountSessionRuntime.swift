@@ -12,9 +12,7 @@ final class AccountSessionRuntime {
 
     private let routeCoordinator: RouteCoordinator
     private let storageRegistry: StorageRegistry
-    private let aiConfigCenter: AIConfigCenter
     private let logger: Logger
-    private let clearSessionScopedViewModels: () -> Void
     private var mode: Mode?
     private(set) var isAccountSwitchInProgress = false
     private var suspendedAccountIDForSwitch: Int64?
@@ -22,15 +20,11 @@ final class AccountSessionRuntime {
     init(
         routeCoordinator: RouteCoordinator,
         storageRegistry: StorageRegistry,
-        aiConfigCenter: AIConfigCenter,
-        logger: Logger,
-        clearSessionScopedViewModels: @escaping () -> Void
+        logger: Logger
     ) {
         self.routeCoordinator = routeCoordinator
         self.storageRegistry = storageRegistry
-        self.aiConfigCenter = aiConfigCenter
         self.logger = logger
-        self.clearSessionScopedViewModels = clearSessionScopedViewModels
     }
 
     /// 同设备账号切换登录前：标记切换中（Support 无实时 Chat 同步可暂停）。
@@ -69,9 +63,7 @@ final class AccountSessionRuntime {
         let previousAccountID = currentAccountID
         logger.info("账号运行时：开始切换到账号 accountID=\(accountID)", module: .auth)
         await storageRegistry.prepareForAccountSwitch(from: previousAccountID, to: accountID)
-        await aiConfigCenter.resetRuntimeCaches()
         routeCoordinator.resetRouteGraphForAccountRuntime(reason: "accountSwitch(\(accountID))")
-        clearSessionScopedViewModels()
         mode = .account(accountID)
         logger.info("账号运行时：账号切换完成 accountID=\(accountID)", module: .auth)
     }
@@ -85,9 +77,7 @@ final class AccountSessionRuntime {
         let previousAccountID = currentAccountID
         logger.info("账号运行时：切换到访客/未登录运行时", module: .auth)
         await storageRegistry.prepareForSignOut(from: previousAccountID)
-        await aiConfigCenter.resetRuntimeCaches()
         routeCoordinator.resetRouteGraphForAccountRuntime(reason: "signOut")
-        clearSessionScopedViewModels()
         mode = .guest
     }
 

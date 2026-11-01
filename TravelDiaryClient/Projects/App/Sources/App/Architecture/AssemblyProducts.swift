@@ -20,15 +20,6 @@ struct AuthAssemblyProduct {
     let deviceRegistrationCoordinator: DeviceRegistrationCoordinator
 }
 
-/// AI 领域装配产物。
-struct AIAssemblyProduct {
-    let aiSettingsRepository: any AISettingsRepository
-    let aiRuntimeStore: AIRuntimeStore
-    let aiRuntimeConfigStore: AIRuntimeConfigStore
-    let aiConfigCenter: AIConfigCenter
-    let localModelService: LocalModelService
-}
-
 /// 通知领域装配产物。
 struct NotificationAssemblyProduct {
     let routeCoordinator: RouteCoordinator
@@ -137,40 +128,6 @@ enum AuthAssembly {
             accountManagementRepository: DefaultAccountManagementRepository(backend: backend),
             signOutUseCase: SignOutUseCase(authRepository: authRepository),
             deviceRegistrationCoordinator: DeviceRegistrationCoordinator(backend: backend, logger: logger)
-        )
-    }
-}
-
-enum AIAssembly {
-    static func makeCore(
-        coreDataStack: CoreDataStack,
-        backend: SupportBackend,
-        sessionSnapshotStore: SessionSnapshotStore,
-        logger: Logger
-    ) -> AIAssemblyProduct {
-        logger.info("AIAssembly 装配 AI 配置与运行时", module: .app)
-        let aiRuntimeStore = AIRuntimeStore()
-        let aiRuntimeConfigStore = AIRuntimeConfigStore()
-        let aiSettingsRepository = DefaultAISettingsRepository(
-            coreDataStack: coreDataStack,
-            snapshotStore: sessionSnapshotStore,
-            logger: logger
-        )
-        let remoteConfigProvider = BackendAIRemoteConfigProvider(api: backend.aiConfig)
-        let aiConfigCenter = AIConfigCenter(
-            repository: aiSettingsRepository,
-            remoteProvider: remoteConfigProvider,
-            runtimeStore: aiRuntimeStore,
-            runtimeConfigStore: aiRuntimeConfigStore,
-            sessionSnapshotStore: sessionSnapshotStore,
-            logger: logger
-        )
-        return AIAssemblyProduct(
-            aiSettingsRepository: aiSettingsRepository,
-            aiRuntimeStore: aiRuntimeStore,
-            aiRuntimeConfigStore: aiRuntimeConfigStore,
-            aiConfigCenter: aiConfigCenter,
-            localModelService: LocalModelService()
         )
     }
 }

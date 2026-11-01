@@ -110,15 +110,6 @@ struct StorageRegistry {
                 reset: { _ in }
             ),
             Entry(
-                id: "userDefaults.aiPreferences",
-                backend: .userDefaults,
-                scope: .accountScoped,
-                accountIsolated: true,
-                owner: "DefaultAISettingsRepository",
-                resetPolicy: "Keyed by owner account ID; preserved across sign-out for the same account.",
-                reset: { _ in }
-            ),
-            Entry(
                 id: "keychain.deviceAndTokens",
                 backend: .keychain,
                 scope: .appSingleton,

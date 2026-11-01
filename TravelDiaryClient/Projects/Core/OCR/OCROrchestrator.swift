@@ -92,7 +92,7 @@ actor OCROrchestrator {
 
         logger.info(
             "OCR完成 selectedEngine=\(best.selectedEngine) engines=\(outputs.map { $0.engine }.joined(separator: ",")) textLen=\(best.text.count)",
-            module: .aiConfig
+            module: .ocr
         )
 
         return best

@@ -45,10 +45,6 @@ enum SupportNetworkOperationBusinessPurpose: Sendable {
     // MARK: - 精确匹配（与 API 中 `name:` 一致）
 
     private static let exactOperationDescriptions: [String: String] = [
-        "AIConfig.Bootstrap": "拉取 AI 多场景模型与网关配置（bootstrap，含客户端版本与平台）",
-        "AIConfig.TrialStatus": "查询 AI 试用资格与剩余额度",
-        "AIConfig.TrialApply": "申请或确认 AI 试用",
-        "AIConfig.ProviderConnectionTest": "探测上游模型供应商连通性（连接测试）",
         "OSS.STS": "获取阿里云 OSS 临时访问凭证（直传/下载）",
         "OCR.STS": "获取 OCR 服务临时凭证或配置",
         "Auth.CurrentSession": "鉴权：拉取当前账号最新会话（含 Pro 状态）",

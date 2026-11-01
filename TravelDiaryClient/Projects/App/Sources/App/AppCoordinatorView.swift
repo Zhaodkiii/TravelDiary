@@ -87,7 +87,6 @@ struct SupportMainCoordinatorView: View {
     let dependencies: AppCoordinatorDependencies
 
     @StateObject private var accountViewModel: AccountManagementViewModel
-    @StateObject private var aiSettingsViewModel: AISettingsViewModel
     @StateObject private var upgradeLoginViewModel: LoginViewModel
     @State private var showsDeviceAccountUpgradeSheet = false
     @State private var showsCreateDiaryBookForm = false
@@ -105,7 +104,6 @@ struct SupportMainCoordinatorView: View {
         self.session = session
         self.dependencies = dependencies
         _accountViewModel = StateObject(wrappedValue: dependencies.makeAccountManagementViewModel())
-        _aiSettingsViewModel = StateObject(wrappedValue: dependencies.makeAISettingsViewModel(session.accountID))
         _upgradeLoginViewModel = StateObject(wrappedValue: dependencies.makeLoginViewModel())
     }
 
@@ -184,7 +182,7 @@ struct SupportMainCoordinatorView: View {
             }.badge(customizations.unread)
             Tab(L10n.tr("tab.settings", fallback: "设置"), systemImage: "gearshape", value: SupportRootTab.settings) {
                 SettingsView(accountManagementViewModel: accountViewModel,
-                    aiSettingsViewModel: aiSettingsViewModel, session: session,
+                    session: session,
                     storageService: dependencies.storageService, onAccountEntryTap: handleAccountEntryTap)
                     .id(session.accountID)
             }

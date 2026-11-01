@@ -27,7 +27,6 @@ enum LogModule: String, Sendable, CaseIterable {
     case device = "DEVICE"
     case cache = "CACHE"
     case oss = "OSS"
-    case aiConfig = "AI_CONFIG"
     case database = "DATABASE"
     case notification = "NOTIFICATION"
     case lifecycle = "LIFECYCLE"
@@ -36,7 +35,6 @@ enum LogModule: String, Sendable, CaseIterable {
     case routing = "ROUTING"
     case camera = "CAMERA"
     case diaryEditor = "DIARY_EDITOR"
-    case aiChat = "AI_CHAT"
     case general = "GENERAL"
 }
 
