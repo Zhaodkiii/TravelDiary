@@ -23,8 +23,8 @@ extension DiaryPageRenderer {
         let style = layer.textAppearance ?? DiaryTextAppearance()
         if let paper = style.paper {
             guard paper.kind != .none else { return .zero }
-            return UIEdgeInsets(top: layer.fontSize * paper.verticalPadding, left: layer.fontSize * paper.horizontalPadding,
-                                bottom: layer.fontSize * paper.verticalPadding, right: layer.fontSize * paper.horizontalPadding)
+            return UIEdgeInsets(top: layer.fontSize * (paper.verticalPadding + (paper.kind.assetName == nil ? 0 : 0.55)), left: layer.fontSize * (paper.horizontalPadding + (paper.kind.assetName == nil ? 0 : 0.55)),
+                                bottom: layer.fontSize * (paper.verticalPadding + (paper.kind.assetName == nil ? 0 : 0.55)), right: layer.fontSize * (paper.horizontalPadding + (paper.kind.assetName == nil ? 0 : 0.55)))
         }
         let padding: CGFloat = style.template != .plain ? max(20, layer.fontSize * (style.template == .burst ? 1.2 : 0.7))
             : (style.background == nil ? 0 : layer.fontSize * 0.35)
@@ -47,6 +47,10 @@ extension DiaryPageRenderer {
     }
 
     static func drawText(_ layer: DiaryLayer, in context: CGContext, revealedCharacters: Int? = nil) {
+        // SwiftUI Canvas supplies a CGContext without making it UIKit's current context.
+        // UIImage/attributed-string drawing must explicitly target the supplied canvas.
+        UIGraphicsPushContext(context)
+        defer { UIGraphicsPopContext() }
         let style = layer.textAppearance ?? DiaryTextAppearance()
         let bounds = textBounds(layer)
         let effect = -bounds.minX
@@ -130,6 +134,18 @@ extension DiaryPageRenderer {
     private static func drawPaper(_ paper: DiaryTextPaper, rect: CGRect, in context: CGContext) {
         guard paper.kind != .none else { return }
         let r = rect.insetBy(dx: 2, dy: 2)
+        if let name = paper.kind.assetName, let source = UIImage(named: name) {
+            // Nine slices preserve corner illustrations and torn edges while extending the paper interior.
+            let ratio = min(1, min(r.height / source.size.height, r.width / source.size.width))
+            let size = CGSize(width: max(1, source.size.width * ratio), height: max(1, source.size.height * ratio))
+            let format = UIGraphicsImageRendererFormat(); format.scale = 1
+            let scaled = UIGraphicsImageRenderer(size: size, format: format).image { _ in source.draw(in: CGRect(origin: .zero, size: size)) }
+            let image = scaled.resizableImage(withCapInsets: UIEdgeInsets(top: size.height * 0.38, left: size.width * 0.25, bottom: size.height * 0.38, right: size.width * 0.25), resizingMode: .stretch)
+            context.saveGState()
+            context.setShadow(offset: CGSize(width: 0, height: paper.shadow * 5), blur: paper.shadow * 12, color: UIColor.black.withAlphaComponent(paper.shadow * 0.3).cgColor)
+            image.draw(in: r)
+            context.restoreGState(); return
+        }
         let path: UIBezierPath
         switch paper.kind {
         case .torn:

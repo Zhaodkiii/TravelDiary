@@ -1,0 +1,408 @@
+import UIKit
+import CryptoKit
+
+/// All knowledge of the native document, renderer, fonts and transactions stays on this side.
+@MainActor final class DiaryEditorAIBridge: DiaryAIEditorBridge {
+    private weak var session: DiaryEditorSession?
+    var allowedBatchIDs: Set<UUID>?
+    var excludedRenderIDs: Set<UUID> = []
+    private var base: DiaryDocument?
+    private var context: DiaryAIContext?
+    private var request: DiaryAIRequest?
+    private var images: [UUID: UIImage] = [:]
+    private var candidate: DiaryDocument?
+    private var draft: DiaryAIDraft?
+    private var createdIDs: [String: UUID] = [:]
+    private var imageCache: [String: Data] = [:]
+    private var newImages: [UUID: Data] = [:]
+    init(_ session: DiaryEditorSession) { self.session = session }
+    var storageKey: String {
+        guard let session else { return "closed" }
+        return Self.hash(Data("\(session.store.ownerID)/\(session.document.bookID?.uuidString ?? "single")/\(session.document.id)/\(session.contentID)".utf8))
+    }
+    var canvasSize: CGSize? { session?.content.referenceSize }
+    var scopeTitle: String { session?.isRoot == true ? "当前页 / 跨页" : "当前对象画布" }
+    var selectionAvailable: Bool { session?.selectedID != nil }
+    var gesturesActive: Bool { session?.aiViewportInteracting == true }
+    var objectChoices: [DiaryAIObject] {
+        guard let session else { return [] }
+        return describe(session.document, contentID: session.contentID, selected: nil)
+    }
+    static func hash(_ bytes: Data) -> String { SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() }
+    static func digest(_ document: DiaryDocument) throws -> String {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        var bytes = Data("\(document.id)|\(document.bookID?.uuidString ?? "")|\(document.rootContentID)|\(document.title)".utf8)
+        for key in document.assets.keys.sorted(by: { $0.uuidString < $1.uuidString }) { bytes += try encoder.encode(document.assets[key]!) }
+        for key in document.objects.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            bytes += try encoder.encode(document.objects[key]!); bytes += document.objects[key]!.drawing
+        }
+        return hash(bytes)
+    }
+    private func descendants(_ layer: DiaryLayer, in document: DiaryDocument, visited: Set<UUID> = []) -> [DiaryLayer] {
+        guard let id = layer.contentID, !visited.contains(id), let content = document.objects[id] else { return [layer] }
+        return [layer] + content.layers.flatMap { descendants($0, in: document, visited: visited.union([id])) }
+    }
+    private func primary(_ layer: DiaryLayer, in document: DiaryDocument) -> DiaryLayer {
+        guard let id = layer.contentID, let content = document.objects[id],
+              content.drawing.isEmpty, content.background == nil,
+              let first = content.layers.first(where: { $0.id == content.primaryLayerID }) ?? content.layers.first,
+              content.layers.allSatisfy({ $0.id == first.id || $0.frameTargetID == first.id }) else { return layer }
+        return primary(first, in: document)
+    }
+    private func role(_ layer: DiaryLayer, in document: DiaryDocument) -> String {
+        let nodes = descendants(layer, in: document)
+        if nodes.contains(where: { $0.semanticKind == .background || $0.isLibraryBackground == true }) { return "background" }
+        let leaf = primary(layer, in: document)
+        if leaf.kind == .text { return "text" }
+        if nodes.contains(where: { $0.category == .textImage || $0.semanticKind == .text }) { return "textImage" }
+        if leaf.isContentPhoto { return "photo" }
+        if leaf.isPhotoFrame { return "frame" }
+        if leaf.contentID != nil { return "group" }
+        return "decoration"
+    }
+    private func describe(_ document: DiaryDocument, contentID: UUID, selected: UUID?) -> [DiaryAIObject] {
+        let siblings = document.objects[contentID]?.layers ?? []
+        return siblings.enumerated().map { index, layer in
+            let nodes = descendants(layer, in: document)
+            let leaf = primary(layer, in: document)
+            let bounds = DiaryPageRenderer.bounds(layer, document: document, siblings: siblings).applying(DiaryPageRenderer.matrix(layer, siblings: siblings))
+            let locked = nodes.contains { $0.locked || $0.semanticKind == .branding || $0.contentID.flatMap { document.objects[$0] }.map { !$0.drawing.isEmpty } == true }
+            return DiaryAIObject(id: layer.id, shortID: "L\(index + 1)", name: layer.name, role: role(layer, in: document),
+                center: CGPoint(x: bounds.midX, y: bounds.midY), bounds: bounds, scale: layer.transform.scale,
+                angle: layer.transform.rotationDegrees, locked: locked, visible: layer.visible,
+                editable: !locked && layer.visible && (selected == nil || selected == layer.id) && (allowedBatchIDs == nil || allowedBatchIDs!.contains(layer.id)) && !layer.isPhotoFrame,
+                text: leaf.kind == .text ? leaf.text : nil, assetIDs: Array(Set(nodes.compactMap(\.assetID))).sorted { $0.uuidString < $1.uuidString })
+        }
+    }
+    func capture(_ request: DiaryAIRequest) async throws -> DiaryAIContext {
+        guard let session else { throw DiaryAIError.invalid("编辑器已关闭") }
+        session.finishInteraction()
+        guard !request.selectedOnly || session.selectedID != nil else { throw DiaryAIError.invalid("请先在画布中选中要调整的对象，或改为当前页范围。") }
+        let source = session.document
+        let objects = describe(source, contentID: session.contentID, selected: request.selectedOnly ? session.selectedID : nil)
+        guard objects.count <= 100 else { throw DiaryAIError.invalid("本页超过 100 个对象，请在对象内部编辑。") }
+        let catalog = DiaryFontCatalog.shared; catalog.prepare()
+        let refs = catalog.entries.filter { $0.category != "cloud" }.map { DiaryFontReference(id: $0.id, version: $0.version) }
+        await catalog.prewarm(refs)
+        try Task.checkCancellation()
+        let fonts = refs.filter { catalog.available($0) }.map { DiaryAIFont(id: $0.id, version: $0.version, name: catalog.entry($0)?.displayName ?? $0.id) }
+        let size = source.objects[session.contentID]!.referenceSize
+        let value = DiaryAIContext(id: UUID(), digest: try Self.digest(source), contentID: session.contentID, size: size,
+            spineX: abs(size.width / size.height - 4370.0 / 3130.0) < 0.001 ? size.width / 2 : nil, objects: objects, fonts: fonts)
+        base = source; context = value; self.request = request; images = session.images
+        candidate = nil; draft = nil; newImages = [:]; createdIDs = [:]
+        let required = Set(objects.filter(\.visible).flatMap(\.assetIDs))
+        for id in required {
+            try Task.checkCancellation()
+            guard let asset = source.assets[id] else { throw DiaryAIError.invalid("图片资源引用缺失") }
+            let needed = min(1800, max(asset.pixelSize.width, asset.pixelSize.height))
+            let current = images[id].map { max($0.size.width * $0.scale, $0.size.height * $0.scale) } ?? 0
+            if current + 1 < needed { images[id] = try await session.store.loadAILayoutImage(asset, documentID: source.id) }
+        }
+        guard required.allSatisfy({ images[$0] != nil }) else { throw DiaryAIError.invalid("本页图片尚未加载完整") }
+        return value
+    }
+    private func waitForViewport() async throws {
+        while gesturesActive { try await Task.sleep(for: .milliseconds(80)) }
+        try Task.checkCancellation()
+    }
+    private func jpeg(size: CGSize, draw: (CGContext) -> Void) throws -> Data {
+        guard size.width > 0, size.height > 0 else { throw DiaryAIError.invalid("预览尺寸无效") }
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { output in
+            UIColor.systemBackground.setFill(); output.fill(CGRect(origin: .zero, size: size)); draw(output.cgContext)
+        }
+        guard let bytes = image.jpegData(compressionQuality: 0.82) else { throw DiaryAIError.invalid("预览编码失败") }
+        return bytes
+    }
+    private func pageImage(_ document: DiaryDocument) async throws -> Data {
+        guard let context else { throw DiaryAIError.invalid("页面快照缺失") }
+        await Task.yield(); try await waitForViewport()
+        let key = try Self.digest(document) + "-1536-v1-" + excludedRenderIDs.map(\.uuidString).sorted().joined()
+        if let cached = imageCache[key] { return cached }
+        let ratio = min(1, 1536 / max(context.size.width, context.size.height))
+        let bytes = try jpeg(size: CGSize(width: context.size.width * ratio, height: context.size.height * ratio)) { output in
+            output.scaleBy(x: ratio, y: ratio)
+            var visibleDocument = document
+            visibleDocument.objects[context.contentID]?.layers.removeAll { excludedRenderIDs.contains($0.id) || $0.frameTargetID.map(excludedRenderIDs.contains) == true }
+            DiaryPageRenderer.draw(visibleDocument, contentID: context.contentID, images: images, in: output, cacheObjects: false)
+        }
+        if imageCache.count > 16 { imageCache.removeAll() }
+        imageCache[key] = bytes
+        return bytes
+    }
+    func originalPreview() async throws -> Data {
+        guard let base else { throw DiaryAIError.invalid("快照缺失") }
+        return try await pageImage(base)
+    }
+    func initialImages(_ request: DiaryAIRequest) async throws -> [DiaryAIImage] {
+        guard let base, let context else { throw DiaryAIError.invalid("页面快照缺失") }
+        if request.action == .writing && !request.understandsPhotos && request.selectedOnly { return [] }
+        var result = [DiaryAIImage(id: "page", caption: "当前画布，坐标与图层数据对应", data: try await pageImage(base))]
+        if request.action == .relayout || (request.action == .writing && request.understandsPhotos) {
+            let photos = context.objects.filter { $0.visible && $0.role == "photo" }
+            for start in stride(from: 0, to: min(photos.count, 18), by: 9) {
+                try await waitForViewport(); await Task.yield()
+                let group = Array(photos[start..<min(start + 9, photos.count)])
+                let bytes = try jpeg(size: CGSize(width: 1200, height: ceil(Double(group.count) / 3) * 440)) { output in
+                    for (i, object) in group.enumerated() {
+                        let rect = CGRect(x: (i % 3) * 400 + 8, y: (i / 3) * 440 + 8, width: 384, height: 384)
+                        if let outer = base.layer(object.id), let asset = primary(outer, in: base).assetID, let image = images[asset] {
+                            let ratio = min(rect.width / image.size.width, rect.height / image.size.height)
+                            image.draw(in: CGRect(x: rect.midX - image.size.width * ratio / 2, y: rect.midY - image.size.height * ratio / 2, width: image.size.width * ratio, height: image.size.height * ratio))
+                        }
+                        ("\(object.shortID) · \(object.id)" as NSString).draw(at: CGPoint(x: rect.minX, y: rect.maxY + 8), withAttributes: [.font: UIFont.systemFont(ofSize: 13), .foregroundColor: UIColor.label])
+                    }
+                }
+                result.append(.init(id: "board-\(start / 9)", caption: "完整照片；编号在图像外，留白非素材。其余对象按需 inspect_assets。", data: bytes))
+            }
+        }
+        return result
+    }
+    func inspect(_ arguments: DiaryAIToolArguments) async throws -> [DiaryAIImage] {
+        guard let base, let context, let ids = arguments.objectIDs, (1...DiaryAIWorkspace.maximumBatchLayers).contains(ids.count),
+              ids.allSatisfy({ id in context.objects.contains { $0.id == id && $0.visible } }) else { throw DiaryAIError.invalid("补图对象不在本次范围内") }
+        var result: [DiaryAIImage] = []
+        for id in ids {
+            await Task.yield(); try await waitForViewport()
+            guard let layer = base.layer(id), let object = context.objects.first(where: { $0.id == id }) else { continue }
+            let bytes: Data
+            if arguments.view == "fullAsset", let asset = primary(layer, in: base).assetID, let image = images[asset] {
+                let ratio = min(1, 1024 / max(image.size.width, image.size.height))
+                let size = CGSize(width: image.size.width * ratio, height: image.size.height * ratio)
+                bytes = try jpeg(size: size) { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+            } else {
+                let rect = object.bounds.insetBy(dx: -24, dy: -24).intersection(CGRect(origin: .zero, size: context.size))
+                guard !rect.isNull, rect.width > 0, rect.height > 0 else { throw DiaryAIError.invalid("对象不在可见画布内") }
+                let ratio = min(1, 1024 / max(rect.width, rect.height))
+                bytes = try jpeg(size: CGSize(width: rect.width * ratio, height: rect.height * ratio)) { output in
+                    output.scaleBy(x: ratio, y: ratio); output.translateBy(x: -rect.minX, y: -rect.minY)
+                    if arguments.view == "currentCrop" {
+                        DiaryPageRenderer.drawHitLayer(layer, document: base, siblings: base.objects[context.contentID]!.layers, images: images, in: output)
+                    } else { DiaryPageRenderer.draw(base, contentID: context.contentID, images: images, in: output) }
+                }
+            }
+            result.append(.init(id: id.uuidString, caption: "\(arguments.view ?? "canvasRegion") \(object.shortID); canvas bounds \(object.bounds)", data: bytes))
+        }
+        return result
+    }
+
+    private func require(_ condition: Bool, _ message: String) throws { if !condition { throw DiaryAIError.invalid(message) } }
+    private func color(_ hex: String) throws -> DiaryColor {
+        let clean = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        guard clean.count == 6, let value = UInt32(clean, radix: 16) else { throw DiaryAIError.invalid("颜色必须是六位十六进制") }
+        return DiaryColor(red: Double((value >> 16) & 255) / 255, green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255)
+    }
+    private func configureText(_ operation: DiaryAIOperation, layer: inout DiaryLayer, context: DiaryAIContext) throws {
+        if let text = operation.text { try require(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && text.count <= 1000, "文字为空或过长"); layer.text = text }
+        if let fontID = operation.fontID {
+            guard let font = context.fonts.first(where: { $0.id == fontID }) else { throw DiaryAIError.invalid("字体不在可用目录中") }
+            layer.font = DiaryFontReference(id: font.id, version: font.version)
+        }
+        if let size = operation.fontSize { try require(size.isFinite && (12...300).contains(size), "字号超出范围"); layer.fontSize = size }
+        if let width = operation.width { try require(width.isFinite && (40...context.size.width).contains(width), "文本宽度无效"); layer.size.width = width }
+        if let hex = operation.color { layer.textColor = try color(hex) }
+        if let paper = operation.paper {
+            guard let kind = DiaryTextPaper.Kind(rawValue: paper) else { throw DiaryAIError.invalid("文字纸张样式无效") }
+            var appearance = layer.textAppearance ?? DiaryTextAppearance(); appearance.paper = DiaryTextPaper(kind: kind); layer.textAppearance = appearance
+        }
+        try require(DiaryFontCatalog.shared.warning(layer.font, text: layer.text) == nil, "所选字体不可用或缺少字符，请选择另一字体")
+        layer.size.height = DiaryPageRenderer.textBounds(layer).height
+    }
+    private func place(_ operation: DiaryAIOperation, id: UUID, document: inout DiaryDocument, context: DiaryAIContext) throws {
+        guard var layer = document.layer(id) else { throw DiaryAIError.invalid("对象不存在") }
+        let siblings = document.objects[context.contentID]!.layers
+        try require(layer.transform.warp == nil, "透视变形对象需保留原位置，请先在编辑器内调整")
+        if let scale = operation.scale { try require(scale.isFinite && (0.05...20).contains(scale), "缩放无效"); layer.transform.scale = scale }
+        if let angle = operation.angle { try require(angle.isFinite && abs(angle) <= 180, "角度无效"); layer.transform.rotationDegrees = angle }
+        if operation.type == "setPlacement", let width = operation.width {
+            let bounds = DiaryPageRenderer.bounds(layer, document: document, siblings: siblings).applying(layer.transform.matrix)
+            try require(width.isFinite && width > 0 && bounds.width > 0, "最终可见宽度无效")
+            layer.transform.scale *= width / bounds.width
+            try require(layer.transform.scale.isFinite && (0.05...20).contains(layer.transform.scale), "最终缩放超出范围")
+        }
+        if let center = operation.center {
+            try require(center.x.isFinite && center.y.isFinite, "位置无效")
+            let bounds = DiaryPageRenderer.bounds(layer, document: document, siblings: siblings).applying(layer.transform.matrix)
+            layer.transform.position.x += center.x - bounds.midX
+            layer.transform.position.y += center.y - bounds.midY
+        }
+        document.update(id) { $0 = layer }
+    }
+    func propose(_ plan: DiaryAIPlan) async throws -> DiaryAIDraft {
+        guard let base, let context, let request, let session else { throw DiaryAIError.invalid("快照已失效") }
+        try require(plan.schemaVersion == 1 && plan.contextID == context.id && plan.baseDigest == context.digest, "计划基础版本不匹配")
+        try require(plan.operations.count <= 200 && Set(plan.operations.map(\.operationID)).count == plan.operations.count, "操作重复或过多")
+        var copy = base, changed = Set<UUID>(), warnings: [String] = []
+        var localNew = newImages
+        var nextOrder: [UUID]?
+        // Geometry-changing operations precede placement, independent of tool arrival order.
+        let operations = plan.operations.filter { $0.type != "setPlacement" } + plan.operations.filter { $0.type == "setPlacement" }
+        for operation in operations {
+            try Task.checkCancellation()
+            try validateFields(operation)
+            let descriptor = context.objects.first { $0.id == operation.objectID }
+            let outer = operation.objectID.flatMap { copy.layer($0) }
+            if operation.type != "createText" && operation.type != "placeExistingMaterial" && operation.type != "setZOrder" {
+                try require(descriptor?.editable == true && outer != nil, "对象不在可编辑范围或包含锁定内容")
+                if descriptor?.role == "background" { try require(!request.preservesBackground && request.action == .relayout, "不允许改变背景") }
+            }
+            switch operation.type {
+            case "setPlacement":
+                try require(request.canMove || descriptor?.role == "text", "当前功能不能移动照片或装饰")
+                try require(operation.center != nil && operation.scale != nil && operation.angle != nil, "位置参数不完整")
+                try place(operation, id: outer!.id, document: &copy, context: context); changed.insert(outer!.id)
+                if request.action == .beautify, let descriptor {
+                    let factor = request.strength == "保守" ? 1.0 : 2.0
+                    try require(abs(operation.center!.x - descriptor.center.x) <= context.size.width * 0.05 * factor && abs(operation.center!.y - descriptor.center.y) <= context.size.height * 0.05 * factor && abs(operation.scale! / descriptor.scale - 1) <= 0.1 * factor && abs(operation.angle! - descriptor.angle) <= 3 * factor, "美化超出轻量调整范围，请使用重新排版")
+                }
+            case "setZOrder":
+                try require(allowedBatchIDs == nil, "分批模式请保持既有层级，不提交全页顺序")
+                try require(request.canMove && !request.selectedOnly, "当前功能或范围不允许改变层级")
+                nextOrder = operation.order
+                try require(nextOrder != nil, "缺少完整层级顺序")
+            case "createText":
+                try require(request.canCreateText && operation.text != nil && operation.center != nil, "未授权新增文字或文字参数不完整")
+                guard let key = operation.clientObjectKey, !key.isEmpty else { throw DiaryAIError.invalid("新增文字缺少稳定 key") }
+                let id = createdIDs[key] ?? UUID(); createdIDs[key] = id
+                try require(copy.layer(id) == nil, "重复新增文字 key")
+                var layer = DiaryLayer(id: id, name: "AI 文字", kind: .text, transform: DiaryTransform(position: .zero, pivot: .zero), size: CGSize(width: operation.width ?? 500, height: 80), textAppearance: DiaryNewTextDefaults.appearance, font: DiaryNewTextDefaults.font)
+                try configureText(operation, layer: &layer, context: context)
+                if !request.writesLocation && !request.location.isEmpty { try require(!layer.text.contains(request.location), "地点未授权写入文字") }
+                copy.appendObject(containing: layer, to: context.contentID)
+                try place(operation, id: id, document: &copy, context: context); changed.insert(id)
+            case "updateText":
+                try require(descriptor?.role == "text", "目标不是可编辑文字")
+                try require(operation.text == nil || request.canRewrite, "未授权修改原文")
+                var leaf = primary(outer!, in: copy)
+                try require(context.objects.filter { item in base.layer(item.id).map { descendants($0, in: base).contains { $0.id == leaf.id } } ?? false }.count == 1, "文字内容被多个对象共享，请先独立编辑")
+                try configureText(operation, layer: &leaf, context: context)
+                copy.update(leaf.id) { $0 = leaf }
+                if let owner = outer!.contentID { copy.objects[owner]?.referenceSize = leaf.size }
+                copy.update(outer!.id) { $0.size = leaf.size }
+                try place(operation, id: outer!.id, document: &copy, context: context); changed.insert(outer!.id)
+            case "setPhotoCrop":
+                try require(request.allowsCrop && request.action != .beautify && request.action != .writing && descriptor?.role == "photo", "未授权照片取景")
+                var leaf = primary(outer!, in: copy)
+                try require(leaf.photoSlot == nil && leaf.photoCrop == nil && leaf.photoPlacement == nil, "此照片使用特殊槽位或已烘焙裁剪，请保留现有取景")
+                guard let zoom = operation.cropZoom, let x = operation.cropX, let y = operation.cropY else { throw DiaryAIError.invalid("取景参数不完整") }
+                try require([zoom, x, y].allSatisfy(\.isFinite) && (1...3).contains(zoom) && abs(x) <= leaf.size.width && abs(y) <= leaf.size.height, "取景参数超出安全范围")
+                leaf.crop = DiaryCrop(zoom: zoom, offset: CGPoint(x: x, y: y)); leaf.photoFill = nil
+                copy.update(leaf.id) { $0 = leaf }; changed.insert(outer!.id)
+            case "setFrameStyle":
+                try require(request.allowsFrames && request.action != .beautify && request.action != .writing && descriptor?.role == "photo", "未授权相框调整")
+                guard let style = operation.frameStyle, let index = DiaryPhotoFrameCatalog.names.firstIndex(of: style) else { throw DiaryAIError.invalid("相框样式不存在") }
+                let leaf = primary(outer!, in: copy)
+                guard let owner = copy.objects.values.first(where: { $0.layers.contains { $0.id == leaf.id } })?.id else { throw DiaryAIError.invalid("相框所属对象丢失") }
+                let item = DiaryPhotoFrameCatalog.generated(style: index, ratio: leaf.size.width / leaf.size.height)
+                try await waitForViewport()
+                guard let image = item.image, let bytes = image.pngData() else { throw DiaryAIError.invalid("相框生成失败") }
+                let (asset, decoded) = try await session.store.importImage(bytes, documentID: base.id)
+                images[asset.id] = decoded; localNew[asset.id] = bytes; copy.assets[asset.id] = asset
+                copy.objects[owner]?.layers.removeAll { $0.frameTargetID == leaf.id }
+                copy.objects[owner]?.layers.append(DiaryEditorSession.photoFrame(item, asset: asset, photo: leaf, manual: true))
+                changed.insert(outer!.id)
+            case "setDecorationVisibility":
+                try require(request.allowsDecorations && request.action != .writing && request.action != .beautify && ["decoration", "frame"].contains(descriptor?.role ?? ""), "只能调整已授权装饰的可见性")
+                guard let visible = operation.visible else { throw DiaryAIError.invalid("缺少可见性") }
+                copy.update(outer!.id) { $0.visible = visible }; changed.insert(outer!.id)
+            case "placeExistingMaterial":
+                try require(request.allowsMaterials && request.action == .relayout, "未授权使用已有素材")
+                guard let id = operation.materialID, request.materialIDs.contains(id), let source = base.layer(id), role(source, in: base) == "decoration", let asset = primary(source, in: base).assetID,
+                      let resource = base.assets[asset], let key = operation.clientObjectKey else { throw DiaryAIError.invalid("素材不在明确授权列表中") }
+                let newID = createdIDs[key] ?? UUID(); createdIDs[key] = newID
+                try require(copy.layer(newID) == nil, "重复素材 key")
+                let layer = DiaryLayer(id: newID, name: source.name, kind: .sticker, transform: DiaryTransform(position: .zero, pivot: .zero), size: resource.pixelSize, assetID: asset)
+                copy.appendObject(containing: layer, to: context.contentID)
+                try place(operation, id: newID, document: &copy, context: context); changed.insert(newID)
+            default: throw DiaryAIError.invalid("不支持的操作 \(operation.type)")
+            }
+        }
+        if let order = nextOrder {
+            let layers = copy.objects[context.contentID]!.layers
+            try require(order.count == layers.count && Set(order) == Set(layers.map(\.id)), "层级顺序必须包含全部对象且不能重复")
+            for (index, layer) in base.objects[context.contentID]!.layers.enumerated() {
+                if context.objects.first(where: { $0.id == layer.id })?.locked == true || role(layer, in: base) == "background" {
+                    try require(order[index] == layer.id, "锁定对象和背景层级不能改变")
+                }
+            }
+            for frame in layers where frame.frameTargetID != nil {
+                if let target = frame.frameTargetID, let photoIndex = order.firstIndex(of: target), let frameIndex = order.firstIndex(of: frame.id) {
+                    try require(frameIndex == photoIndex + 1, "照片和绑定相框必须保持相邻顺序")
+                }
+            }
+            copy.objects[context.contentID]?.layers = order.compactMap { id in layers.first { $0.id == id } }
+        }
+        let siblings = copy.objects[context.contentID]!.layers
+        for id in changed {
+            guard let layer = copy.layer(id), layer.visible else { continue }
+            let bounds = DiaryPageRenderer.bounds(layer, document: copy, siblings: siblings).applying(DiaryPageRenderer.matrix(layer, siblings: siblings))
+            let originalRole = role(layer, in: copy)
+            if originalRole != "background" {
+                try require(bounds.width.isFinite && bounds.height.isFinite && CGRect(origin: .zero, size: context.size).insetBy(dx: -1, dy: -1).contains(bounds), "对象 \(id) 越界，请缩小或移动到画布内")
+                if let spine = context.spineX, ["text", "photo"].contains(originalRole) {
+                    try require(!(bounds.minX < spine + 24 && bounds.maxX > spine - 24), "文字或照片跨越书脊安全区，请分配到左右页")
+                }
+            }
+            if originalRole == "text" {
+                for upper in siblings.dropFirst((siblings.firstIndex(where: { $0.id == id }) ?? 0) + 1) where upper.visible {
+                    let other = DiaryPageRenderer.bounds(upper, document: copy, siblings: siblings).applying(DiaryPageRenderer.matrix(upper, siblings: siblings))
+                    let overlap = bounds.intersection(other)
+                    if !overlap.isNull && ["photo", "text"].contains(role(upper, in: copy)) {
+                        try require(overlap.width * overlap.height / max(1, bounds.width * bounds.height) < 0.25, "文字被上方照片或文字遮挡，请移动位置或调整层级")
+                    }
+                    if bounds.intersects(other) { warnings.append("文字与上方图层相交，请检查预览：\(layer.name)"); break }
+                }
+            }
+        }
+        for operation in plan.operations where operation.type == "setPlacement" {
+            guard let id = operation.objectID, let expected = operation.center,
+                  let layer = copy.layer(id) else { continue }
+            let actual = DiaryPageRenderer.bounds(layer, document: copy, siblings: siblings).applying(DiaryPageRenderer.matrix(layer, siblings: siblings))
+            try require(abs(actual.midX - expected.x) < 1 && abs(actual.midY - expected.y) < 1, "图层 \(context.objects.first { $0.id == id }?.shortID ?? id.uuidString) 实际中心 (\(actual.midX),\(actual.midY)) 与请求 (\(expected.x),\(expected.y)) 不一致；保留暂存操作，请修订该图层")
+        }
+        try Task.checkCancellation()
+        _ = try DiaryDocumentStore.validate(copy)
+        let preview = try await pageImage(copy)
+        let revision = (draft?.revision ?? 0) + 1
+        let archive = try JSONEncoder().encode(Archive(base: base, candidate: copy, drawings: base.objects.mapValues(\.drawing), request: request, context: context, revision: revision, summary: plan.summary, warnings: warnings, newImages: localNew))
+        let value = DiaryAIDraft(id: draft?.id ?? UUID(), revision: revision, preview: preview, archive: archive, summary: plan.summary, warnings: warnings)
+        candidate = copy; draft = value; newImages = localNew
+        return value
+    }
+    private func validateFields(_ operation: DiaryAIOperation) throws {
+        let common: Set<String> = ["operationID", "type", "objectID"]
+        let fields: [String: Set<String>] = [
+            "setPlacement": ["center", "scale", "angle", "width"], "setZOrder": ["order"],
+            "createText": ["clientObjectKey", "text", "fontID", "fontSize", "width", "color", "paper", "center", "scale", "angle"],
+            "updateText": ["text", "fontID", "fontSize", "width", "color", "paper", "center", "scale", "angle"],
+            "setPhotoCrop": ["cropZoom", "cropX", "cropY"], "setFrameStyle": ["frameStyle"],
+            "setDecorationVisibility": ["visible"], "placeExistingMaterial": ["clientObjectKey", "materialID", "center", "scale", "angle"]]
+        guard let allowed = fields[operation.type] else { throw DiaryAIError.invalid("未知操作") }
+        let values = try JSONSerialization.jsonObject(with: JSONEncoder().encode(operation)) as! [String: Any]
+        try require(Set(values.keys).isSubset(of: common.union(allowed)), "操作包含无关参数")
+    }
+    private struct Archive: Codable {
+        var base: DiaryDocument; var candidate: DiaryDocument; var drawings: [UUID: Data]
+        var request: DiaryAIRequest; var context: DiaryAIContext; var revision: Int
+        var summary: String; var warnings: [String]; var newImages: [UUID: Data]
+    }
+    func restore(_ archive: Data) throws -> DiaryAIDraft {
+        guard let session else { throw DiaryAIError.invalid("编辑器已关闭") }
+        var value = try JSONDecoder().decode(Archive.self, from: archive)
+        for (id, data) in value.drawings { value.base.objects[id]?.drawing = data; value.candidate.objects[id]?.drawing = data }
+        let restoredDigest = try Self.digest(value.base)
+        try require(value.context.contentID == session.contentID && value.base.id == session.document.id && restoredDigest == value.context.digest, "草稿数据不匹配")
+        _ = try DiaryDocumentStore.validate(value.candidate)
+        base = value.base; candidate = value.candidate; context = value.context; request = value.request; images = session.images; newImages = value.newImages
+        for (id, bytes) in newImages { images[id] = UIImage(data: bytes) }
+        let result = DiaryAIDraft(id: UUID(), revision: value.revision, preview: Data(), archive: archive, summary: value.summary, warnings: value.warnings)
+        draft = result; return result
+    }
+    func apply() throws {
+        guard let session, let base, let candidate else { throw DiaryAIError.invalid("草稿不存在或已应用") }
+        try require(session.applyAIDraft(candidate, expected: base, additionalImages: images), "画布内容已改变，请重新生成草稿；原作品未被覆盖")
+        self.candidate = nil; draft = nil
+    }
+    func discard() { candidate = nil; draft = nil; newImages = [:] }
+}

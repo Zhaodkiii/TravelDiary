@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Run background unit tests; --live explicitly enables one paid Book 8 image generation."""
+import argparse
+import shutil
+import subprocess
+from pathlib import Path
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--live', action='store_true', help='Generate one real Seedream background and save to simulator Photos')
+parser.add_argument('--device', default='728BF62D-9E5A-4B7C-ADB4-97534D0A3BBF')
+parser.add_argument('--output', type=Path, default=Path('/tmp/TravelDiaryBackgroundTestResults'))
+args = parser.parse_args()
+repo = Path(__file__).resolve().parents[1]
+marker = Path('/tmp/traveldiary-background-live-enabled')
+artifacts = Path('/tmp/TravelDiaryBook8Validation/background')
+args.output.mkdir(parents=True, exist_ok=True)
+keep = {'DiaryAIBackgroundTests.swift', 'DiaryAIWorkspaceTests.swift', 'DiaryCanvasAITests.swift',
+        'DiaryAIBook8IntegrationTests.swift', 'DiaryAIBook8TextIntegrationTests.swift',
+        'DiaryPhotoCompositeTests.swift', 'DiaryPhotoFrameTests.swift', 'DiaryReadingAnimationTests.swift'}
+excluded = [p.name for p in (repo / 'TravelDiaryTests').rglob('*.swift') if p.name not in keep]
+command = ['xcodebuild', '-project', 'TravelDiary.xcodeproj', '-scheme', 'TravelDiary',
+           '-destination', 'platform=iOS Simulator,id=' + args.device, '-parallel-testing-enabled', 'NO',
+           'test', 'CODE_SIGNING_ALLOWED=NO', 'EXCLUDED_SOURCE_FILE_NAMES=' + ' '.join(excluded),
+           '-only-testing:TravelDiaryTests/DiaryAIBackgroundTests', '-only-testing:TravelDiaryTests/DiaryAIWorkspaceTests',
+           'OTHER_LDFLAGS=$(inherited) -framework CoreTelephony -framework SystemConfiguration -lresolv']
+if args.live:
+    if not any(artifacts.parent.glob('已排版项目-*')):
+        parser.error('Run scripts/test_diary_ai_book8.py first to create the arranged Book 8 fixture')
+    subprocess.run(['xcrun', 'simctl', 'privacy', args.device, 'grant', 'photos-add', 'cn.zhaodk.TravelDiary'], check=True)
+    marker.touch()
+else:
+    marker.unlink(missing_ok=True)
+try:
+    with (args.output / 'xcodebuild.log').open('w') as log:
+        result = subprocess.run(command, cwd=repo, stdout=log, stderr=subprocess.STDOUT)
+finally:
+    marker.unlink(missing_ok=True)
+    if args.live and artifacts.exists():
+        for item in artifacts.iterdir():
+            if item.is_file():
+                shutil.copy2(item, args.output / item.name)
+raise SystemExit(result.returncode)

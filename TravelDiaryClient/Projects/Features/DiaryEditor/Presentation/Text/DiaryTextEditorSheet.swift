@@ -275,6 +275,18 @@ struct DiaryTextEditorSheet: View {
                     Spacer()
                     Button("保存我的样式") { finishTextInput(); styleName = "我的标题 \(savedStyles.count + 1)"; namingStyle = true }.font(.caption)
                 }
+                Text("交付纸卡 · 随文字自适应").font(.subheadline.weight(.semibold))
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 130))], spacing: 10) {
+                    ForEach(DiaryTextPaper.Kind.allCases.filter { $0.assetName != nil }) { kind in
+                        Button { finishTextInput(); draft.selectPaper(kind) } label: {
+                            VStack(spacing: 6) {
+                                Image(uiImage: DiaryPageRenderer.textPreview(paperPreview(kind))).resizable().scaledToFit().frame(height: 76)
+                                Text(kind.title).font(.caption)
+                            }.frame(maxWidth: .infinity).padding(8)
+                                .background(appearance.paper?.kind == kind ? Color.accentColor.opacity(0.12) : Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+                        }.buttonStyle(.plain)
+                    }
+                }
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
                     ForEach(DiaryTextTemplate.allCases) { template in
                         Button { draft.apply(template) } label: {
@@ -317,6 +329,15 @@ struct DiaryTextEditorSheet: View {
                 }
             }.padding(.vertical, 4)
         }
+    }
+
+    private func paperPreview(_ kind: DiaryTextPaper.Kind) -> DiaryLayer {
+        var layer = draft.layer
+        layer.text = "把日子收藏"; layer.fontSize = 42; layer.size.width = 420
+        var style = layer.textAppearance ?? DiaryTextAppearance()
+        style.paper = DiaryTextPaper(kind: kind); style.template = .plain
+        layer.textAppearance = style
+        return layer
     }
 
     private func templatePreview(_ template: DiaryTextTemplate) -> DiaryLayer {

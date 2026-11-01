@@ -74,10 +74,15 @@ nonisolated enum DiaryTitleLayout: String, Codable, CaseIterable, Identifiable, 
 
 nonisolated struct DiaryTextPaper: Codable, Equatable, Sendable {
     enum Kind: String, Codable, CaseIterable, Identifiable, Sendable {
-        case none, torn, tape, note
+        case none, torn, tape, note, warmHeart, blueTape, pinkWish, titleParchment, lavenderStrip, pinkHeart, botanicalLine, coralUnderline, kraftStrip
+        var assetName: String? { [.none, .torn, .tape, .note].contains(self) ? nil : "TextPaper-" + rawValue }
         var id: Self { self }
         var title: String {
-            switch self { case .none: "无背景"; case .torn: "手撕纸"; case .tape: "胶带"; case .note: "便签" }
+            switch self { case .none: "无背景"; case .torn: "手撕纸"; case .tape: "胶带"; case .note: "便签"
+            case .warmHeart: "暖纸爱心"; case .blueTape: "蓝胶带纸卡"; case .pinkWish: "粉色心愿"
+            case .titleParchment: "层叠标题纸"; case .lavenderStrip: "薰衣草纸条"; case .pinkHeart: "粉纸手绘心"
+            case .botanicalLine: "植物划线卡"; case .coralUnderline: "珊瑚划线纸"; case .kraftStrip: "牛皮纸条"
+            }
         }
     }
     var kind: Kind = .none
@@ -109,4 +114,10 @@ nonisolated struct DiarySavedTextStyle: Codable, Identifiable, Sendable {
     var letterSpacing: Double?
     var fontSize: CGFloat
     var width: CGFloat
+}
+
+/// Defaults apply only when creating text, never while decoding existing documents.
+nonisolated enum DiaryNewTextDefaults {
+    static let font = DiaryFontReference(id: "calligraphy.ma-shan-zheng", version: "2.003")
+    static var appearance: DiaryTextAppearance { DiaryTextAppearance(paper: DiaryTextPaper(kind: .blueTape)) }
 }

@@ -39,6 +39,7 @@ struct DiaryEditorScreen: View {
                         .padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
             }
+            .fullScreenCover(isPresented: $session.aiWorkspacePresented) { DiaryAIWorkspaceView(workspace: session.aiWorkspace) }
             .fullScreenCover(item: $childEditor) { child in
                 AnyView(DiaryEditorScreen(session: child))
             }
@@ -82,8 +83,10 @@ struct DiaryEditorScreen: View {
                 }
             }
             .onChange(of: scenePhase) { _, phase in
+                if phase == .background { session.canvasAI.suspend() }
                 if phase != .active { session.finishInteraction(); Task { try? await session.save() } }
             }
+            .onDisappear { session.canvasAI.suspend() }
             .interactiveDismissDisabled()
         }
     }

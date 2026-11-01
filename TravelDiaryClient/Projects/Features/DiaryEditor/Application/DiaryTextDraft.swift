@@ -28,7 +28,7 @@ final class DiaryTextDraft: ObservableObject {
         self.layer = layer ?? DiaryLayer(name: "文字", kind: .text,
             transform: DiaryTransform(position: placement?.center ?? session.scopeCenter, pivot: CGPoint(x: width / 2, y: height / 2)),
             size: CGSize(width: width, height: height), fontSize: min(90, max(12, width * 0.09)),
-            textAppearance: DiaryTextAppearance())
+            textAppearance: DiaryNewTextDefaults.appearance, font: DiaryNewTextDefaults.font)
         preview.selectedID = session.selectedID
         refresh()
     }

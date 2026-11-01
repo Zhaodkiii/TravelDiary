@@ -23,6 +23,9 @@ struct DiaryContextToolbar: View {
     @State private var showPhotoPicker = false
     @State private var importing = false
     @State private var addExpanded = false
+    @State private var aiExpanded = false
+    @State private var pendingAIRequest: DiaryAIRequest?
+    @State private var aiAction: DiaryAIAction?
 
     private enum Panel: String, Identifiable {
         case replacement, photos
@@ -48,6 +51,20 @@ struct DiaryContextToolbar: View {
                 }
             }
             if !selectionToolsOnly {
+            if aiExpanded {
+                HStack(spacing: 0) {
+                    ForEach(DiaryAIAction.allCases) { action in
+                        Button {
+                            session.finishInteraction()
+                            aiAction = action
+                        } label: {
+                            Text(action.rawValue).font(.subheadline.weight(.medium))
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }.accessibilityIdentifier("diary.ai.\(action.id)")
+                    }
+                }.padding(8).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if addExpanded {
                 HStack(alignment: .top, spacing: 0) {
                     toolButton("拍照", symbol: "camera", action: onCamera)
@@ -59,7 +76,7 @@ struct DiaryContextToolbar: View {
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            HStack(alignment: .top, spacing: 22) {
+            HStack(alignment: .top, spacing: 0) {
                 Menu {
                     Section {
                         Button { session.undo() } label: { Label("撤销", systemImage: "arrow.uturn.backward") }
@@ -78,13 +95,17 @@ struct DiaryContextToolbar: View {
                     }
                 } label: { toolLabel("更多", symbol: "ellipsis") }
                 Button {
-                    withAnimation(.easeInOut(duration: 0.22)) { addExpanded.toggle() }
+                    withAnimation(.easeInOut(duration: 0.22)) { aiExpanded = false; addExpanded.toggle() }
                 } label: { toolLabel(addExpanded ? "收起" : "添加", symbol: addExpanded ? "xmark" : "plus") }
                     .accessibilityIdentifier("diary.add.toggle")
                 Button { openTool(onStickers) } label: { toolLabel("贴纸", symbol: "seal") }
                 Button {
                     openTool { target = nil; presentTextEditor(.editText) }
                 } label: { toolLabel("文字", symbol: "square.and.pencil") }
+                Button {
+                    withAnimation(.easeInOut(duration: 0.22)) { addExpanded = false; aiExpanded.toggle() }
+                } label: { toolLabel("AI", symbol: "sparkles") }
+                    .accessibilityIdentifier("diary.ai.toggle")
             }
             }
         }
@@ -102,6 +123,17 @@ struct DiaryContextToolbar: View {
         .disabled(session.busy || importing)
         .fullScreenCover(item: $textEditor) { presentation in
             DiaryTextEditorSheet(session: session, draft: presentation.draft, initialTab: presentation.initialTab)
+        }
+        .sheet(item: $aiAction, onDismiss: {
+            guard let request = pendingAIRequest else { return }
+            pendingAIRequest = nil
+            Task { await session.aiWorkspace.enter(request) }
+        }) { action in
+            DiaryAIRequestSheet(controller: session.canvasAI, action: action, onStartWorkspace: { request in
+                pendingAIRequest = request
+            }) {
+                withAnimation { aiExpanded = false }
+            }
         }
         .sheet(item: $panel) { panel in panelContent(panel) }
         .fullScreenCover(item: $cropTarget) { layer in DiaryCropSheet(session: session, layer: layer) }
@@ -133,6 +165,7 @@ struct DiaryContextToolbar: View {
                 .glassEffect(.regular.interactive(), in: Circle())
             Text(title).font(.caption).fixedSize(horizontal: true, vertical: false)
         }
+        .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
@@ -146,6 +179,7 @@ struct DiaryContextToolbar: View {
     private func openTool(_ action: () -> Void) {
         session.finishInteraction()
         addExpanded = false
+        aiExpanded = false
         action()
     }
 

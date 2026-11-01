@@ -1,10 +1,11 @@
 import Foundation
 
 nonisolated enum StorageCategory: String, Codable, CaseIterable, Identifiable, Sendable {
-    case diaries, downloads, previews, exports, camera, printOrders, business, otherAccounts, unknown
+    case aiLogs, diaries, downloads, previews, exports, camera, printOrders, business, otherAccounts, unknown
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .aiLogs: "AI 制作日志"
         case .diaries: "手帐作品与恢复资料"
         case .downloads: "模板、素材与本地模型"
         case .previews: "预览与浏览缓存"
@@ -18,6 +19,7 @@ nonisolated enum StorageCategory: String, Codable, CaseIterable, Identifiable, S
     }
     var symbol: String {
         switch self {
+        case .aiLogs: "doc.text.magnifyingglass"
         case .diaries: "book.closed"
         case .downloads: "arrow.down.circle"
         case .previews: "photo.on.rectangle"
@@ -31,6 +33,7 @@ nonisolated enum StorageCategory: String, Codable, CaseIterable, Identifiable, S
     }
     var explanation: String {
         switch self {
+        case .aiLogs: "完整请求、响应、工具操作与图片证据。可手动清理；删除日志不影响作品或恢复点。制作中请勿清理。"
         case .diaries: "原图、页面、草稿、历史和最近删除均保留。清理预览不会删除作品。"
         case .downloads: "主动下载不参加安全清理。移除模板下载不影响已完整导入的手帐；再次下载需要联网。模型与未知归属素材暂只统计。"
         case .previews: "统一管理模板、贴纸、附件和手帐的可重建缓存。达到容量上限后移除最久未使用的内容；主动下载资源单独管理。"
@@ -147,6 +150,8 @@ actor StorageService {
                     category = .otherAccounts
                 } else if StoragePaths.contains(url, in: paths.cacheAccounts), !StoragePaths.contains(url, in: privateCache) {
                     category = .otherAccounts
+                } else if StoragePaths.contains(url, in: paths.account(expected).appendingPathComponent("AIProductionLogs")) {
+                    category = .aiLogs; removable = true; automatic = false; title = url.lastPathComponent; reason = "AI制作诊断日志，可手动移除"
                 } else if StoragePaths.contains(url, in: paths.diaryOwner(expected)) || StoragePaths.contains(url, in: paths.trash(expected)) {
                     category = .diaries
                 } else if StoragePaths.contains(url, in: paths.previews(expected)) {

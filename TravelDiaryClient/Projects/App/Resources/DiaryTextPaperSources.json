@@ -1,0 +1,83 @@
+[
+  {
+    "id": "warmHeart",
+    "source": "/Volumes/Dream/手帐/交付/生日交付/把青春留在同一页-左页-V1.psd",
+    "layer": "纸卡_收藏此刻",
+    "size": [
+      1200,
+      371
+    ]
+  },
+  {
+    "id": "blueTape",
+    "source": "/Volumes/Dream/手帐/交付/生日交付/朋友入镜-右页-V1.psd",
+    "layer": "纸卡_收藏此刻",
+    "size": [
+      930,
+      421
+    ]
+  },
+  {
+    "id": "pinkWish",
+    "source": "/Volumes/Dream/手帐/交付/生日交付/新一岁的愿望里有你-右页-分层V1.psd",
+    "layer": "纸卡_粉色愿望",
+    "size": [
+      1200,
+      664
+    ]
+  },
+  {
+    "id": "titleParchment",
+    "source": "/Volumes/Dream/手帐/交付/生日交付/走过照片也走向新一岁-左页-分层V1.psd",
+    "layer": "纸卡_主标题",
+    "size": [
+      1200,
+      621
+    ]
+  },
+  {
+    "id": "lavenderStrip",
+    "source": "/Volumes/Dream/手帐/交付/生日交付/走过照片也走向新一岁-左页-分层V1.psd",
+    "layer": "纸卡_紫色副标题",
+    "size": [
+      829,
+      275
+    ]
+  },
+  {
+    "id": "pinkHeart",
+    "source": "/Volumes/Dream/手帐/交付/生日交付/走过照片也走向新一岁-左页-分层V1.psd",
+    "layer": "纸卡_收藏此刻",
+    "size": [
+      1013,
+      300
+    ]
+  },
+  {
+    "id": "botanicalLine",
+    "source": "/Volumes/Dream/手帐/交付/生日交付/双重纪念-右页-分层V1.psd",
+    "layer": "纸卡_共同今天",
+    "size": [
+      1200,
+      333
+    ]
+  },
+  {
+    "id": "coralUnderline",
+    "source": "/Volumes/Dream/手帐/交付/生日交付/双重纪念-右页-分层V1.psd",
+    "layer": "纸卡_收藏此刻",
+    "size": [
+      685,
+      427
+    ]
+  },
+  {
+    "id": "kraftStrip",
+    "source": "/Volumes/Dream/手帐/交付/生日交付/双重纪念-右页-分层V1.psd",
+    "layer": "纸卡_腾冲老街",
+    "size": [
+      660,
+      296
+    ]
+  }
+]

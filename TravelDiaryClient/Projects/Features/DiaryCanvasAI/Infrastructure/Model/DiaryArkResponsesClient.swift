@@ -1,0 +1,184 @@
+import Foundation
+
+/// Stateless application protocol; the opaque continuation is exclusively owned by this adapter.
+@MainActor final class DiaryArkResponsesClient: DiaryAIModelClient {
+    weak var productionLog: DiaryAIProductionLog?
+    var expectedWorkspaceVersion: Int?
+    var workspaceMode = false
+    var planning = false
+    var allowedLayerReferences: [String]?
+    var allowedWorkspaceTools: Set<String>?
+    var onTransportEvent: ((String, String) -> Void)?
+    private let session: URLSession
+    init(session: URLSession? = nil) {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = DiaryAIRequestLimits.idleTimeout
+        configuration.timeoutIntervalForResource = DiaryAIRequestLimits.requestDeadline
+        self.session = session ?? URLSession(configuration: configuration)
+    }
+
+    static func tools() -> [[String: Any]] {
+        let names = ["get_canvas_context", "inspect_assets", "list_available_fonts", "get_style_reference", "propose_layout", "render_draft", "validate_draft", "finish_candidate"]
+        return names.map { name in
+            var properties: [String: Any] = ["contextID": ["type": "string"]]
+            var required = ["contextID"]
+            if name == "inspect_assets" {
+                properties["objectIDs"] = ["type": "array", "items": ["type": "string"], "maxItems": 3]
+                properties["view"] = ["type": "string", "enum": ["fullAsset", "currentCrop", "canvasRegion"]]
+                required += ["objectIDs", "view"]
+            }
+            if name == "propose_layout" {
+                // Local decoding and operation-specific field/permission validation remain authoritative.
+                properties["plan"] = ["type": "object", "properties": [
+                    "schemaVersion": ["type": "integer"], "contextID": ["type": "string"],
+                    "baseDigest": ["type": "string"], "summary": ["type": "string"],
+                    "operations": ["type": "array", "maxItems": 200, "items": ["type": "object"]]
+                ], "required": ["schemaVersion", "contextID", "baseDigest", "summary", "operations"]]
+                required.append("plan")
+            }
+            if ["render_draft", "validate_draft", "finish_candidate"].contains(name) {
+                properties["draftRevision"] = ["type": "integer"]; required.append("draftRevision")
+            }
+            return ["type": "function", "name": name, "description": name == "propose_layout" ? "Submit a complete plan from the immutable base. Returns validated draft and preview for visual review." : name,
+                    "parameters": ["type": "object", "properties": properties, "required": required, "additionalProperties": false]]
+        }
+    }
+
+    func respond(prompt: String?, images: [DiaryAIImage], continuation: Data?, results: [DiaryAIToolResult]) async throws -> DiaryAIModelReply {
+        var history = try continuation.map { try JSONSerialization.jsonObject(with: $0) as? [[String: Any]] ?? [] } ?? []
+        func imageParts(_ values: [DiaryAIImage]) -> [[String: Any]] {
+            values.flatMap { image in [
+                ["type": "input_text", "text": "Image \(image.id): \(image.caption)"],
+                ["type": "input_image", "image_url": "data:image/jpeg;base64,\(image.data.base64EncodedString())"]
+            ] }
+        }
+        if let prompt { history.append(["role": "user", "content": [["type": "input_text", "text": prompt]] + imageParts(images)]) }
+        for result in results { history.append(["type": "function_call_output", "call_id": result.callID, "output": result.text]) }
+        let feedbackImages = results.flatMap(\.images)
+        if !feedbackImages.isEmpty { history.append(["role": "user", "content": imageParts(feedbackImages)]) }
+        var request = URLRequest(url: DiaryAITestConfig.endpoint)
+        request.httpMethod = "POST"; request.timeoutInterval = DiaryAIRequestLimits.idleTimeout
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(DiaryAITestConfig.apiKey)", forHTTPHeaderField: "Authorization")
+        var selectedTools = workspaceMode ? DiaryAIWorkspaceTools.schemas.filter { tool in
+            guard let name = tool["name"] as? String else { return false }
+            return planning ? name == "plan_composition" : name != "plan_composition" && (allowedWorkspaceTools?.contains(name) ?? true)
+        } : Self.tools()
+        if workspaceMode, !planning, let references = allowedLayerReferences {
+            if references.isEmpty {
+                selectedTools.removeAll { tool in
+                    let parameters = tool["parameters"] as? [String: Any]
+                    let properties = parameters?["properties"] as? [String: Any]
+                    return properties?["objectID"] != nil || properties?["objectIDs"] != nil
+                }
+            }
+            for index in selectedTools.indices {
+                guard var parameters = selectedTools[index]["parameters"] as? [String: Any], var properties = parameters["properties"] as? [String: Any] else { continue }
+                if var object = properties["objectID"] as? [String: Any] { object["enum"] = references; properties["objectID"] = object }
+                if var objects = properties["objectIDs"] as? [String: Any] { objects["items"] = ["type": "string", "enum": references]; properties["objectIDs"] = objects }
+                parameters["properties"] = properties; selectedTools[index]["parameters"] = parameters
+            }
+        }
+        if workspaceMode, expectedWorkspaceVersion != nil {
+            for index in selectedTools.indices {
+                guard var parameters = selectedTools[index]["parameters"] as? [String: Any], var properties = parameters["properties"] as? [String: Any] else { continue }
+                properties.removeValue(forKey: "expectedVersion")
+                if let required = parameters["required"] as? [String] { parameters["required"] = required.filter { $0 != "expectedVersion" } }
+                for key in ["width", "fontSize"] {
+                    if var field = properties[key] as? [String: Any] { field["exclusiveMinimum"] = 0; properties[key] = field }
+                }
+                parameters["properties"] = properties; selectedTools[index]["parameters"] = parameters
+            }
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["model": DiaryAITestConfig.model, "input": history,
+            "tools": selectedTools,
+            "tool_choice": workspaceMode ? "required" : "auto",
+            "thinking": ["type": "enabled"], "reasoning": ["effort": planning ? "medium" : "low"],
+            "stream": true, "max_output_tokens": planning ? 4096 : 8192, "store": false])
+        var received: Data?
+        for attempt in 0..<3 {
+            try Task.checkCancellation()
+            let started = Date()
+            onTransportEvent?("开始连接模型服务", "规划：\(planning ? "是" : "否") · 思考：\(planning ? "medium" : "low")")
+            productionLog?.record("request", ["endpoint": request.url!.absoluteString, "attempt": attempt])
+            if let body = request.httpBody { productionLog?.data("request-body", body) }
+            let (bytes, response) = try await session.bytes(for: request)
+            productionLog?.record("response-status", ["status": (response as? HTTPURLResponse)?.statusCode ?? 0, "headers": (response as? HTTPURLResponse)?.allHeaderFields.reduce(into: [String: String]()) { $0[String(describing: $1.key)] = String(describing: $1.value) } ?? [:]])
+            onTransportEvent?("已收到响应头", String(format: "连接并收到响应头 %.2f 秒", Date().timeIntervalSince(started)))
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if (200..<300).contains(status) {
+                guard (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")?.contains("text/event-stream") == true else {
+                    throw DiaryAIError.invalid("接口未返回 SSE 流，未执行任何未提交操作。")
+                }
+                var decoder = DiaryAIStreamDecoder(), firstEvent = false
+                for try await line in bytes.lines {
+                    try Task.checkCancellation()
+                    guard Date().timeIntervalSince(started) < DiaryAIRequestLimits.requestDeadline else {
+                        throw DiaryAIError.invalid("本次模型请求超过总时限，已提交批次保留。手动重试会发起新请求，可能再次计费。")
+                    }
+                    if line.hasPrefix("data:"), let payload = line.dropFirst(5).data(using: .utf8) { productionLog?.data("sse", payload) }
+                    else if !line.isEmpty && !line.hasPrefix("event:") { productionLog?.record("sse", ["line": line]) }
+                    let completeEvent = try decoder.acceptNetworkLine(line)
+                    if completeEvent, !firstEvent {
+                        firstEvent = true
+                        onTransportEvent?("已收到首个流式事件", String(format: "首事件耗时 %.2f 秒", Date().timeIntervalSince(started)))
+                    }
+                    if let completed = decoder.completed { received = completed; break }
+                }
+                guard received != nil else { throw DiaryAIError.invalid("流式连接中断，未收到完整结果。已提交批次保留；重试可能产生新请求和费用。") }
+                onTransportEvent?("模型输出完整接收", String(format: "本次耗时 %.2f 秒；工具参数现在才进入校验", Date().timeIntervalSince(started)))
+                break
+            }
+            if status == 429, attempt < 2 {
+                let delay = min(15, max(1, Double((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After") ?? "") ?? Double(2 << attempt)))
+                try await Task.sleep(for: .seconds(delay)); continue
+            }
+            let message: String
+            switch status {
+            case 401, 403: message = "模型凭据或访问权限不可用，请检查测试配置。"
+            case 404: message = "当前模型或接口不可用，请确认模型访问权限。"
+            case 429: message = "请求过于频繁，请稍后重试。"
+            case 400, 422: message = "模型未接受当前图片或工具请求，请检查接口兼容性。"
+            default: message = "模型服务暂不可用（HTTP \(status)），请重试。"
+            }
+            throw DiaryAIError.invalid(message)
+        }
+        guard let data = received else { throw DiaryAIError.invalid("模型服务未返回结果") }
+        productionLog?.data("response-body", data)
+        let reply = try Self.decode(data, maximumCalls: workspaceMode ? 30 : 12)
+        let calls = try reply.calls.map { call in
+            guard workspaceMode, let version = expectedWorkspaceVersion else { return call }
+            return try Self.bindVersion(call, version: version)
+        }
+        let body = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        history += body["output"] as? [[String: Any]] ?? []
+        return DiaryAIModelReply(calls: calls, text: reply.text, continuation: try JSONSerialization.data(withJSONObject: history), inputTokens: reply.inputTokens, outputTokens: reply.outputTokens)
+    }
+
+    static func bindVersion(_ call: DiaryAIToolCall, version: Int) throws -> DiaryAIToolCall {
+        guard var raw = try JSONSerialization.jsonObject(with: Data(call.arguments.utf8)) as? [String: Any] else { throw DiaryAIError.invalid("工具参数必须为对象") }
+        if let supplied = raw["expectedVersion"] {
+            guard !(supplied is String), supplied as? Int == version else { throw DiaryAIError.invalid("模型返回过期或无效版本，未执行操作") }
+        }
+        raw["expectedVersion"] = version
+        return .init(id: call.id, name: call.name, arguments: String(decoding: try JSONSerialization.data(withJSONObject: raw), as: UTF8.self))
+    }
+    static func decode(_ data: Data, maximumCalls: Int = 12) throws -> DiaryAIModelReply {
+        guard let body = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              body["status"] as? String == "completed", let output = body["output"] as? [[String: Any]] else {
+            throw DiaryAIError.invalid("模型响应不完整，没有应用任何修改。")
+        }
+        var calls: [DiaryAIToolCall] = [], text = ""
+        for item in output {
+            if item["type"] as? String == "function_call" {
+                guard let id = item["call_id"] as? String, let name = item["name"] as? String,
+                      let arguments = item["arguments"] as? String, arguments.utf8.count <= 256_000 else { throw DiaryAIError.invalid("工具参数无效") }
+                calls.append(.init(id: id, name: name, arguments: arguments))
+            }
+            for part in item["content"] as? [[String: Any]] ?? [] where part["type"] as? String == "output_text" { text += part["text"] as? String ?? "" }
+        }
+        guard calls.count <= maximumCalls, Set(calls.map(\.id)).count == calls.count else { throw DiaryAIError.invalid("工具调用重复或过多") }
+        let usage = body["usage"] as? [String: Any]
+        return .init(calls: calls, text: text, continuation: Data(), inputTokens: usage?["input_tokens"] as? Int, outputTokens: usage?["output_tokens"] as? Int)
+    }
+}

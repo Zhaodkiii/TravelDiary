@@ -130,6 +130,7 @@ final class DiaryCanvasSurface: UIView {
             resolutionTask?.cancel(); resolutionTask = nil
             preview = nil
             viewportInteracting = false; viewportNeedsRefresh = false
+            session?.aiViewportInteracting = false
         } else { refresh(force: true) }
     }
 
@@ -350,6 +351,7 @@ final class DiaryCanvasSurface: UIView {
     func viewportInteractionBegan() {
         guard !viewportInteracting else { return }
         viewportInteracting = true
+        session?.aiViewportInteracting = true
         resolutionTask?.cancel(); resolutionTask = nil
         renderTask?.cancel(); renderTask = nil
     }
@@ -357,6 +359,7 @@ final class DiaryCanvasSurface: UIView {
     func viewportInteractionEnded() {
         guard viewportInteracting else { return }
         viewportInteracting = false
+        session?.aiViewportInteracting = false
         let refreshNeeded = viewportNeedsRefresh
         viewportNeedsRefresh = false
         if refreshNeeded { refresh(force: true) }

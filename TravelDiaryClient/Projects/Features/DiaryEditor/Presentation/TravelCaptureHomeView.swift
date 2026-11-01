@@ -142,8 +142,8 @@ struct TravelCaptureHomeView: View {
         if book == nil { await createBook(); return }
         busy = true; defer { busy = false }
         do {
-            var document = DiaryDocument(); document.bookID = book?.id
-            document.objects[document.rootContentID]?.referenceSize = size
+            let blank = try await store.createBlankPage(size: size, bookID: book?.id)
+            let document = blank.document
             try await store.save(document); pageID = document.id
             await reload()
         } catch { self.error = error.localizedDescription }

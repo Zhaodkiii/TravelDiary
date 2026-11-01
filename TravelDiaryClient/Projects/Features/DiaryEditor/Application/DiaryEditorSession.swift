@@ -11,6 +11,11 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     func acceptsMaterialInsertion(documentID: UUID, contentID: UUID, replacingID: UUID?) -> Bool {
         !closing && !childOpen && document.id == documentID && self.contentID == contentID && document.objects[contentID] != nil && (replacingID == nil || document.layer(replacingID!) != nil)
     }
+    var aiViewportInteracting = false
+    var aiTransientSession = false
+    @Published var aiWorkspacePresented = false
+    lazy var aiWorkspace = DiaryAIWorkspace(session: self)
+    lazy var canvasAI = DiaryCanvasAIFactory.make(self)
     var stickerInsertionViewport: (() -> DiaryStickerPlacement.Viewport?)?
     private var stickerInsertionSequence = 0
     let id = UUID()
@@ -341,6 +346,15 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         interactionStart = nil
         restore(before)
     }
+    func applyAIDraft(_ candidate: DiaryDocument, expected: DiaryDocument, additionalImages: [UUID: UIImage] = [:]) -> Bool {
+        finishInteraction()
+        guard !busy, !closing, !childOpen, document == expected,
+              candidate.id == document.id else { return false }
+        images.merge(additionalImages) { _, new in new }
+        edit { document = candidate }
+        return true
+    }
+
     private func edit(_ change: () -> Void) {
         finishInteraction()
         let before = snapshot
@@ -377,7 +391,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         scheduleSave()
     }
     private func scheduleSave() {
-        guard !closing else { return }
+        guard !closing, !aiTransientSession else { return }
         saveTask?.cancel()
         saveTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(1)) } catch { return }
@@ -386,7 +400,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         }
     }
     func save() async throws {
-        guard !closing, !childOpen else { return }
+        guard !closing, !childOpen, !aiTransientSession else { return }
         let state = snapshot
         let savingRevision = revision
         saveStatus = "保存中…"
@@ -558,7 +572,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             let layer = DiaryLayer(name: "文字", kind: .text,
                 transform: DiaryTransform(position: scopeCenter, pivot: CGPoint(x: 200, y: 0)),
                 size: CGSize(width: 400, height: 60), text: text, fontSize: fontSize,
-                textColor: color, textAlignment: alignment, textLineHeight: lineHeight, textLetterSpacing: letterSpacing, font: font)
+                textAppearance: DiaryNewTextDefaults.appearance, textColor: color, textAlignment: alignment, textLineHeight: lineHeight, textLetterSpacing: letterSpacing, font: font ?? DiaryNewTextDefaults.font)
             edit { document.appendObject(containing: layer, to: contentID); selectedID = layer.id }
         }
         return true
@@ -572,7 +586,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             let center = scopeCenter
             let layer = DiaryLayer(name: "文字", kind: .text,
                                    transform: DiaryTransform(position: center, pivot: CGPoint(x: 200, y: 0)),
-                                   size: CGSize(width: 400, height: 60), text: text, fontSize: fontSize)
+                                   size: CGSize(width: 400, height: 60), text: text, fontSize: fontSize, textAppearance: DiaryNewTextDefaults.appearance, font: DiaryNewTextDefaults.font)
             edit { document.appendObject(containing: layer, to: contentID); selectedID = layer.id }
         }
     }

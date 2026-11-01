@@ -301,15 +301,14 @@ struct DiaryPhysicalBookScreen: View {
         loadingEditor = true
         defer { loadingEditor = false }
         do {
-            var document = DiaryDocument()
-            document.bookID = book.id
-            document.objects[document.rootContentID]?.referenceSize = book.defaultPageSize
-            var images: [UUID: UIImage] = [:]
+            let blank = try await store.createBlankPage(size: book.defaultPageSize, bookID: book.id)
+            var document = blank.document
+            var images = blank.images
             if let data {
                 let (asset, image) = try await store.importImage(data, documentID: document.id)
                 document.assets[asset.id] = asset; images[asset.id] = image
                 document.objects[document.rootContentID]?.layers.insert(
-                    DiaryLayer.photoBackground(asset: asset, pageSize: book.defaultPageSize), at: 0)
+                    DiaryLayer.photoBackground(asset: asset, pageSize: book.defaultPageSize), at: 1)
             }
             try await store.save(document)
             book = try await store.loadBook()
@@ -341,14 +340,18 @@ struct DiaryPhysicalBookScreen: View {
         do {
             for index in current where pages.indices.contains(index) {
                 try Task.checkCancellation()
-                _ = try? await DiaryReadingSources.load(page: pages[index], store: store)
+                if readingAnimation {
+                    _ = try? await DiaryReadingSources.load(page: pages[index], store: store)
+                }
                 _ = try? await DiaryPreviewService.image(page: pages[index], store: store, large: true)
             }
             // 快速连翻时不立即预取；已开始的共享请求仍可被后续页面复用。
             try await Task.sleep(for: .milliseconds(200))
             for index in neighbors where pages.indices.contains(index) {
                 try Task.checkCancellation()
-                _ = try? await DiaryReadingSources.load(page: pages[index], store: store)
+                if readingAnimation {
+                    _ = try? await DiaryReadingSources.load(page: pages[index], store: store)
+                }
                 _ = try? await DiaryPreviewService.image(page: pages[index], store: store, large: true)
             }
         } catch is CancellationError { }
@@ -687,7 +690,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
             guard !transitioning else { return }
             readingTask?.cancel()
             let visible = (controller.viewControllers ?? []).compactMap { $0 as? DiaryPaperController }
-            guard animated && !parent.reduceMotion else {
+            guard animated && !parent.reduceMotion && UserDefaults.standard.bool(forKey: "diary.reader.animation") else {
                 visible.forEach { $0.finishReading() }; return
             }
             visible.forEach { $0.prepareReading() }
@@ -785,6 +788,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
         if let view = viewIfLoaded { visit(view) }
     }
     func prepareSource() async {
+        guard UserDefaults.standard.bool(forKey: "diary.reader.animation") else { return }
         if let selectedPage { _ = try? await DiaryReadingSources.load(page: selectedPage, store: readingStore) }
         // Let the hosting view install its source-backed surface before starting both leaves.
         await Task.yield()
@@ -828,6 +832,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
 }
 
 private struct DiaryBookPaper: View {
+    @AppStorage("diary.reader.animation") private var readingAnimation = true
     let page: DiaryPageEntry?
     let store: DiaryDocumentStore
     let left: Bool
@@ -844,7 +849,13 @@ private struct DiaryBookPaper: View {
                 DiaryBookLining()
                     .accessibilityLabel("内封皮")
             } else if let page {
-                DiaryAnimatedReadingPage(page: page, store: store, half: splitHalf, playback: playback)
+                if readingAnimation {
+                    DiaryAnimatedReadingPage(page: page, store: store, half: splitHalf, playback: playback)
+                } else if let splitHalf {
+                    DiarySpreadHalfPreview(page: page, store: store, left: splitHalf)
+                } else {
+                    DiaryPagePreview(page: page, store: store, large: true, undecorated: true)
+                }
             } else if showsAddPlaceholder {
                 Label("添加页面", systemImage: "plus.circle").font(.caption).foregroundStyle(.brown.opacity(0.5))
             }

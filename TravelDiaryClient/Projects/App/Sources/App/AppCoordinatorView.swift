@@ -30,6 +30,16 @@ struct AppCoordinatorView: View {
 
     @ViewBuilder
     private var sessionContent: some View {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-diary-ai-book8") { DiaryAIBook8DebugScreen() }
+        else { regularSessionContent }
+        #else
+        regularSessionContent
+        #endif
+    }
+
+    @ViewBuilder
+    private var regularSessionContent: some View {
         switch lifecycle.sessionState {
         case .loading:
             AppLaunchScreenView()

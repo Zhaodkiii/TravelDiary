@@ -101,7 +101,7 @@ struct StorageManagementScreen: View {
                     row(.diaries)
                 }
                 NavigationLink { StorageDownloadsScreen(owner: model.owner) } label: { row(.downloads) }
-                ForEach([StorageCategory.previews, .exports, .camera, .printOrders, .business, .otherAccounts, .unknown]) { category in
+                ForEach([StorageCategory.aiLogs, .previews, .exports, .camera, .printOrders, .business, .otherAccounts, .unknown]) { category in
                     NavigationLink { StorageCategoryScreen(model: model, category: category) } label: { row(category) }
                 }
                 NavigationLink {
