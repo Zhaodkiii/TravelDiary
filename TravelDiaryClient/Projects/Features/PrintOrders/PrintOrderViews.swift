@@ -158,9 +158,9 @@ struct PrintCheckoutScreen: View {
                 Text("按作品顺序，装订成一本").font(.title2.bold())
                 Text("有外壳时先显示外壳，其余页面按作品顺序展示。已生成的跨页可随时点击放大检查。").font(.subheadline).foregroundStyle(.secondary)
                 if !previewPages.isEmpty {
-                    PrintProductionPreview(book: book, pageSize: CGSize(width: product?.width_mm ?? 148, height: product?.height_mm ?? 210), thumbnails: previewPages) { role, title, left, right in
+                    PrintProductionPreview(book: DiaryBookPrintExporter.printBook(book), pageSize: CGSize(width: product?.width_mm ?? 148, height: product?.height_mm ?? 210), thumbnails: previewPages) { role, title, left, right in
                         guard let directory = prepared?.directory ?? preparationDirectory else { return }
-                        let pages = book.contentPages
+                        let pages = DiaryBookPrintExporter.printBook(book).contentPages
                         func pageURL(_ index: Int?) -> URL? {
                             guard let index, pages.indices.contains(index) else { return nil }
                             return directory.appendingPathComponent("page-\(pages[index].id).pdf")

@@ -164,9 +164,9 @@ struct SupportMainCoordinatorView: View {
                     onBrowseTemplates: { selectedTab = .diaryPresets })
                     .id(session.accountID)
             }
-//            Tab("随记", systemImage: "camera", value: SupportRootTab.travelCapture) {
-//                TravelCaptureHomeView(ownerID: String(session.accountID)).id(session.accountID)
-//            }
+            Tab("随记", systemImage: "camera", value: SupportRootTab.travelCapture) {
+                TravelCaptureHomeView(ownerID: String(session.accountID)).id(session.accountID)
+            }
             Tab("素材", systemImage: "books.vertical", value: SupportRootTab.diaryPresets) {
                 DiaryPresetLibraryScreen(ownerID: String(session.accountID), toolbarState: materialToolbar)
                     .id(session.accountID)

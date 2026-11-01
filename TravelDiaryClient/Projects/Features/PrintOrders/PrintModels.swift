@@ -91,7 +91,7 @@ nonisolated struct PrintFile: Codable, Sendable {
     let page_count: Int
 }
 nonisolated struct PrintSnapshot: Codable, Sendable {
-    struct Page: Codable, Sendable { let page_id: UUID; let revision_id: UUID; let role: String }
+    struct Page: Codable, Sendable { let page_id: UUID; let revision_id: UUID; let role: String; var source_page_id: UUID? = nil; var source_half: String? = nil }
     let book_id: UUID
     let catalog_revision: UUID
     let pages: [Page]

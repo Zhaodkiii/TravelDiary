@@ -188,10 +188,10 @@ nonisolated final class DiaryDocumentStore: Sendable {
             let path = try self.writeSnapshot(document, prefix: "revisions", directory: directory)
             if let bookID = self.bookID {
                 var book = try self.readBook(bookID)
-                guard document.root.referenceSize == book.defaultPageSize else { throw DiaryEditorError.invalidDocument.logged() }
                 let revision = UUID(uuidString: path.split(separator: "/")[1].description)!
                 if let index = book.pages.firstIndex(where: { $0.id == document.id }) {
                     guard self.opened.values[document.id] == book.pages[index].revisionID else { throw DiaryEditorError.pageConflict.logged() }
+                    book.pages[index].size = document.root.referenceSize
                     book.pages[index].revisionID = revision
                     book.pages[index].updatedAt = Date()
                 } else {
@@ -220,7 +220,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
             var revisions: [UUID: UUID] = [:]
             for document in documents {
                 guard let index = book.pages.firstIndex(where: { $0.id == document.id }),
-                      document.root.referenceSize == book.defaultPageSize else { throw DiaryEditorError.pageConflict }
+                      document.root.referenceSize == book.pages[index].size else { throw DiaryEditorError.pageConflict }
                 let path = try self.writeSnapshot(document, prefix: "revisions", directory: self.directory(document.id))
                 let revision = UUID(uuidString: String(path.split(separator: "/")[1]))!
                 book.pages[index].revisionID = revision
@@ -893,7 +893,7 @@ extension DiaryDocumentStore {
             return try package.read(PresetPage.self, reference.path)
         }
         let documents = try pages.map {
-            try package.instantiate($0, bookID: destinationID, targetSize: targetSize, assetIDs: assetIDs)
+            try package.instantiate($0, bookID: destinationID, targetSize: $0.size.cg, assetIDs: assetIDs)
                 .excludingPresetCategories(hiddenCategories)
         }
         guard documents.allSatisfy({ $0.replaceablePhotos().isEmpty }) else { return ([:], [:]) }
@@ -1033,7 +1033,7 @@ extension DiaryDocumentStore {
             for (index, page) in selected.enumerated() {
                 try cancellation?.check()
                 progress("正在准备第 \(index + 1) / \(selected.count) 页…")
-                var document = try additions.documents[page.id] ?? package.instantiate(page, bookID: destinationID, targetSize: book.defaultPageSize, assetIDs: assetIDs)
+                var document = try additions.documents[page.id] ?? package.instantiate(page, bookID: destinationID, targetSize: page.size.cg, assetIDs: assetIDs)
                     .excludingPresetCategories(hiddenCategories)
                 for (id, bytes) in additions.assets where document.assets[id] != nil && copied.insert(id).inserted {
                     let url = target.root.appendingPathComponent("assets/\(id.uuidString).image")
@@ -1064,7 +1064,7 @@ extension DiaryDocumentStore {
                 }
                 let path = try target.writeSnapshot(document, prefix: "revisions", directory: target.directory(document.id))
                 let revision = UUID(uuidString: String(path.split(separator: "/")[1]))!
-                var entry = DiaryPageEntry(id: document.id, title: page.title, revisionID: revision, size: book.defaultPageSize)
+                var entry = DiaryPageEntry(id: document.id, title: page.title, revisionID: revision, size: document.root.referenceSize)
                 entry.presetSource = DiaryPresetSource(bookID: package.id, pageID: page.id, version: package.manifest.packageVersion)
                 entries.append(entry)
             }

@@ -19,6 +19,37 @@ enum DiaryBookPrintExporter {
         }
     }
 
+    /// 印刷投影的 ID 稳定且左右独立；来源仍是同一不可变文档版本。
+    static func printBook(_ book: DiaryBook) -> DiaryBook {
+        var result = book
+        result.pages = book.pages.flatMap { page -> [DiaryPageEntry] in
+            guard page.id != book.shellPageID, isSpread(page.size) else { return [page] }
+            return [true, false].map { left in
+                var leaf = page
+                leaf.id = halfID(page.id, left: left)
+                leaf.size.width /= 2
+                return leaf
+            }
+        }
+        result.defaultPageSize = result.contentPages.first?.size ?? result.defaultPageSize
+        return result
+    }
+    private static func isSpread(_ size: CGSize) -> Bool {
+        size.height > 0 && abs(size.width / size.height - 4370.0 / 3130.0) < 0.000001
+    }
+    private static func halfID(_ id: UUID, left: Bool) -> UUID {
+        var bytes = id.uuid
+        bytes.15 ^= left ? 0xA1 : 0xB2
+        return UUID(uuid: bytes)
+    }
+    private static func origin(_ leaf: DiaryPageEntry, book: DiaryBook) -> (DiaryPageEntry, Bool?) {
+        for page in book.contentPages where isSpread(page.size) {
+            if halfID(page.id, left: true) == leaf.id { return (page, true) }
+            if halfID(page.id, left: false) == leaf.id { return (page, false) }
+        }
+        return (leaf, nil)
+    }
+
     static func proportionDifference(_ size: CGSize, product: PrintProduct) -> CGFloat {
         guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,
               product.width_mm > 0, product.height_mm > 0 else { return .infinity }
@@ -27,13 +58,13 @@ enum DiaryBookPrintExporter {
     }
 
     static func incompatiblePages(book: DiaryBook, product: PrintProduct) -> [Int] {
-        book.contentPages.enumerated().compactMap { index, page in
+        printBook(book).contentPages.enumerated().compactMap { index, page in
             proportionDifference(page.size, product: product) > 0.15 + 0.000001 ? index + 1 : nil
         }
     }
 
     static func mapping(book: DiaryBook, product: PrintProduct) throws -> (cover: [DiaryPageEntry], inner: [DiaryPageEntry], count: Int) {
-        let pages = book.contentPages
+        let pages = printBook(book).contentPages
         guard !pages.isEmpty else { throw PrintFailure("请先添加内容页后再提交印制。") }
         let count = pages.count + (product.duplex ? pages.count % 2 : 0)
         guard product.min_pages <= count, count <= product.max_pages else {
@@ -57,7 +88,7 @@ enum DiaryBookPrintExporter {
         let sourceDirectory = directory.appendingPathComponent("source")
         let source = try await store.freezeForPrinting(book, at: sourceDirectory)
         defer { try? FileManager.default.removeItem(at: sourceDirectory) }
-        let adapted = book.contentPages.enumerated().compactMap { index, page in
+        let adapted = printBook(book).contentPages.enumerated().compactMap { index, page in
             proportionDifference(page.size, product: product) > 0.001 ? String(index + 1) : nil
         }
         var warnings: [String] = adapted.isEmpty ? [] : ["第 \(adapted.joined(separator: "、")) 页已整页调整比例，请放大检查文字与照片。"]
@@ -75,11 +106,13 @@ enum DiaryBookPrintExporter {
             var box = CGRect(x: 0, y: 0, width: CGFloat(product.width_mm) / 25.4 * 72, height: CGFloat(product.height_mm) / 25.4 * 72)
             for (index, page) in pages.enumerated() {
                 try Task.checkCancellation()
-                let loaded = try await source.loadPDFSource(page)
+                let (original, half) = origin(page, book: book)
+                let loaded = try await source.loadPDFSource(original)
                 let fonts = loaded.document.objects.values.flatMap { $0.layers.filter { $0.kind == .text }.compactMap(\.font) }
                 await DiaryFontCatalog.shared.prewarm(fonts, documentID: loaded.document.id)
                 guard !fonts.contains(where: { !DiaryFontCatalog.shared.available($0) }) else { throw PrintFailure("\(role == "cover" ? "外壳" : "内页")第 \(index+1) 面存在缺失字体，请修复后再印制") }
-                let design = loaded.document.root.referenceSize
+                let fullDesign = loaded.document.root.referenceSize
+                let design = CGSize(width: fullDesign.width / (half == nil ? 1 : 2), height: fullDesign.height)
                 guard proportionDifference(design, product: product) <= 0.15 + 0.000001 else {
                     throw PrintFailure("页面实际内容比例与规格偏差超过 15%，请返回作品调整后重试。")
                 }
@@ -97,6 +130,8 @@ enum DiaryBookPrintExporter {
                     pageContext.saveGState(); pageContext.translateBy(x: 0, y: box.height)
                     pageContext.scaleBy(x: box.width/design.width, y: -box.height/design.height)
                     pageContext.setFillColor(UIColor.white.cgColor); pageContext.fill(CGRect(origin: .zero, size: design))
+                    pageContext.clip(to: CGRect(origin: .zero, size: design))
+                    if half == false { pageContext.translateBy(x: -design.width, y: 0) }
                     try await DiaryPageRenderer.drawForPrinting(loaded.document, images: loaded.images, in: pageContext)
                     pageContext.restoreGState(); pageContext.endPDFPage()
                     pageContext.closePDF(); pageClosed = true
@@ -118,8 +153,12 @@ enum DiaryBookPrintExporter {
             files.append(file)
         }
         let entries = map.cover.map { PrintSnapshot.Page(page_id: $0.id, revision_id: $0.revisionID, role: "shell") }
-            + map.inner.map { PrintSnapshot.Page(page_id: $0.id, revision_id: $0.revisionID, role: "interior") }
-        return PrintPrepared(directory: directory, snapshot: PrintSnapshot(book_id: book.id, catalog_revision: book.catalogRevision, pages: entries, exporter_version: "print-v1"), files: files, warnings: warnings, pageCount: map.count)
+            + map.inner.map { leaf in
+                let (original, half) = origin(leaf, book: book)
+                return PrintSnapshot.Page(page_id: leaf.id, revision_id: leaf.revisionID, role: "interior",
+                    source_page_id: original.id, source_half: half.map { $0 ? "left" : "right" })
+            }
+        return PrintPrepared(directory: directory, snapshot: PrintSnapshot(book_id: book.id, catalog_revision: book.catalogRevision, pages: entries, exporter_version: "print-v2-split"), files: files, warnings: warnings, pageCount: map.count)
     }
 
     nonisolated private static func assemble(sources: [URL], blank: Bool, role: String, destination: URL, widthMM: Int, heightMM: Int) throws -> PrintFile {

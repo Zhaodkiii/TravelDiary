@@ -98,11 +98,11 @@ enum DiaryPageRenderer {
     }
 
     static func draw(_ document: DiaryDocument, contentID: UUID? = nil, images: [UUID: UIImage],
-                     in context: CGContext, viewport: CGRect? = nil, includeInk: Bool = true, cacheObjects: Bool = true) {
+                     in context: CGContext, viewport: CGRect? = nil, includeInk: Bool = true, cacheObjects: Bool = true, presentation: DiaryReadingPresentation? = nil) {
         guard let content = document.objects[contentID ?? document.rootContentID] else { return }
         context.saveGState()
         context.clip(to: viewport ?? CGRect(origin: .zero, size: content.referenceSize))
-        drawContent(content, document: document, images: images, in: context, includeInk: includeInk, cacheObjects: cacheObjects)
+        drawContent(content, document: document, images: images, in: context, includeInk: includeInk, cacheObjects: cacheObjects && presentation == nil, presentation: presentation)
         context.restoreGState()
     }
 
@@ -165,19 +165,28 @@ enum DiaryPageRenderer {
         }
     }
     private static func drawContent(_ content: DiaryObjectContent, document: DiaryDocument,
-                                    images: [UUID: UIImage], in context: CGContext, includeInk: Bool = true, cacheObjects: Bool = false) {
+                                    images: [UUID: UIImage], in context: CGContext, includeInk: Bool = true, cacheObjects: Bool = false, presentation: DiaryReadingPresentation? = nil) {
         if let background = content.background {
+            context.saveGState()
+            if let appearance = presentation?.states[content.id] { context.setAlpha(appearance.opacity) }
             context.setFillColor(color(background).cgColor)
             context.fill(CGRect(origin: .zero, size: content.referenceSize))
+            context.restoreGState()
         }
-        drawLayers(content.layers, document: document, images: images, in: context, cacheObjects: cacheObjects)
-        if includeInk, let drawing = try? PKDrawing(data: content.drawing) { drawInk(drawing, in: objectBounds(content, document: document)) }
+        drawLayers(content.layers, document: document, images: images, in: context, cacheObjects: cacheObjects, presentation: presentation)
+        if includeInk, presentation?.showsInk != false, let drawing = try? PKDrawing(data: content.drawing) { drawInk(drawing, in: objectBounds(content, document: document)) }
     }
     private static func drawLayers(_ layers: [DiaryLayer], document: DiaryDocument,
-                                   images: [UUID: UIImage], in context: CGContext, cacheObjects: Bool, siblings: [DiaryLayer]? = nil) {
+                                   images: [UUID: UIImage], in context: CGContext, cacheObjects: Bool, siblings: [DiaryLayer]? = nil, presentation: DiaryReadingPresentation? = nil) {
         let siblings = siblings ?? layers
         for layer in layers where layer.visible {
+            let appearance = presentation?.states[layer.id]
+            if appearance?.opacity == 0 { continue }
             context.saveGState()
+            if let appearance {
+                let scale = max(0.001, hypot(context.ctm.c, context.ctm.d))
+                context.translateBy(x: 0, y: appearance.offset / scale)
+            }
             let transform = effectiveTransform(layer, siblings: siblings)
             context.concatenate(transform.matrix)
             switch layer.blendMode ?? .normal {
@@ -188,9 +197,10 @@ enum DiaryPageRenderer {
             case .linearBurn: context.setBlendMode(.plusDarker)
             case .lighten: context.setBlendMode(.lighten)
             }
-            let translucent = layer.effectiveOpacity < 1
+            let alpha = layer.effectiveOpacity * (appearance?.opacity ?? 1)
+            let translucent = alpha < 1
             if translucent {
-                context.setAlpha(layer.effectiveOpacity)
+                context.setAlpha(alpha)
                 context.beginTransparencyLayer(auxiliaryInfo: nil)
             }
             if let warp = transform.warp {
@@ -211,7 +221,9 @@ enum DiaryPageRenderer {
                 let image = UIGraphicsImageRenderer(size: rect.size, format: format).image { renderer in
                     renderer.cgContext.translateBy(x: -rect.minX, y: -rect.minY)
                     drawLayers([local], document: document, images: images, in: renderer.cgContext,
-                               cacheObjects: false, siblings: localSiblings)
+                               cacheObjects: false, siblings: localSiblings, presentation: presentation.map { value in
+                                   var copy = value; copy.states[local.id] = nil; return copy
+                               })
                 }
                 DiaryWarpRenderer.draw(image, rect: rect, warp: warp, in: context)
                 if translucent { context.endTransparencyLayer() }
@@ -222,7 +234,7 @@ enum DiaryPageRenderer {
             switch layer.kind {
             case .object:
                 if let id = layer.contentID, let content = document.objects[id] {
-                    if let frame = layer.displayBounds, let background = content.background {
+                    if let frame = layer.displayBounds, let background = content.background, presentation?.states[content.id]?.opacity != 0 {
                         context.setFillColor(color(background).cgColor)
                         context.fill(frame)
                     }
@@ -241,12 +253,12 @@ enum DiaryPageRenderer {
                             }
                             previews.setObject(image, forKey: key, cost: (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0))
                             image.draw(in: rect)
-                        } else { drawContent(content, document: document, images: images, in: context) }
-                    } else { drawContent(content, document: document, images: images, in: context) }
+                        } else { drawContent(content, document: document, images: images, in: context, presentation: presentation) }
+                    } else { drawContent(content, document: document, images: images, in: context, presentation: presentation) }
                 }
             case .canvas: break
             case .text:
-                drawText(layer, in: context)
+                drawText(layer, in: context, revealedCharacters: appearance?.characters)
             case .frame:
                 if let id = layer.assetID, let image = images[id] {
                     image.draw(in: bounds(layer, document: document, siblings: siblings))

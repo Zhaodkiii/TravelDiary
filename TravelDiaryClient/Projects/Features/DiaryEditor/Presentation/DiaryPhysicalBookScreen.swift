@@ -15,6 +15,9 @@ struct DiaryPhysicalBookScreen: View {
     private var isImmersive: Bool { isLandscape && !immersionDismissed }
     private var usesPlainPaper: Bool { isImmersive && AppleDeviceInfo.isDuo }
     private var readerSpreadCount: Int { isImmersive ? contentSpreadCount : spreadCount }
+    @AppStorage("diary.reader.animation") private var readingAnimation = true
+    @AppStorage("diary.reader.haptics") private var readingHaptics = true
+    @AppStorage("diary.reader.sound") private var readingSound = false
     @State private var opened = false
     @State private var spread = 0
     @State private var turningCover = false
@@ -161,6 +164,14 @@ struct DiaryPhysicalBookScreen: View {
             .navigationTitle(book.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Toggle("逐层呈现", isOn: $readingAnimation)
+                        Toggle("阅读触感", isOn: $readingHaptics)
+                        Toggle("纸张音效", isOn: $readingSound)
+                    } label: { Image(systemName: "waveform") }
+                    .accessibilityLabel("阅读动画与反馈")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showingExport = true } label: { Image(systemName: "square.and.arrow.up") }
                         .accessibilityLabel("导出手帐").disabled(book.pages.isEmpty || turningCover)
@@ -330,12 +341,14 @@ struct DiaryPhysicalBookScreen: View {
         do {
             for index in current where pages.indices.contains(index) {
                 try Task.checkCancellation()
+                _ = try? await DiaryReadingSources.load(page: pages[index], store: store)
                 _ = try? await DiaryPreviewService.image(page: pages[index], store: store, large: true)
             }
             // 快速连翻时不立即预取；已开始的共享请求仍可被后续页面复用。
             try await Task.sleep(for: .milliseconds(200))
             for index in neighbors where pages.indices.contains(index) {
                 try Task.checkCancellation()
+                _ = try? await DiaryReadingSources.load(page: pages[index], store: store)
                 _ = try? await DiaryPreviewService.image(page: pages[index], store: store, large: true)
             }
         } catch is CancellationError { }
@@ -517,6 +530,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
 
     @MainActor final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
         var parent: DiaryPageCurlReader
+        private var readingTask: Task<Void, Never>?
         private var transitioning = false
         private var displayed = -1
         private var zoomSuspended = false
@@ -588,6 +602,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
         }
 
         func setZoomSuspended(_ suspended: Bool, in controller: UIPageViewController) {
+            if suspended { presentReading(in: controller, animated: false) }
             zoomSuspended = suspended
             updateMotionPolicy(in: controller)
         }
@@ -628,6 +643,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
             if let paper = papers[index] { return paper }
             let paper = pageSource.makePaper(index) { [weak self] in self?.transitioning == false && self?.parent.allowsPageActions == true }
             papers[index] = paper
+            (paper as? DiaryPaperController)?.prepareReading()
             return paper
         }
         func show(_ requested: Int, in controller: UIPageViewController, animated: Bool) {
@@ -642,6 +658,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
             }
             guard let left = page(target * 2), let right = page(target * 2 + 1) else { return }
             let direction: UIPageViewController.NavigationDirection = target >= displayed ? .forward : .reverse
+            prepareReading()
             transitioning = true
             // The gesture gate rejects new pans while this transition is running.
             updateMotionPolicy(in: controller)
@@ -657,10 +674,31 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
                     self.transitioning = false
                     self.show(self.parent.spread, in: controller, animated: !self.parent.reduceMotion)
                     self.restoreAfterTransition(in: controller)
+                    self.presentReading(in: controller, animated: finished)
                 }
             }
         }
 
+        private func prepareReading() {
+            readingTask?.cancel()
+            for paper in papers.values { (paper as? DiaryPaperController)?.prepareReading() }
+        }
+        private func presentReading(in controller: UIPageViewController, animated: Bool) {
+            guard !transitioning else { return }
+            readingTask?.cancel()
+            let visible = (controller.viewControllers ?? []).compactMap { $0 as? DiaryPaperController }
+            guard animated && !parent.reduceMotion else {
+                visible.forEach { $0.finishReading() }; return
+            }
+            visible.forEach { $0.prepareReading() }
+            readingTask = Task { @MainActor [weak self, weak controller] in
+                for paper in visible { await paper.prepareSource() }
+                guard !Task.isCancelled, let self, let controller, !self.transitioning,
+                      controller.viewControllers?.compactMap({ ($0 as? DiaryPaperController)?.index }) == visible.map(\.index) else { return }
+                let start = CACurrentMediaTime() + 0.15
+                visible.forEach { $0.playReading(at: start) }
+            }
+        }
         private func restoreAfterTransition(in controller: UIPageViewController) {
             guard !transitioning else { return }
             if let indices = controller.viewControllers?.compactMap({ ($0 as? any DiaryIndexedPaper)?.index }),
@@ -680,6 +718,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
             return page(paper.index + 1)
         }
         func pageViewController(_ pageViewController: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
+            prepareReading()
             transitioning = true
             setRingsVisible(false, animated: !parent.reduceMotion)
         }
@@ -700,6 +739,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
                     self.show(self.parent.spread, in: pageViewController, animated: false)
                 }
                 self.restoreAfterTransition(in: pageViewController)
+                self.presentReading(in: pageViewController, animated: completed)
             }
         }
         func pageViewController(_ pageViewController: UIPageViewController, spineLocationFor orientation: UIInterfaceOrientation) -> UIPageViewController.SpineLocation {
@@ -712,16 +752,19 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
 @MainActor private final class DiaryPaperController: UIHostingController<DiaryBookPaper>, UIPopoverPresentationControllerDelegate, DiaryIndexedPaper {
     let index: Int
     private let canSelect: () -> Bool
+    let playback = DiaryReadingPlayback()
+    private let readingStore: DiaryDocumentStore
     private let selectedPage: DiaryPageEntry?
     private let onSelect: (DiaryPageEntry) -> Void
     private let onAdd: (DiaryReaderAddAction) -> Void
     init(index: Int, page: DiaryPageEntry?, continuousSpread: Bool, splitHalf: Bool?, store: DiaryDocumentStore, plainPaper: Bool, showsAddPlaceholder: Bool, canSelect: @escaping () -> Bool, onAdd: @escaping (DiaryReaderAddAction) -> Void, onSelect: @escaping (DiaryPageEntry) -> Void) {
         self.index = index
         self.canSelect = canSelect
+        self.readingStore = store
         self.selectedPage = page
         self.onSelect = onSelect
         self.onAdd = onAdd
-        super.init(rootView: DiaryBookPaper(page: page, store: store, left: index.isMultiple(of: 2), insideCover: !continuousSpread && index == 0, splitHalf: splitHalf, showsAddPlaceholder: showsAddPlaceholder, plainPaper: plainPaper))
+        super.init(rootView: DiaryBookPaper(page: page, store: store, left: index.isMultiple(of: 2), insideCover: !continuousSpread && index == 0, splitHalf: splitHalf, showsAddPlaceholder: showsAddPlaceholder, plainPaper: plainPaper, playback: playback))
         view.backgroundColor = .clear
         safeAreaRegions = []
         if showsAddPlaceholder && (page != nil || index > 0) {
@@ -730,8 +773,28 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
             view.accessibilityHint = page == nil ? "轻点添加页面" : "轻点编辑这一页"
         }
     }
+    private func updateReadingSurface() {
+        func visit(_ view: UIView) {
+            if let surface = view as? any DiaryReadingSurfaceControlling {
+                surface.update(phase: playback.phase, began: playback.began)
+                // UIKit may snapshot the leaf before SwiftUI delivers its next update.
+                view.layer.displayIfNeeded()
+            }
+            view.subviews.forEach(visit)
+        }
+        if let view = viewIfLoaded { visit(view) }
+    }
+    func prepareSource() async {
+        if let selectedPage { _ = try? await DiaryReadingSources.load(page: selectedPage, store: readingStore) }
+        // Let the hosting view install its source-backed surface before starting both leaves.
+        await Task.yield()
+    }
+    func prepareReading() { playback.prepare(); updateReadingSurface() }
+    func playReading(at time: CFTimeInterval) { playback.play(at: time); updateReadingSurface() }
+    func finishReading() { playback.finish(); updateReadingSurface() }
     @objc private func selectPage(_ gesture: UITapGestureRecognizer) {
         guard canSelect() else { return }
+        finishReading()
         if let selectedPage { onSelect(selectedPage) }
         else if index > 0 { showAddMenu(at: gesture.location(in: view)) }
     }
@@ -772,6 +835,7 @@ private struct DiaryBookPaper: View {
     let splitHalf: Bool?
     let showsAddPlaceholder: Bool
     let plainPaper: Bool
+    @ObservedObject var playback: DiaryReadingPlayback
     var body: some View {
         GeometryReader { geometry in
         ZStack {
@@ -780,8 +844,7 @@ private struct DiaryBookPaper: View {
                 DiaryBookLining()
                     .accessibilityLabel("内封皮")
             } else if let page {
-                if let splitHalf { DiarySpreadHalfPreview(page: page, store: store, left: splitHalf) }
-                else { DiaryPagePreview(page: page, store: store, large: true, undecorated: true) }
+                DiaryAnimatedReadingPage(page: page, store: store, half: splitHalf, playback: playback)
             } else if showsAddPlaceholder {
                 Label("添加页面", systemImage: "plus.circle").font(.caption).foregroundStyle(.brown.opacity(0.5))
             }
