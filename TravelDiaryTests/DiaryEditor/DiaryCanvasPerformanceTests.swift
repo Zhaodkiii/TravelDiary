@@ -226,6 +226,38 @@ struct DiaryCanvasPerformanceTests {
         }
     }
 
+    @Test func viewportGestureDefersRasterAndDocumentRefreshUntilSettled() async throws {
+        let (document, images) = fixture(count: 12)
+        let session = session(document, images)
+        let surface = DiaryCanvasSurface(frame: CGRect(x: 0, y: 0, width: 312, height: 312))
+        surface.session = session
+        surface.refresh()
+        surface.viewportInteractionBegan()
+        let syncs = surface.renderCache.synchronizationCount
+        let rasters = surface.renderCache.rasterCount
+        for _ in 0..<30 { surface.viewportDidZoom(); surface.refresh(force: true) }
+        // 超过原先 180ms 防抖窗口，手指仍未松开时也不允许重绘。
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(surface.viewportInteracting)
+        #expect(surface.renderCache.synchronizationCount == syncs)
+        #expect(surface.renderCache.rasterCount == rasters)
+        surface.viewportInteractionEnded()
+        #expect(!surface.viewportInteracting)
+        for _ in 0..<50 {
+            if surface.renderCache.rasterCount > rasters { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(surface.renderCache.rasterCount > rasters)
+        #expect(session.document == document)
+        surface.viewportInteractionBegan()
+        let completed = surface.renderCache.rasterCount
+        surface.viewportInteractionBegan() // 平移与缩放重叠开始应保持同一个暂停状态。
+        surface.viewportDidZoom()
+        try await Task.sleep(for: .milliseconds(220))
+        #expect(surface.renderCache.rasterCount == completed)
+        surface.viewportInteractionEnded()
+    }
+
     @Test func retainedLayerPlacementAndLinkedFrameFollowTransform() throws {
         var (document, images) = fixture()
         let child = try #require(document.root.layers[0].contentID)

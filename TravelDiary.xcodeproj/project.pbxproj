@@ -16,6 +16,7 @@
 		C0DE00100000000000000001 /* Vendor/WeChat/WechatOpenSDK.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0DE00100000000000000002 /* Vendor/WeChat/WechatOpenSDK.xcframework */; };
 		C0DE00200000000000000001 /* Vendor/Alipay/AlipaySDK.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0DE00200000000000000002 /* Vendor/Alipay/AlipaySDK.xcframework */; };
 		C0DE00200000000000000003 /* Vendor/Alipay/AlipaySDK.bundle in Resources */ = {isa = PBXBuildFile; fileRef = C0DE00200000000000000004 /* Vendor/Alipay/AlipaySDK.bundle */; };
+		DD0100000000000000000001 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = DD0100000000000000000002 /* ZIPFoundation */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -225,6 +226,7 @@
 			files = (
 				BC0100000000000000000001 /* RevenueCat in Frameworks */,
 				BC0200000000000000000001 /* RevenueCatUI in Frameworks */,
+				DD0100000000000000000001 /* ZIPFoundation in Frameworks */,
 				C0DE00100000000000000001 /* Vendor/WeChat/WechatOpenSDK.xcframework in Frameworks */,
 				C0DE00200000000000000001 /* Vendor/Alipay/AlipaySDK.xcframework in Frameworks */,
 				A1OSS0022FFB252D00137E68 /* SystemConfiguration.framework in Frameworks */,
@@ -297,6 +299,7 @@
 			);
 			name = TravelDiary;
 			packageProductDependencies = (
+				DD0100000000000000000002 /* ZIPFoundation */,
 				BC0100000000000000000002 /* RevenueCat */,
 				BC0200000000000000000002 /* RevenueCatUI */,
 			);
@@ -357,6 +360,7 @@
 			mainGroup = 85EA7EE92FFB252D00137E68;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				DD0100000000000000000003 /* XCLocalSwiftPackageReference "Vendor/ZIPFoundation" */,
 				BC0100000000000000000003 /* XCLocalSwiftPackageReference "Vendor/RevenueCat" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -761,6 +765,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/RevenueCat;
 		};
+		DD0100000000000000000003 /* XCLocalSwiftPackageReference "Vendor/ZIPFoundation" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/ZIPFoundation;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -773,6 +781,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = BC0100000000000000000003 /* XCLocalSwiftPackageReference "Vendor/RevenueCat" */;
 			productName = RevenueCatUI;
+		};
+		DD0100000000000000000002 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DD0100000000000000000003 /* XCLocalSwiftPackageReference "Vendor/ZIPFoundation" */;
+			productName = ZIPFoundation;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

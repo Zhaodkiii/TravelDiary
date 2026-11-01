@@ -53,6 +53,11 @@ struct DiaryEditorHomeView: View {
         }
         .background(DiaryLibraryStyle.background).foregroundStyle(DiaryLibraryStyle.ink)
         .tint(DiaryLibraryStyle.accent)
+        #if DEBUG
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DiaryDebugImportCompleted"))) { _ in
+            Task { await reload() }
+        }
+        #endif
         .refreshable { await reload() }
         .task {
             sort = DiaryShelfSort(rawValue: UserDefaults.standard.string(forKey: sortKey) ?? "") ?? .updated

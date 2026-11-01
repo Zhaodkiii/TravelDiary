@@ -114,6 +114,13 @@ struct SupportMainCoordinatorView: View {
             tabContent
                 .navigationTitle(currentTabTitle)
                 .toolbar { tabToolbar }
+                #if DEBUG
+                .modifier(DiaryDebugImport(ownerID: String(session.accountID),
+                    showsButton: selectedTab == .diaryEditor && path.isEmpty,
+                    completed: {
+                        NotificationCenter.default.post(name: Notification.Name("DiaryDebugImportCompleted"), object: nil)
+                    }))
+                #endif
         }
         .environment(\.accountLoginContext, AccountLoginContext(
             isDeviceAccount: session.isDeviceAccount, viewModel: upgradeLoginViewModel))

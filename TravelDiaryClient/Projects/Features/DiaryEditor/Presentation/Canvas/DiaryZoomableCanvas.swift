@@ -52,6 +52,7 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
         let coordinator = context.coordinator
         // 内部画布自行观察 Session；只有结构、尺寸或会话改变才替换宿主树。
         if refreshContent || coordinator.contentRevision != contentRevision || coordinator.sessionID != sessionID || coordinator.inkMode != inkMode || coordinator.size != contentSize || coordinator.toolViewport != toolViewport {
+            coordinator.surfaces.removeAllObjects()
             coordinator.host.rootView = content()
             coordinator.contentRevision = contentRevision
             coordinator.sessionID = sessionID; coordinator.inkMode = inkMode
@@ -119,7 +120,16 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
         var entranceSettled = false
         var entranceAnimator: UIViewPropertyAnimator?
         @objc func interactionBegan(_ gesture: UIGestureRecognizer) {
+            if [.ended, .cancelled, .failed].contains(gesture.state),
+               let scroll = gesture.view as? UIScrollView,
+               gesture is UIPanGestureRecognizer || gesture is UIPinchGestureRecognizer {
+                settleViewport(scroll)
+            }
             guard gesture.state == .began else { return }
+            if gesture is UIPanGestureRecognizer || gesture is UIPinchGestureRecognizer {
+                beginViewportInteraction()
+            }
+            guard !entranceCancelled else { return }
             entranceCancelled = true
             entranceSettled = true
             func finish(_ view: UIView) {
@@ -179,21 +189,62 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
         init(content: Content) { host = UIHostingController(rootView: content) }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { host.view }
-        func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            func publish(_ view: UIView) {
-                if let canvas = view as? DiaryCanvasSurface { canvas.publishSelectionViewportRect() }
-                view.subviews.forEach(publish)
+        let surfaces = NSHashTable<DiaryCanvasSurface>.weakObjects()
+        private var viewportActive = false
+        private var notificationPending = false
+        private var zoomPending = false
+        private func canvases() -> [DiaryCanvasSurface] {
+            if surfaces.allObjects.isEmpty {
+                func visit(_ view: UIView) {
+                    if let canvas = view as? DiaryCanvasSurface { surfaces.add(canvas) }
+                    view.subviews.forEach(visit)
+                }
+                visit(host.view)
             }
-            publish(host.view)
+            return surfaces.allObjects
         }
+        private func beginViewportInteraction() {
+            viewportActive = true
+            for canvas in canvases() { canvas.viewportInteractionBegan() }
+        }
+        private func settleViewport(_ scroll: UIScrollView) {
+            // UIKit 的结束回调可能早于 isDragging/isZooming 状态落定。
+            DispatchQueue.main.async { [weak self, weak scroll] in
+                guard let self, let scroll, !scroll.isDragging, !scroll.isDecelerating,
+                      !scroll.isZooming, !scroll.isZoomBouncing else { return }
+                self.flushViewportNotification()
+                self.viewportActive = false
+                for canvas in self.canvases() { canvas.viewportInteractionEnded() }
+            }
+        }
+        private func notifyViewport(zoom: Bool) {
+            zoomPending = zoomPending || zoom
+            guard !notificationPending else { return }
+            notificationPending = true
+            DispatchQueue.main.async { [weak self] in self?.flushViewportNotification() }
+        }
+        private func flushViewportNotification() {
+            guard notificationPending else { return }
+            notificationPending = false
+            let zoom = zoomPending; zoomPending = false
+            for canvas in canvases() {
+                if viewportActive { canvas.viewportInteractionBegan() }
+                if zoom { canvas.viewportDidZoom() }
+                else { canvas.publishSelectionViewportRect() }
+            }
+        }
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { beginViewportInteraction() }
+        func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) { beginViewportInteraction() }
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate { settleViewport(scrollView) }
+        }
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { settleViewport(scrollView) }
+        func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) { settleViewport(scrollView) }
+        func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { settleViewport(scrollView) }
+        func scrollViewDidScroll(_ scrollView: UIScrollView) { notifyViewport(zoom: false) }
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
             center(scrollView)
-            // 缩放后重画屏幕尺寸恒定的控制点，不修改任何作品坐标。
-            func redraw(_ view: UIView) {
-                if let canvas = view as? DiaryCanvasSurface { canvas.viewportDidZoom() }
-                view.subviews.forEach(redraw)
-            }
-            redraw(host.view)
+            notifyViewport(zoom: true)
         }
         func center(_ scroll: UIScrollView) {
             guard !isConfiguring else { return }

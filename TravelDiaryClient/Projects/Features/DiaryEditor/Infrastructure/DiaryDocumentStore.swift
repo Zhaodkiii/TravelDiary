@@ -3,6 +3,9 @@ import UIKit
 import ImageIO
 import CryptoKit
 import PencilKit
+#if DEBUG
+import ZIPFoundation
+#endif
 
 nonisolated enum DiaryEditorError: String, LocalizedError {
     case invalidImage, invalidDocument, unsupportedVersion, missingResource, exportFailed, staleObject, pageConflict, invalidName
@@ -209,6 +212,30 @@ nonisolated final class DiaryDocumentStore: Sendable {
                 try JSONEncoder().encode(Pointer(manifestPath: path)).write(to: current, options: .atomic)
             }
         }
+        await preparePhotoComposites(document)
+    }
+
+    /// 派生资源失败不影响已提交的作品；阅读时可以重建。
+    private func preparePhotoComposites(_ document: DiaryDocument) async {
+        guard document.objects.values.contains(where: { $0.layers.contains { $0.isPhotoFrame && $0.frameTargetID != nil } }) else { return }
+        guard let source = try? await run({ Loaded(document: document, images: try self.readImages(document, dimension: 1800)) }) else { return }
+        _ = await DiaryPhotoComposite.prepare(source, store: self)
+    }
+
+    nonisolated func readPhotoComposite(_ key: String, documentID: UUID) async -> UIImage? {
+        try? await run {
+            let url = self.assetDirectory(documentID).appendingPathComponent("derived/photo-composites/\(key).png")
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return UIImage(data: data)
+        }
+    }
+
+    nonisolated func writePhotoComposite(_ data: Data, key: String, documentID: UUID) async {
+        try? await run {
+            let url = self.assetDirectory(documentID).appendingPathComponent("derived/photo-composites/\(key).png")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        }
     }
 
     /// 所有页快照写好之后，一次发布整本目录；中途失败不会出现只替换一半的手帐。
@@ -230,6 +257,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
             try self.publish(book)
             for (id, revision) in revisions { self.opened.values[id] = revision }
         }
+        for document in documents { await preparePhotoComposites(document) }
     }
 
     func load(_ id: UUID) async throws -> Loaded {
@@ -836,11 +864,14 @@ extension DiaryDocumentStore {
 
     /// 预览读取不改变编辑会话的保存基线；浏览一本不会抢占某页编辑状态。
     nonisolated func loadPreviewSource(_ page: DiaryPageEntry, large: Bool) async throws -> Loaded {
-        try await run {
+        let source = try await run {
             let path = "revisions/\(page.revisionID.uuidString)/manifest.json"
             let doc = try self.readSnapshot(path, directory: self.directory(page.id), documentID: page.id)
             return Loaded(document: doc, images: try self.readImages(doc, dimension: large ? 1800 : 480))
         }
+        // 固定使用大图源生成持久化资源，避免缩略图先访问时污染阅读清晰度。
+        if large { return await DiaryPhotoComposite.prepare(source, store: self) }
+        return source
     }
     /// 导出使用目录捕获的不可变页版本，不改变正在编辑页面的保存基线。
     func loadPDFSource(_ page: DiaryPageEntry) async throws -> Loaded {
@@ -1236,3 +1267,72 @@ extension DiaryDocumentStore {
         }
     }
 }
+
+#if DEBUG
+extension DiaryDocumentStore {
+    /// 仅开发导入：完整校验后发布，同 ID 以用户选中的整本数据为准。
+    func debugImportBook(from url: URL) async throws -> DiaryBook {
+        try await run {
+            let fm = FileManager.default
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            let temp = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try fm.createDirectory(at: temp, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: temp) }
+            let unpacked = temp.appendingPathComponent("unpacked")
+            if try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true {
+                try fm.copyItem(at: url, to: unpacked)
+            } else {
+                try fm.createDirectory(at: unpacked, withIntermediateDirectories: true)
+                let archive = try Archive(url: url, accessMode: .read)
+                var total: UInt64 = 0
+                for entry in archive {
+                    total += UInt64(entry.uncompressedSize)
+                    guard total <= 2_000_000_000, entry.type != .symlink,
+                          !entry.path.hasPrefix("/"), !entry.path.split(separator: "/").contains("..") else {
+                        throw DiaryEditorError.invalidDocument
+                    }
+                }
+                try fm.unzipItem(at: url, to: unpacked)
+            }
+            guard let files = fm.enumerator(at: unpacked, includingPropertiesForKeys: [.isSymbolicLinkKey]) else { throw DiaryEditorError.invalidDocument }
+            var roots: [URL] = []
+            for case let file as URL in files {
+                guard try file.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else { throw DiaryEditorError.invalidDocument }
+                if file.lastPathComponent == "book.json", !file.path.contains("/__MACOSX/") { roots.append(file.deletingLastPathComponent()) }
+            }
+            guard roots.count == 1, let source = roots.first else { throw DiaryEditorError.invalidDocument }
+            var book = try JSONDecoder().decode(DiaryBook.self, from: Data(contentsOf: source.appendingPathComponent("book.json")))
+            guard book.format == "TravelDiary.Book", book.schemaVersion == 1,
+                  Set(book.pages.map(\.id)).count == book.pages.count else { throw DiaryEditorError.invalidDocument }
+            let target = DiaryDocumentStore(ownerID: self.ownerID, bookID: book.id)
+            for page in book.pages + book.trashedPages.map(\.entry) {
+                let directory = source.appendingPathComponent("pages/\(page.id)")
+                let document = try target.readSnapshot("revisions/\(page.revisionID)/manifest.json", directory: directory, documentID: page.id)
+                for asset in document.assets.values {
+                    _ = try Self.decode(Data(contentsOf: target.resolve(asset.path, in: source)), maximumDimension: 64)
+                }
+            }
+            // 导入的日期可能来自外部工具；统一发布为本机新目录版本。
+            book.updatedAt = Date(); book.catalogRevision = UUID()
+            try JSONEncoder().encode(book).write(to: source.appendingPathComponent("book.json"), options: .atomic)
+            try fm.createDirectory(at: self.libraryRoot, withIntermediateDirectories: true)
+            let incoming = self.libraryRoot.appendingPathComponent(".import-" + UUID().uuidString)
+            let backup = self.libraryRoot.appendingPathComponent(".replaced-" + UUID().uuidString)
+            let destination = self.libraryRoot.appendingPathComponent(book.id.uuidString)
+            try fm.copyItem(at: source, to: incoming)
+            defer { try? fm.removeItem(at: incoming) }
+            let replacing = fm.fileExists(atPath: destination.path)
+            if replacing { try fm.moveItem(at: destination, to: backup) }
+            do { try fm.moveItem(at: incoming, to: destination) }
+            catch {
+                if replacing { try? fm.moveItem(at: backup, to: destination) }
+                throw error
+            }
+            if replacing { try? fm.removeItem(at: backup) }
+            try? fm.removeItem(at: self.storagePaths.previews(self.ownerID).appendingPathComponent(book.id.uuidString))
+            return book
+        }
+    }
+}
+#endif

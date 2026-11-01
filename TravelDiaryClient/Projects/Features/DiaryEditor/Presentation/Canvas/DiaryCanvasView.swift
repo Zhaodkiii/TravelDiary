@@ -129,11 +129,16 @@ final class DiaryCanvasSurface: UIView {
             renderTask?.cancel(); renderTask = nil
             resolutionTask?.cancel(); resolutionTask = nil
             preview = nil
+            viewportInteracting = false; viewportNeedsRefresh = false
         } else { refresh(force: true) }
     }
 
     /// 发布保存状态或选择变化时只刷新轻量选框，不访问对象树。
+    private(set) var viewportInteracting = false
+    private var viewportNeedsRefresh = false
+
     func refresh(force: Bool = false) {
+        guard !viewportInteracting else { viewportNeedsRefresh = true; return }
         guard let session, fit > 0, bounds.height > 0 else { return }
         if lastDraftLayer != nil && session.transformDraft == nil {
             preview=nil; warpStart=nil; warpHandle=nil
@@ -196,6 +201,7 @@ final class DiaryCanvasSurface: UIView {
         layer.semanticKind == .background || layer.isLibraryBackground == true
     }
     func finishEntrance() {
+        guard !entranceFinished || entrancePlaying else { return }
         entranceFinished = true
         entrancePlaying = false
         entranceWork.forEach { $0.cancel() }; entranceWork.removeAll()
@@ -318,6 +324,7 @@ final class DiaryCanvasSurface: UIView {
     }
 
     private func scheduleRasters() {
+        guard !viewportInteracting else { viewportNeedsRefresh = true; return }
         renderTask?.cancel()
         let fonts = renderCache.document.objects.values.flatMap { $0.layers.compactMap(\.font) }
         let fontDocumentID = renderCache.document.id
@@ -325,7 +332,7 @@ final class DiaryCanvasSurface: UIView {
             await DiaryFontCatalog.shared.prewarm(fonts, documentID: fontDocumentID)
             // 逐个提交对象预览，在对象之间让出主线程，避免一次生成整页大位图。
             while !Task.isCancelled {
-                guard let self else { return }
+                guard let self, !self.viewportInteracting else { return }
                 guard let next = self.renderCache.ordered.first(where: { $0.source.visible && $0.needsRaster }) else {
                     self.renderCache.rasterizeInk()
                     self.updateArtwork()
@@ -339,13 +346,34 @@ final class DiaryCanvasSurface: UIView {
         }
     }
 
+    /// 手势期间只让 Core Animation 变换已有位图，所有清晰度工作延后。
+    func viewportInteractionBegan() {
+        guard !viewportInteracting else { return }
+        viewportInteracting = true
+        resolutionTask?.cancel(); resolutionTask = nil
+        renderTask?.cancel(); renderTask = nil
+    }
+
+    func viewportInteractionEnded() {
+        guard viewportInteracting else { return }
+        viewportInteracting = false
+        let refreshNeeded = viewportNeedsRefresh
+        viewportNeedsRefresh = false
+        if refreshNeeded { refresh(force: true) }
+        else { scheduleRasters() }
+    }
+
     func viewportDidZoom() {
         publishSelectionViewportRect()
         selectionOverlay.setNeedsDisplay()
+        viewportNeedsRefresh = true
+        guard !viewportInteracting else { return }
         resolutionTask?.cancel()
         resolutionTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
-            self?.refresh(force: true)
+            guard let self, !self.viewportInteracting else { return }
+            self.viewportNeedsRefresh = false
+            self.refresh(force: true)
         }
     }
 
