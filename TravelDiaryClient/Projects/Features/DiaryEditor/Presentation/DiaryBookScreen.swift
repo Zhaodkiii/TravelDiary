@@ -310,14 +310,15 @@ struct DiaryBookScreen: View {
         guard !busy else { return }; busy = true
         defer { busy = false }
         do {
-            let blank = try await store.createBlankPage(size: book.defaultPageSize, bookID: book.id)
-            var document = blank.document
-            var images = blank.images
+            var document = DiaryDocument()
+            document.bookID = book.id
+            document.objects[document.rootContentID]?.referenceSize = book.defaultPageSize
+            var images: [UUID: UIImage] = [:]
             if let data {
                 let (asset, image) = try await store.importImage(data, documentID: document.id)
                 document.assets[asset.id] = asset; images[asset.id] = image
                 document.objects[document.rootContentID]?.layers.insert(
-                    DiaryLayer.photoBackground(asset: asset, pageSize: book.defaultPageSize), at: 1)
+                    DiaryLayer.photoBackground(asset: asset, pageSize: book.defaultPageSize), at: 0)
             }
             try await store.save(document)
             await refresh()

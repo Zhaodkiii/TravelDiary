@@ -1,0 +1,347 @@
+{
+  "purpose": "同一Seedream模型的Skill提示词移植对照；并非各Skill原默认生图引擎的性能比较。",
+  "collectionBranch": "watercolor-travel-card，仅测试合集的这一分支；其余分支未声称覆盖。",
+  "files": [
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/README.zh.md",
+      "sha256": "7ca79f38a7932edfc41e116a89b23b494f7038e6ec69a2caf620b7da0f784f27"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/CHANGELOG.md",
+      "sha256": "1d39555cf185b5a243b0f34e243fc39a2f9a1f1c44830afb5de3562c26ac0caf"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/README.md",
+      "sha256": "e0fd0738cba2b955a6c79c9332838fb7656040fff65b66a3921230e0a2ec1f54"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/REFERENCES.md",
+      "sha256": "4d43fd49246a55d338ee0f791ddc22100331979553c30201cdcb7319761925c5"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/SKILL.md",
+      "sha256": "8274bc1f30a92a9dc715c03c3fb9aeaa060fb5a12fd58dfe8d977ae98a26bd76"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/ASSET-LICENSE.md",
+      "sha256": "1a02a8b7a3bae6b21bb5182d6865a5d4db66777a8c5c064c64c84756eebf257f"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/evals/evals.json",
+      "sha256": "8e1c1dbd6c475aedf9ba58c74c4f67990b11649313b075e44eda6123f9236596"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/evals/schema.json",
+      "sha256": "f3c7ed82148c78d1f49717e8eb237c60e97c2f8d517620fd31f278b1136ce7c0"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/design-system/imperfections.json",
+      "sha256": "e281a1c7fb183af973179a7588df5745527a231462681797850227e791372715"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/design-system/typography.json",
+      "sha256": "b20f558444aab2c93b6339b76aa3178ae9e04e25eed1059cd2db8044733db26f"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/design-system/carriers.json",
+      "sha256": "32ad6bd5917c8d5ad4b0c8f78006848f941489649824f0857a7a94685914a8d7"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/design-system/compositions.json",
+      "sha256": "8faec6d102a6dcf15a465123f00265609afe271dd2998baa0d56f0fb39105703"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/design-system/rhythm.json",
+      "sha256": "02c8c4ca0bba218feeca7311b35b61362972bded129f050b288a384d61c0c920"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/design-system/BOARD-DIRECTION.md",
+      "sha256": "84411f1a4d410fa324bc57b2693abfe0380090042232c64d46f8152a51b99308"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/单色编辑印刷/design-system/colors.json",
+      "sha256": "e299d6b4a2ec36e2e59b7095b85bae5f13609f505d21c9a83561088f7c446b48"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/拾景纸刊旅行手账背景生成/SKILL.md",
+      "sha256": "ba6957783c5557d9d40c046a9f211dec30775b23bfe69699aacfc184ff013791"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/拾景纸刊旅行手账背景生成/references/prompt-template.md",
+      "sha256": "1441d608fc2d71d0e9d1ac7903e5b597e4908004788f19e25c8df8168f0be5cb"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/ASSETS.md",
+      "sha256": "e715497d6b43fb1fbf0f322b4b16cabd5c35f3ad8ba6365c0bfab5b2d2aca7a1"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/CHANGELOG.md",
+      "sha256": "af7071f0f2ea05f26847532482a041e198bd672948c83ce902fcf659a3c9d80b"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/README.md",
+      "sha256": "ba563ec3da1a3a17737c0c58be06b02df4f0d623bf7e9034571056b1b524cae2"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/README_EN.md",
+      "sha256": "ed1daf66c7da5ecc553e3c2ee38ade834cf8a1d7220591a5638bf8c0e45e2082"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/references/heytea-doodle-poster-prompt.zh-CN.md",
+      "sha256": "51fb3e72858aa3e2f8cefcb1588ca9137a7160016b6ea16971a3fe805b53727a"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/references/heytea-doodle-poster-prompt.en.md",
+      "sha256": "1dc9ba1215d76e071add1fe9f5676e4ae8a580b431295d8e95d101be3ee7fb56"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/docs/validation.md",
+      "sha256": "214813759efeb0c906ae303afd5e44c66713891095c6dff37e4c4a94cdc539ca"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/examples/croissant.md",
+      "sha256": "9fa7c86867bdc0ed44c99c686426ad001a7bbc6f1affb9e4611a1642e4cbb29d"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/examples/sneaker.md",
+      "sha256": "d77e1e70ced6759f51453cf9b7cf4de7bd895d48a1a593750976db7a1cbe390f"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/examples/pancakes.md",
+      "sha256": "9ebf9bb7fdbca5402b339e82793b053ee0a94c0e6cc936517482183228b9106b"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/examples/portrait.md",
+      "sha256": "b16bf5705e338b4bf266c2554edb5c98bd733f8e52a3ce4cf7fc1d04844bdb26"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/examples/earbuds.md",
+      "sha256": "43e7e4d427f0d5349aae1b54fb15e6b0a8e4b97465216729a7b0a190dd7d08bc"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/examples/manifest.json",
+      "sha256": "0b8766ad1cc98c707eac344ea035818bcbfc11ec82152e47399003c1f424bd2e"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/examples/plant.md",
+      "sha256": "f9273f1cd3ec2284814c14bcae079a93aa98f218d7adaf6b02d60b007caea25a"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/喜茶风涂鸦海报/skills/heytea-doodle-poster/SKILL.md",
+      "sha256": "48918f39e1a6fd02186d8f6e2b5fb9bae31fff455c8ed7d100fc8faa6f0d3314"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/README.en.md",
+      "sha256": "eb92790df0743a9c56e4f838c85cc09c47a1ba628d2a23b6006a22ed6ca4a51a"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/README.ar.md",
+      "sha256": "57d0c1383eb1639a1e7e1cd3b024029e195df88d9c52765f35cd3bf3ff7c5c76"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/README.md",
+      "sha256": "6e64f8fe2a6a31801f21d517bfa4c02e5dc9e39b07c827e269b39ac98b9f415d"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/README.ja.md",
+      "sha256": "408e7f0bb551517991bfaa8996ca0b102a056402699d280a52a2e8bd8f1d16f6"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/SKILL.md",
+      "sha256": "5140d2f3953d76fd80dcdc7c8c8a83ee1ae099038425b6d7513be20ed2106f4c"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/README.ko.md",
+      "sha256": "98d912818c229afaf5e20b5c409c6c797ee13b8835667ac78bc7d27e4801c988"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/references/runtime-preferences.md",
+      "sha256": "44155888e7693f1afbb24d5f6948b13d51b0114bdb61e07e8ae3b7da8a5bf978"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/references/readme-profile.json",
+      "sha256": "e676c8dd8e2e3432a57d389c36f50db72df59f96c3a45de1dbda51226164aabc"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/references/xxd-panel-115-prompt.zh-CN.md",
+      "sha256": "7ca3098456398dce48a3b23c9653b1137a129867017f5b0d500c5c33ff3b682b"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/references/xxd-panel-115-prompt.en.md",
+      "sha256": "9b61f4d06c836c7c4de44ef7e26348d9c71fa94ef40dc6579572fe53fa6bb77e"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/references/sample-workflow.md",
+      "sha256": "4a3213b7167008bd0880af2a9f3b30c6587572ab9071bd31b7bd76cf3d64d070"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/references/soldier-runtime.md",
+      "sha256": "aa1e88d6525380c1bd72f93f1075260011543d76bc01d50422b9699a2b7d5f5e"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/references/original-prompt/ar.md",
+      "sha256": "0c98814951ccd8d03ac67d3385cda4fbe0f39449b42a95ccff42388eab6b7263"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/references/original-prompt/en.md",
+      "sha256": "69173bdaf9e89d8c92d9086c93c155649da010c969c99a8d10bcae6fc872937b"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/references/original-prompt/zh-CN.md",
+      "sha256": "2d1f6ed027dcc6844449a75f9491f7b30877950ee4560f7591b1d20dcb67bdeb"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/references/original-prompt/README.md",
+      "sha256": "818781d17a12117c216c0e1a37074b428b1e312c2d9eaabcdbcb8839e8a07260"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/references/original-prompt/ja.md",
+      "sha256": "5ef488b8e94757cf7d297dd16acc6ec19590c1ef0b304270158c1ecfade458af"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/references/original-prompt/ko.md",
+      "sha256": "db93bc19ff1c8aa770f66a4264cd7a0af2dde64a66ad13fb3fc241d78dbbee07"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/小小东图像设计115/assets/examples/README.md",
+      "sha256": "16f12d085b83c7478b6cfaf4e38233c381262dc6d2d23b4c07e1c28f778f49c6"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片遗迹编辑版画/README.md",
+      "sha256": "a71855a148bac22e620ddfc733d50a7748745abc6005d263c79b0f9b966b745f"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片遗迹编辑版画/SKILL.md",
+      "sha256": "9f7665be38b31c1e0f9db6d3dea10dca60b29ad71722224faf753ee5c3b18501"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片遗迹编辑版画/references/afterimage-editorial-prompt.md",
+      "sha256": "729b4d4081063515178314444cd1e23a00a38510d1f73d7b25d191d09c45a2ae"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/README.md",
+      "sha256": "66ce5da88a96809a63bad2a6a0940458df3a863a8dfdc4993e81e58dd5de135b"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/memory-diary-duet/SKILL.md",
+      "sha256": "8d8ab8ef15a1147544588e3eb2a4ee16a5bca3aaf2c3f36d24dac8f12b9fabe6"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/gouache-travel-still-life/SKILL.md",
+      "sha256": "65f69099aff5e6b16fac1dc9f3dd0a0daa78ffeb1696b4333fafa5b5da9e46c5"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/impasto-miniature-landscape/SKILL.md",
+      "sha256": "fb1749175459bc9161f7568e49c226e57eb05ae204fdc16ea2e2f4c3c3518222"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/charcoal-fading-travel-study/SKILL.md",
+      "sha256": "4db298a473e3c2d735153ad016ff43b1cdbc3d0f3bd2b1755fedbd84faf9efe5"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/folk-ink-landmark-portrait/SKILL.md",
+      "sha256": "9878f37e744048b978b68041b049500de1a4965cda385e473658be703d20464f"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/papercraft-travel-diorama/SKILL.md",
+      "sha256": "45650f15973ff1eb1da72996697f18409b6a3d7fcbd615382b974120fdcec8ae"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/nostalgic-travel-duet/SKILL.md",
+      "sha256": "5dfc3a57a25ae85ae31d3aa502895119eace4886f7beca431b28ee6bc1011d72"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/pixel-dissolve-landscape/SKILL.md",
+      "sha256": "7e506be997bc3a230de6e67c903056d82d3fbf1fa2350e0b9f06a27e2481dfe8"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/watercolor-travel-card/SKILL.md",
+      "sha256": "2ec45897d2f91766caea0726a091f1eae3023216d8c657926999e696955a0acd"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/kraft-stencil-landmark/SKILL.md",
+      "sha256": "62c78b6b88ab3acdc2e3750c6e5e4a669ae2cb486aee0e1e3cf280d637cdc3e3"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/paper-cutout-travel-figures/SKILL.md",
+      "sha256": "64783ebf030e0a0d6544bfb36f79d485412add2e5e67fc2bcde4dc6dd337ea7a"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/isometric-healing-blocks/SKILL.md",
+      "sha256": "3024e6c74c597031e833b494f2fb46b4e99adf7ee97133318bf36922c6eb2eeb"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/clean-ink-zen-memory/SKILL.md",
+      "sha256": "fee5ad3b56306d85b85a31015337c35bee1fc0c5a5861784d2f7549924d614c0"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/observational-pen-wash/SKILL.md",
+      "sha256": "3ba1ae5435fb074b861de3983818907ac72edac2c706d4a71aa9eca468b2459d"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/gouache-travel-still-life/references/split-still-life.md",
+      "sha256": "bd981f1b137177a4d8bb50170964709f233d1d9e1e0f831bad6a29defd62093c"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/gouache-travel-still-life/references/full-canvas-still-life.md",
+      "sha256": "ffe7f3138409041a9e5656cf54a1a4eef346fe6ccd467aa448229c216360d8f5"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/gouache-travel-still-life/references/full-scene-painting.md",
+      "sha256": "6088492f8b8edc85a2d44e451331bc6ae11a4db3bd36b5782e572f357d1b25fc"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/charcoal-fading-travel-study/references/split-comparison.md",
+      "sha256": "4295c90ccd407428d93c124973545ae19909a39a1e5f8866da293763d665ad63"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/charcoal-fading-travel-study/references/full-canvas.md",
+      "sha256": "0b38b6f98a90772eb9c4cdb353645cc8eae1adf15868a7160881772eb0927da2"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/folk-ink-landmark-portrait/references/split-comparison.md",
+      "sha256": "99e4233312604d722c65b92a09f8280afeff6a311ef857098c2b3416202e4518"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/folk-ink-landmark-portrait/references/full-canvas.md",
+      "sha256": "f056cfa3617431f5ac710d9a8c8dd6eae65f612ab2bc861b7a8376e307f94d3b"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/nostalgic-travel-duet/references/split-comparison.md",
+      "sha256": "4dce20d6f48ffd94a63a49eea1bf38d54df334b541708b9be451a0ca9019a2fa"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/nostalgic-travel-duet/references/full-canvas.md",
+      "sha256": "ade9126aa7c161b6896177de45dd8ac2f40405d032fc4e40bd2b2efccfb33bf9"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/kraft-stencil-landmark/references/split-comparison.md",
+      "sha256": "c9e8610c1fe2c50fc604b6f2228b14074a2818ab76308d97cd5f4d380809ebc8"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/kraft-stencil-landmark/references/full-canvas.md",
+      "sha256": "e9005be57b411f552ccfbfa67b778062e75b8f250de98d2fda818b963dad77e9"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/paper-cutout-travel-figures/references/split-comparison.md",
+      "sha256": "3415260491a6bc8db5c77e9e9dbf6d1acd32549b014c2c24cb1f00eec7463077"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/paper-cutout-travel-figures/references/full-canvas.md",
+      "sha256": "cfd6951cecc76c3da804e08a430e3df77f566fb8e26f125b708c62f5fb732133"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/clean-ink-zen-memory/references/split-comparison.md",
+      "sha256": "5d8ea38b6f64940238f8ab6d97a3dd9caceeaf8d8ca169a15ca8354935efa384"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/照片艺术海报技能合集/skills/clean-ink-zen-memory/references/full-canvas.md",
+      "sha256": "ed7061f7e9a08de10ff1f0734a4f5b6b2046bc4b537d838b9ae114639f1d66d1"
+    },
+    {
+      "file": "/Users/dream/Documents/Skill/城市旅行手账创作/SKILL.md",
+      "sha256": "35ea8d53c146734cf553572c79fe7cb0bd474886a2bb500053ab581a9cde1d3e"
+    }
+  ],
+  "cityAdaptation": "制作风格试验已被用户否决；独立city预设及对应生产提示词已移除。用户随后选定连续场景融入纸面的纸刊方向，允许局部手撕纸。"
+}

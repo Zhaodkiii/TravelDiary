@@ -29,6 +29,143 @@ import SwiftUI
         while w.running && Date() < end { try await Task.sleep(for: .milliseconds(20)) }
         #expect(!w.running)
     }
+    /// Explicitly opt-in: twelve paid image requests, never run during ordinary regression.
+    @Test func liveStyleStudy() async throws {
+        let marker = URL(fileURLWithPath: "/tmp/traveldiary-style-study-enabled")
+        guard let roundData = try? Data(contentsOf: marker), let round = String(data: roundData, encoding: .utf8), ["baseline", "optimized", "verify"].contains(round) else { return }
+        let root = URL(fileURLWithPath: "/tmp/DiaryStyleStudy")
+        let source = try DiaryAIBackgroundImaging.jpeg(Data(contentsOf: root.appendingPathComponent("source.image")))
+        let sourceImage = try #require(UIImage(data: source))
+        let size = CGSize(width: 1311, height: 939)
+        let bounds = CGRect(x: 110, y: 230, width: 360, height: 450)
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
+        let reference = try #require(UIGraphicsImageRenderer(size: size, format: format).image { ctx in
+            UIColor(white: 0.975, alpha: 1).setFill(); ctx.fill(CGRect(origin: .zero, size: size))
+            sourceImage.draw(in: bounds)
+        }.jpegData(compressionQuality: 0.9))
+        let object = DiaryAIObject(id: UUID(), shortID: "L1", name: "山谷徒步", role: "photo", center: CGPoint(x: bounds.midX, y: bounds.midY), bounds: bounds, scale: 1, angle: 0, locked: false, visible: true, editable: true, assetIDs: [])
+        let guide = try DiaryAIBackgroundImaging.occupancyGuide(canvas: size, objects: [object])
+        try source.write(to: root.appendingPathComponent("source.jpg"))
+        try reference.write(to: root.appendingPathComponent("layout.jpg"))
+        try guide.write(to: root.appendingPathComponent("guide.jpg"))
+        let prompts = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: root.appendingPathComponent("skill-prompts.json")))
+        let filter = (try? Data(contentsOf: root.appendingPathComponent("style-filter.json"))).flatMap { try? JSONDecoder().decode([String].self, from: $0) }
+        let styles = DiaryAIBackgroundStyle.all.filter { filter == nil || filter!.contains($0.id) }
+        #expect(!styles.isEmpty)
+        for start in stride(from: 0, to: styles.count, by: 3) {
+            let tasks = styles[start..<min(start + 3, styles.count)].map { style in
+                Task { @MainActor in
+                    let directory = root.appendingPathComponent(style.id)
+                    do {
+                        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                        let log = DiaryAIProductionLog(owner: "style-study", page: UUID(), root: directory)
+                        let client = DiarySeedreamBackgroundProvider(); client.productionLog = log
+                        if round == "baseline" && !FileManager.default.fileExists(atPath: directory.appendingPathComponent("skill.png").path) {
+                            let prompt = try #require(prompts[style.id])
+                            try Data(prompt.utf8).write(to: directory.appendingPathComponent("skill-prompt.txt"))
+                            let url = try await client.generate(reference: source, prompt: prompt)
+                            let bytes = try await client.download(url)
+                            try bytes.write(to: directory.appendingPathComponent("skill.png"))
+                            print("STYLE_STUDY skill \(style.id) complete")
+                        }
+                        let resultFile = directory.appendingPathComponent(round + ".png")
+                        if round != "verify" && !FileManager.default.fileExists(atPath: resultFile.path) {
+                            let context = "画幅1311×939；唯一真实照片L1边界x110,y230,w360,h450；右上和右侧大片空隙，左上安静。来源只认本图。风格：" + style.name + "；" + style.brief + "；强度中。" + style.sceneDirection("中")
+                            let design = try await client.design(reference: reference, context: context)
+                            try Data(design.brief.utf8).write(to: directory.appendingPathComponent(round + "-brief.txt"))
+                            let prepared: String
+                            do { prepared = try DiarySeedreamBackgroundProvider.preparePrompt(design.prompt) }
+                            catch { prepared = try await client.repairPrompt(design.prompt) }
+                            let prompt = DiaryAIBackgroundStyle.generationPrompt(design: prepared, style: style, strength: "中", size: size)
+                            try Data(prompt.utf8).write(to: directory.appendingPathComponent(round + "-prompt.txt"))
+                            let url = try await client.generate(reference: guide, prompt: prompt)
+                            let bytes = try await client.download(url)
+                            try bytes.write(to: resultFile)
+                            let fitted = try DiaryAIBackgroundImaging.prepare(bytes, canvas: size)
+                            try fitted.write(to: directory.appendingPathComponent(round + "-fitted.png"))
+                            let background = try #require(UIImage(data: fitted))
+                            let composed = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+                                background.draw(in: CGRect(origin: .zero, size: size)); sourceImage.draw(in: bounds)
+                            }
+                            try composed.pngData()?.write(to: directory.appendingPathComponent("composed.png"))
+                            do {
+                                try await client.validate(reference: reference, background: fitted, style: style)
+                                try Data("accepted".utf8).write(to: directory.appendingPathComponent(round + "-validation.txt"))
+                            } catch {
+                                try Data(error.localizedDescription.utf8).write(to: directory.appendingPathComponent(round + "-validation.txt"))
+                            }
+                            print("STYLE_STUDY \(round) \(style.id) complete")
+                        }
+                        if round == "verify" {
+                            let fitted = try Data(contentsOf: directory.appendingPathComponent("optimized-fitted.png"))
+                            let background = try #require(UIImage(data: fitted))
+                            let composed = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+                                background.draw(in: CGRect(origin: .zero, size: size)); sourceImage.draw(in: bounds)
+                            }
+                            try composed.pngData()?.write(to: directory.appendingPathComponent("composed.png"))
+                            do {
+                                try await client.validate(reference: reference, background: fitted, style: style)
+                                try Data("accepted".utf8).write(to: directory.appendingPathComponent("style-validation.txt"))
+                            } catch {
+                                try Data(error.localizedDescription.utf8).write(to: directory.appendingPathComponent("style-validation.txt"))
+                            }
+                        }
+                    } catch {
+                        try? Data(error.localizedDescription.utf8).write(to: directory.appendingPathComponent(round + "-error.txt"))
+                        Issue.record("Style study \(style.id): \(error.localizedDescription)")
+                    }
+                }
+            }
+            for task in tasks { await task.value }
+        }
+    }
+    @Test func liveBook8FullFlowBenchmark() async throws {
+        guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-fullflow-benchmark-enabled") else { return }
+        let output = URL(fileURLWithPath: "/tmp/TravelDiaryBook8Validation/fullflow-benchmark")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let parent = output.deletingLastPathComponent()
+        let input = try #require(FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil).first { $0.lastPathComponent.hasPrefix("已排版项目-") })
+        let root = output.appendingPathComponent("sandbox-" + UUID().uuidString)
+        let owner = "background-live"
+        let book = try await DiaryDocumentStore(ownerID: owner, baseDirectory: root).debugImportBook(from: input)
+        let page = try #require(book.pages.first { $0.id.uuidString == "E7377B9C-4F4B-4943-B1F4-460568CB6748" })
+        let store = DiaryDocumentStore(ownerID: owner, baseDirectory: root, bookID: book.id)
+        let loaded = try await store.load(page.id)
+        let session = DiaryEditorSession(document: loaded.document, images: loaded.images, store: store)
+        let before = session.document
+        let w = DiaryAIWorkspace(session: session, root: root)
+        var r = DiaryAIRequest.defaults(.relayout); r.allowsText = true; r.background = .init(saveToAlbum: false); r.scene = "山野徒步"; r.location = "雨崩"
+        await w.enter(r); w.processAll()
+        let deadline = Date().addingTimeInterval(1200)
+        var count = 0
+        while w.running && Date() < deadline {
+            if w.events.count != count {
+                count = w.events.count
+                if let e = w.events.last { print("BACKGROUND_LIVE \(e.title) \(e.detail.prefix(200))") }
+                try JSONEncoder().encode(w.events).write(to: output.appendingPathComponent("events.json"), options: .atomic)
+            }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        try JSONEncoder().encode(w.events).write(to: output.appendingPathComponent("events.json"), options: .atomic)
+        if let png = w.backgroundPreview?.pngData() { try png.write(to: output.appendingPathComponent("background.png")) }
+        if let jpg = w.preview?.jpegData(compressionQuality: 0.9) { try jpg.write(to: output.appendingPathComponent("composed.jpg")) }
+        print("BACKGROUND_LIVE_RESULT \(w.error ?? w.stage)")
+        #expect(!w.running && w.backgroundRecord?.layerID != nil)
+        #expect(w.error == nil)
+        guard w.backgroundRecord?.layerID != nil else { return }
+        #expect(w.backgroundRecord?.verified == true)
+        #expect(await w.save())
+        let reopened = try await store.load(page.id)
+        let exported = output.appendingPathComponent("背景生成项目-" + UUID().uuidString)
+        try await store.exportSourceFiles(try await store.loadBook(), to: exported)
+        print("BACKGROUND_EXPORT \(exported.path)")
+        #expect(reopened.document.root.layers.first?.semanticKind == .background)
+        for layer in before.root.layers where layer.semanticKind != .background && layer.isLibraryBackground != true {
+            #expect(reopened.document.layer(layer.id) != nil)
+        }
+        session.undo()
+        #expect(session.scopeLayers == before.root.layers)
+    }
     @Test func liveBook8Background() async throws {
         guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-background-live-enabled") else { return }
         let output = URL(fileURLWithPath: "/tmp/TravelDiaryBook8Validation/background")
@@ -150,11 +287,11 @@ import SwiftUI
         w.generateBackground()
         #expect(provider.generations == 0)
         await w.skipPendingText()
-        #expect(!w.needsTextCompletion)
+        #expect(w.needsTextCompletion && !w.canContinueText)
         await w.keepForLater()
         let restored = DiaryAIWorkspace(session: session, root: root, backgroundProvider: provider, albumSaver: album)
         await restored.enter(r)
-        #expect(!restored.needsTextCompletion)
+        #expect(restored.needsTextCompletion && !restored.canContinueText)
     }
     @Test func promptRepairKeepsThemeAndDoesNotEraseSubjectInstructions() throws {
         let source = "左上区域在照片后方延展淡黄色与淡粉色的小色块与细黑线条。右侧中部照片群之后，用细黑线勾一条柔和的屋檐轮廓。"
@@ -193,6 +330,21 @@ import SwiftUI
         let bytes = try DiaryAIBackgroundImaging.prepare(image(CGSize(width: 1400, height: 1000)), canvas: CGSize(width: 4370, height: 3130))
         let cg = try #require(UIImage(data: bytes)?.cgImage)
         #expect(cg.width * 3130 == cg.height * 4370)
+    }
+    @Test func selectedStyleReachesGenerationAndQualityCheckWithoutExtraRequests() async throws {
+        for style in DiaryAIBackgroundStyle.all {
+            let (session, root) = try await fixture()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let provider = BackgroundFake(try image()), album = BackgroundAlbumFake()
+            let workspace = DiaryAIWorkspace(session: session, root: root, backgroundProvider: provider, albumSaver: album)
+            var r = request(); r.background?.style = style.id; r.background?.saveToAlbum = false
+            await workspace.enter(r); workspace.processAll(); try await wait(workspace)
+            #expect(workspace.error == nil)
+            #expect(provider.checkedStyle == style.id)
+            #expect(provider.generatedPrompt?.contains(style.name) == true)
+            #expect(provider.generations == 1 && provider.validations == 1)
+            #expect(album.saves == 0 && workspace.backgroundRecord?.verified == true)
+        }
     }
     @Test func requestContractAndBackwardDecoding() throws {
         let body = DiarySeedreamBackgroundProvider.body(reference: Data([1,2]), prompt: "背景")
@@ -260,10 +412,11 @@ import SwiftUI
 
 @MainActor final class BackgroundFake: DiaryAIBackgroundProvider {
     var data: Data; var generations = 0; var downloads = 0; var validations = 0
+    var checkedStyle: String?; var generatedPrompt: String?
     var failDownload = false; var failQuality = false; var delay = false
     init(_ data: Data) { self.data = data }
     func generate(reference: Data, prompt: String) async throws -> URL {
-        generations += 1
+        generations += 1; generatedPrompt = prompt
         if delay { try? await Task.sleep(for: .milliseconds(200)) }
         return URL(string: "https://example.com/background.png")!
     }
@@ -271,6 +424,10 @@ import SwiftUI
         downloads += 1
         if failDownload { failDownload = false; throw URLError(.networkConnectionLost) }
         return data
+    }
+    func validate(reference: Data, background: Data, style: DiaryAIBackgroundStyle) async throws {
+        checkedStyle = style.id
+        try await validate(reference: reference, background: background)
     }
     func validate(reference: Data, background: Data) async throws {
         validations += 1

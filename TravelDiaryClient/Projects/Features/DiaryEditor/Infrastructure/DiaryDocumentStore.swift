@@ -137,27 +137,6 @@ nonisolated final class DiaryDocumentStore: Sendable {
         return DiaryPhotoSlot(corners: [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0), CGPoint(x: 1, y: 1), CGPoint(x: 0, y: 1)], maskAssetID: nil)
     }
 
-    /// 新建画布统一铺设锁定的旧纸装饰，资源随页面保存，不参与背景替换。
-    func createBlankPage(size: CGSize, bookID: UUID?) async throws -> Loaded {
-        guard let bundleURL = Bundle.main.url(forResource: "DiaryBackgrounds", withExtension: "bundle") else {
-            throw DiaryEditorError.missingResource.logged()
-        }
-        let data = try Data(contentsOf: bundleURL.appendingPathComponent("old-paper.webp"))
-        var document = DiaryDocument()
-        document.bookID = bookID
-        document.objects[document.rootContentID]?.referenceSize = size
-        let (asset, image) = try await importImage(data, documentID: document.id)
-        document.assets[asset.id] = asset
-        var decoration = DiaryLayer(name: "旧纸底色", kind: .sticker,
-            transform: DiaryTransform(position: CGPoint(x: size.width / 2, y: size.height / 2),
-                                      pivot: CGPoint(x: size.width / 2, y: size.height / 2)),
-            size: size, assetID: asset.id)
-        decoration.semanticKind = .illustration
-        decoration.locked = true
-        document.objects[document.rootContentID]?.layers = [decoration]
-        return Loaded(document: document, images: [asset.id: image])
-    }
-
     func importImage(_ data: Data, documentID: UUID) async throws -> (DiaryAsset, UIImage) {
         try await run { try self.writeImportedImage(data, documentID: documentID) }
     }

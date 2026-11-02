@@ -77,6 +77,33 @@ import SwiftUI
         #expect(reopened.layer.font == .system)
         #expect(reopened.layer.textAppearance?.paper?.kind == DiaryTextPaper.Kind.none)
     }
+    @Test func decoratedTextFitsCanvasWithoutRemovingPaperOrShrinkingFont() async throws {
+        let (session, root) = fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let bridge = DiaryEditorAIBridge(session)
+        let context = try await bridge.capture(.defaults(.writing))
+        bridge.layoutRegions = [.init(role: "text", x: 0, y: 0, width: 1000, height: 800)]
+        let operation = DiaryAIOperation(operationID: "title", type: "createText", clientObjectKey: "card", center: CGPoint(x: 400, y: 5), text: "山风正好", fontID: "system", fontSize: 48, width: 350, paper: "blueTape")
+        _ = try await bridge.propose(plan(context, [operation]))
+        try bridge.apply()
+        let layer = try #require(session.document.objects.values.flatMap(\.layers).first { $0.text == "山风正好" })
+        #expect(layer.fontSize == 48 && layer.textAppearance?.paper?.kind == .blueTape)
+        let bounds = DiaryPageRenderer.bounds(layer, document: session.document, siblings: session.scopeLayers).applying(layer.transform.matrix)
+        let visibleCard = try #require(bridge.objectChoices.first { $0.text == "山风正好" })
+        #expect(visibleCard.bounds.minY >= -0.01)
+    }
+    @Test func efficientTextCanExtendShortRegionWithoutShrinkingCard() async throws {
+        let (session, root) = fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        var empty = session.document; empty.objects[session.contentID]?.layers = []
+        let editor = DiaryEditorSession(document: empty, images: session.images, store: session.store)
+        let bridge = DiaryEditorAIBridge(editor); bridge.autoFitPhotoRegions = true
+        let context = try await bridge.capture(.defaults(.writing))
+        bridge.layoutRegions = [.init(role: "text", x: 50, y: 30, width: 600, height: 80)]
+        let operation = DiaryAIOperation(operationID: "extended", type: "createText", clientObjectKey: "title", center: CGPoint(x: 350, y: 70), text: "山风正好", fontID: "system", fontSize: 48, width: 500, paper: "blueTape")
+        _ = try await bridge.propose(plan(context, [operation])); try bridge.apply()
+        let object = try #require(bridge.objectChoices.first { $0.text == "山风正好" })
+        #expect(object.bounds.height > 80)
+        #expect(CGRect(origin: .zero, size: context.size).contains(object.bounds))
+    }
     @Test func visualCenterAndSingleUndo() async throws {
         let (session, root) = fixture(); defer { try? FileManager.default.removeItem(at: root) }
         let bridge = DiaryEditorAIBridge(session)

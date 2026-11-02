@@ -5,9 +5,9 @@ import SwiftUI
 
 @Suite(.serialized)
 @MainActor struct DiaryAIWorkspaceTests {
-    private func fixture(count: Int = 3) async throws -> (DiaryEditorSession, URL) {
+    private func fixture(count: Int = 3, size: CGSize = CGSize(width: 1000, height: 800)) async throws -> (DiaryEditorSession, URL) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        var document = DiaryDocument(); document.objects[document.rootContentID]?.referenceSize = CGSize(width: 1000, height: 800)
+        var document = DiaryDocument(); document.objects[document.rootContentID]?.referenceSize = size
         let store = DiaryDocumentStore(ownerID: "workspace-test", baseDirectory: root)
         let bytes = try #require(UIGraphicsImageRenderer(size: CGSize(width: 100, height: 150)).image { ctx in
             UIColor.systemGreen.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 100, height: 150))
@@ -87,6 +87,53 @@ import SwiftUI
         #expect(DiaryAIWorkspace.toolsForBatchStage(base: base, hasOperations: true, committed: true) == ["finish_batch"])
         #expect(!DiaryAIWorkspace.toolsForBatchStage(base: base, hasOperations: false, committed: false).contains("finish_batch"))
         #expect(!DiaryAIWorkspace.toolsForBatchStage(base: base, hasOperations: true, committed: false).contains("inspect_layers"))
+    }
+    @Test func efficientExecutionCommitsLocallyAndKeepsFinalVisualReview() async throws {
+        let (session, root) = try await fixture(count: 1); defer { try? FileManager.default.removeItem(at: root) }
+        let id = try #require(session.scopeLayers.first?.id)
+        var decisions = 0
+        let model = ScriptedWorkspaceModel { round, prompt, _, _, _ in
+            decisions += 1
+            if prompt?.contains("上一批已提交") == true { return [try scriptedCall("finish_batch", ["expectedVersion": 1])] }
+            return [try scriptedCall("place_layer", ["expectedVersion": 0, "objectID": id.uuidString, "width": 180, "angle": 0, "center": ["x": 400, "y": 300]])]
+        }
+        let workspace = DiaryAIWorkspace(session: session, model: model, root: root, efficientExecution: true)
+        await workspace.enter(.defaults(.relayout)); workspace.processAll(); try await wait(workspace)
+        #expect(workspace.error == nil && workspace.pending.isEmpty && workspace.version == 1)
+        #expect(decisions == 2)
+        #expect(workspace.events.contains { $0.kind == "client" })
+        #expect(await workspace.save())
+        #expect(session.undoStack.count == 1)
+    }
+    @Test func nativePhotoFitUsesActualRotatedBounds() async throws {
+        let (session, root) = try await fixture(count: 1); defer { try? FileManager.default.removeItem(at: root) }
+        let bridge = DiaryEditorAIBridge(session)
+        let context = try await bridge.capture(.defaults(.relayout))
+        let id = try #require(context.objects.first?.id)
+        bridge.autoFitPhotoRegions = true
+        let region = DiaryAILayoutRegion(role: "photo", objectID: id.uuidString, x: 200, y: 100, width: 400, height: 500)
+        bridge.layoutRegions = [region]
+        let before = session.document
+        _ = try await bridge.propose(.init(schemaVersion: 1, contextID: context.id, baseDigest: context.digest, summary: "适配区域", operations: [.init(operationID: "fit", type: "setPlacement", objectID: id, center: CGPoint(x: -100, y: -100), scale: 2, angle: 12, width: 900)]))
+        #expect(session.document == before)
+        try bridge.apply()
+        let object = try #require(bridge.objectChoices.first { $0.id == id })
+        #expect(region.bounds.insetBy(dx: -0.1, dy: -0.1).contains(object.bounds))
+    }
+    @Test func localDecorationSeparationAvoidsHeavyOverlap() async throws {
+        let (session, root) = try await fixture(count: 1); defer { try? FileManager.default.removeItem(at: root) }
+        let asset = try #require(session.document.assets.values.first)
+        let a = DiaryLayer(name: "装饰一", kind: .sticker, transform: DiaryTransform(position: .zero, pivot: .zero), size: CGSize(width: 100, height: 150), assetID: asset.id)
+        var b = a; b.id = UUID(); b.name = "装饰二"
+        var document = session.document; document.objects[session.contentID]?.layers += [a, b]
+        let editor = DiaryEditorSession(document: document, images: session.images, store: session.store, contentID: session.contentID)
+        let bridge = DiaryEditorAIBridge(editor); bridge.autoFitPhotoRegions = true; bridge.allowedBatchIDs = [a.id, b.id]
+        let context = try await bridge.capture(.defaults(.relayout))
+        let ops = [a, b].map { DiaryAIOperation(operationID: $0.id.uuidString, type: "setPlacement", objectID: $0.id, center: CGPoint(x: 500, y: 400), scale: 1, angle: 0, width: 150) }
+        _ = try await bridge.propose(.init(schemaVersion: 1, contextID: context.id, baseDigest: context.digest, summary: "错开装饰", operations: ops)); try bridge.apply()
+        let objects = bridge.objectChoices.filter { [a.id, b.id].contains($0.id) }
+        #expect(objects.count == 2)
+        #expect(!objects[0].bounds.intersects(objects[1].bounds))
     }
     @Test func batchesPublishAndOneUndoRestoresOriginal() async throws {
         let (session, root) = try await fixture(count: 7); defer { try? FileManager.default.removeItem(at: root) }
@@ -214,6 +261,189 @@ import SwiftUI
         let committed = DiaryAIWorkspace.toolsForBatchStage(base: all, hasOperations: true, committed: true)
         #expect(committed.contains("finish_batch") && !committed.contains("create_text") && !committed.contains("commit_batch"))
     }
+    @Test func recoveryRebuildsTextTaskWithoutOrphanResultsAndRepairsSameKey() async throws {
+        let (session, root) = try await fixture(count: 1, size: CGSize(width: 4370, height: 3130))
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = ScriptedWorkspaceModel { round, prompt, images, continuation, results in
+            switch round {
+            case 1:
+                // Reproduce the snapshot: unavailable tool and string coordinates.
+                return [try scriptedCall("place_layer", ["expectedVersion": 0, "width": "1520"]),
+                        try scriptedCall("place_layer", ["expectedVersion": 0, "width": "720"])]
+            case 2:
+                #expect(continuation == nil && results.isEmpty)
+                #expect(prompt?.contains("createText") == true && prompt?.contains("山风与经幡") == true)
+                #expect(prompt?.contains("fonts") == true && prompt?.contains("4370") == true)
+                #expect(prompt?.contains("工具不属于当前阶段") == true)
+                #expect(!images.isEmpty)
+                return [try scriptedCall("create_text", ["expectedVersion": 0, "clientObjectKey": "title", "text": "山风与经幡", "fontID": "system", "fontSize": 80, "width": 1200, "center": ["x": 2185, "y": 400]])]
+            case 3: return [try scriptedCall("commit_batch", ["expectedVersion": 0, "summary": "创建标题"])]
+            case 4:
+                let error = try #require(results.first?.text)
+                #expect(error.contains("spine_overlap") && error.contains("clientObjectKey") && error.contains("title"))
+                return [try scriptedCall("create_text", ["expectedVersion": 0, "clientObjectKey": "title", "text": "山风与经幡", "fontID": "system", "fontSize": 80, "width": 1200, "center": ["x": 1000, "y": 400]])]
+            case 5: return [try scriptedCall("commit_batch", ["expectedVersion": 0, "summary": "修复标题位置"])]
+            default: return [try scriptedCall("finish_batch", ["expectedVersion": 1])]
+            }
+        }
+        let workspace = DiaryAIWorkspace(session: session, model: model, root: root)
+        var request = DiaryAIRequest.defaults(.writing); request.instruction = "山风与经幡"
+        await workspace.enter(request); workspace.processAll(); try await wait(workspace)
+        #expect(workspace.error == nil && workspace.version == 1)
+        #expect(await workspace.save())
+        let created = session.document.objects.values.flatMap(\.layers).filter { $0.text == "山风与经幡" }
+        #expect(created.count == 1)
+        #expect(!workspace.events.contains { $0.kind == "tool" && $0.title.contains("rollback_batch") })
+    }
+    @Test func visualRevisionIsScopedAndStopsAfterTwoRepairs() async throws {
+        let (session, root) = try await fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = try #require(session.scopeLayers.first?.id)
+        let model = ScriptedWorkspaceModel { round, prompt, _, _, results in
+            if round == 10 {
+                #expect(results.first?.text.contains("工具不属于当前阶段") == true)
+                return [try scriptedCall("finish_batch", ["expectedVersion": 3])]
+            }
+            let version = (round - 1) / 3
+            switch (round - 1) % 3 {
+            case 0:
+                if version > 0 { #expect(prompt?.contains("visualRevision") == true && prompt?.contains("遮挡人物") == true) }
+                return [try scriptedCall("place_layer", ["expectedVersion": version, "objectID": id.uuidString, "width": 180, "angle": 0, "center": ["x": 200 + version * 100, "y": 300]])]
+            case 1: return [try scriptedCall("commit_batch", ["expectedVersion": version, "summary": "摆放照片"])]
+            default:
+                return [try scriptedCall("request_batch_revision", ["expectedVersion": version + 1, "objectIDs": [id.uuidString], "reason": "小照片遮挡人物，请移动"])]
+            }
+        }
+        let workspace = DiaryAIWorkspace(session: session, model: model, root: root)
+        await workspace.enter(.defaults(.relayout)); workspace.processAll(); try await wait(workspace)
+        #expect(workspace.error != nil && workspace.version == 3 && workspace.pending.isEmpty)
+        #expect(workspace.events.contains { $0.kind == "warning" && $0.title == "仍有视觉问题，需要人工检查" })
+        #expect(workspace.events.filter { $0.title == "已安排局部视觉修复" }.count == 2)
+        #expect(workspace.objects.first { $0.id == id }?.center.x == 400)
+    }
+    @Test func failedVisualRepairSurvivesArchiveRestore() async throws {
+        let (session, root) = try await fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = try #require(session.scopeLayers.first?.id)
+        let failing = ScriptedWorkspaceModel { round, _, _, _, _ in
+            switch round {
+            case 1: return [try scriptedCall("place_layer", ["expectedVersion": 0, "objectID": id.uuidString, "width": 180, "angle": 0, "center": ["x": 200, "y": 300]])]
+            case 2: return [try scriptedCall("commit_batch", ["expectedVersion": 0, "summary": "摆放照片"])]
+            case 3: return [try scriptedCall("request_batch_revision", ["expectedVersion": 1, "objectIDs": [id.uuidString], "reason": "修复人物遮挡"])]
+            default: throw DiaryAIError.invalid("模拟请求中断")
+            }
+        }
+        let first = DiaryAIWorkspace(session: session, model: failing, root: root)
+        await first.enter(.defaults(.relayout)); first.processAll(); try await wait(first)
+        #expect(first.error != nil && first.version == 1)
+        await first.keepForLater()
+        let resumed = ScriptedWorkspaceModel { round, prompt, _, _, _ in
+            switch round {
+            case 1:
+                #expect(prompt?.contains("修复人物遮挡") == true)
+                return [try scriptedCall("place_layer", ["expectedVersion": 1, "objectID": id.uuidString, "width": 180, "angle": 0, "center": ["x": 400, "y": 300]])]
+            case 2: return [try scriptedCall("commit_batch", ["expectedVersion": 1, "summary": "完成修复"])]
+            default: return [try scriptedCall("finish_batch", ["expectedVersion": 2])]
+            }
+        }
+        let second = DiaryAIWorkspace(session: session, model: resumed, root: root)
+        await second.enter(.defaults(.relayout)); second.processAll(); try await wait(second)
+        #expect(second.error == nil && second.version == 2)
+        #expect(second.objects.first { $0.id == id }?.center.x == 400)
+    }
+    @Test func interruptedConfirmationRetainsRevisionChoice() async throws {
+        let (session, root) = try await fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = try #require(session.scopeLayers.first?.id)
+        let failing = ScriptedWorkspaceModel { round, _, _, _, _ in
+            switch round {
+            case 1: return [try scriptedCall("place_layer", ["expectedVersion": 0, "objectID": id.uuidString, "width": 180, "angle": 0, "center": ["x": 200, "y": 300]])]
+            case 2: return [try scriptedCall("commit_batch", ["expectedVersion": 0, "summary": "摆放照片"])]
+            default: throw DiaryAIError.invalid("确认前连接中断")
+            }
+        }
+        let first = DiaryAIWorkspace(session: session, model: failing, root: root)
+        await first.enter(.defaults(.relayout)); first.processAll(); try await wait(first)
+        #expect(first.version == 1 && first.error != nil)
+        await first.keepForLater()
+        let model = ScriptedWorkspaceModel { round, prompt, _, _, _ in
+            switch round {
+            case 1:
+                #expect(prompt?.contains("request_batch_revision") == true && prompt?.contains(id.uuidString) == true)
+                return [try scriptedCall("request_batch_revision", ["expectedVersion": 1, "objectIDs": [id.uuidString], "reason": "人物被遮挡"])]
+            case 2: return [try scriptedCall("place_layer", ["expectedVersion": 1, "objectID": id.uuidString, "width": 180, "angle": 0, "center": ["x": 400, "y": 300]])]
+            case 3: return [try scriptedCall("commit_batch", ["expectedVersion": 1, "summary": "完成修复"])]
+            default: return [try scriptedCall("finish_batch", ["expectedVersion": 2])]
+            }
+        }
+        let second = DiaryAIWorkspace(session: session, model: model, root: root)
+        await second.enter(.defaults(.relayout)); second.processAll(); try await wait(second)
+        #expect(second.error == nil && second.version == 2)
+        #expect(second.objects.first { $0.id == id }?.center.x == 400)
+    }
+    @Test func reservedTextRegionRejectsPhotoWithoutChangingDocument() async throws {
+        let (session, root) = try await fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let before = session.document
+        let bridge = DiaryEditorAIBridge(session)
+        let context = try await bridge.capture(.defaults(.relayout))
+        let target = try #require(context.objects.first)
+        bridge.layoutRegions = [.init(role: "text", x: 50, y: 50, width: 400, height: 150)]
+        let move = DiaryAIOperation(operationID: "move", type: "setPlacement", objectID: target.id, center: CGPoint(x: 250, y: 160), scale: target.scale, angle: 0, width: 180)
+        do {
+            _ = try await bridge.propose(.init(schemaVersion: 1, contextID: context.id, baseDigest: context.digest, summary: "错误地占用标题区", operations: [move]))
+            Issue.record("应阻止照片占用文字区域")
+        } catch { #expect(error.localizedDescription.contains("reserved_text_overlap")) }
+        #expect(session.document == before)
+    }
+    @Test func maxHeightFitsFinalRotatedFrameWithoutStretching() async throws {
+        let (session, root) = try await fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var request = DiaryAIRequest.defaults(.relayout); request.allowsFrames = true
+        let bridge = DiaryEditorAIBridge(session), context = try await bridge.capture(request)
+        let target = try #require(context.objects.first)
+        let call = try scriptedCall("place_layer", ["expectedVersion": 0, "objectID": target.shortID, "width": 500, "maxHeight": 260, "angle": 12, "center": ["x": 400, "y": 400]])
+        let parsed = try DiaryAIWorkspaceTools.parse(call, version: 0, context: context)
+        let move = try #require(parsed)
+        let frame = DiaryAIOperation(operationID: "frame", type: "setFrameStyle", objectID: target.id, frameStyle: "拍立得")
+        _ = try await bridge.propose(.init(schemaVersion: 1, contextID: context.id, baseDigest: context.digest, summary: "限制竖图高度", operations: [move, frame]))
+        try bridge.apply()
+        let updated = try await DiaryEditorAIBridge(session).capture(request)
+        let actual = try #require(updated.objects.first { $0.id == target.id })
+        #expect(actual.bounds.width <= 501 && abs(actual.bounds.height - 260) < 1)
+        #expect(abs(actual.center.x - 400) < 1 && abs(actual.center.y - 400) < 1)
+    }
+    @Test func structuredRegionsProtectTextSpace() throws {
+        let id = UUID()
+        let object = DiaryAIObject(id: id, shortID: "L2", name: "照片", role: "photo", center: .zero, bounds: CGRect(x: 0, y: 0, width: 200, height: 300), scale: 1, angle: 0, locked: false, visible: true, editable: true, assetIDs: [])
+        let context = DiaryAIContext(id: UUID(), digest: "x", contentID: UUID(), size: CGSize(width: 1000, height: 800), spineX: 500, objects: [object], fonts: [])
+        let photo = DiaryAILayoutRegion(role: "photo", objectID: "L2", x: 30, y: 200, width: 400, height: 550)
+        let text = DiaryAILayoutRegion(role: "text", x: 30, y: 30, width: 400, height: 140)
+        let regions = try DiaryAIWorkspace.validatedRegions([photo, text], context: context, allowsText: true)
+        #expect(regions.first?.objectID == id.uuidString)
+        var overlap = text; overlap.y = 220
+        #expect(throws: (any Error).self) { try DiaryAIWorkspace.validatedRegions([photo, overlap], context: context, allowsText: true) }
+        var crossing = photo; crossing.x = 300
+        #expect(throws: (any Error).self) { try DiaryAIWorkspace.validatedRegions([crossing], context: context, allowsText: true) }
+    }
+    @Test func initialRelayoutDoesNotPretendTextFailed() async throws {
+        let (session, root) = try await fixture(count: 3)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = DiaryAIWorkspace(session: session, model: WorkspaceModel(), root: root)
+        var request = DiaryAIRequest.defaults(.relayout); request.allowsText = true
+        await workspace.enter(request)
+        #expect(workspace.needsTextCompletion && !workspace.canContinueText)
+        await workspace.skipPendingText()
+        #expect(workspace.needsTextCompletion && workspace.pending.count == 3)
+    }
+    @Test func authenticationFailureIsNotMisreportedAsToolIncompatibility() throws {
+        let body = Data(#"{"error":{"message":"invalid parameter: AuthHeader"}}"#.utf8)
+        let error = DiaryAIServiceError.response(status: 400, code: "AuthN_InvalidParameter", body: body)
+        #expect(error.localizedDescription.contains("认证失败"))
+        #expect(!error.localizedDescription.contains("工具"))
+        #expect(throws: (any Error).self) { try DiaryAITestConfig.validatedKey("  ") }
+        #expect(throws: (any Error).self) { try DiaryAITestConfig.validatedKey("Bearer test") }
+    }
     @Test func workspaceSnapshot() async throws {
         let (session, root) = try await fixture(); defer { try? FileManager.default.removeItem(at: root) }
         let workspace = DiaryAIWorkspace(session: session, model: WorkspaceModel(), root: root)
@@ -253,7 +483,9 @@ import SwiftUI
             if targets.isEmpty {
                 values.append(try call("create_text", ["expectedVersion": version, "clientObjectKey": "title", "text": "一起走过的路", "fontID": "system", "fontSize": 30, "width": 300, "center": ["x": 500, "y": 730]]))
             }
-            values.append(try call("commit_batch", ["expectedVersion": version, "summary": "完成本批照片摆放"])); calls = values
+            calls = values
+        } else if results.contains(where: { $0.text.contains("操作已暂存") }) {
+            calls = [try call("commit_batch", ["expectedVersion": version, "summary": "完成本批照片摆放"])]
             version += 1
         } else { calls = [try call("finish_batch", ["expectedVersion": version])] }
         return .init(calls: calls, text: "", continuation: Data(), inputTokens: 100, outputTokens: 100)
@@ -275,12 +507,31 @@ import SwiftUI
             case 1: calls = [try call("finish_batch", ["expectedVersion": 0])]
             case 2: calls = []
             case 3:
-                calls = [try call("create_text", ["expectedVersion": 0, "clientObjectKey": "title", "text": "把山风记住", "fontID": "system", "fontSize": 30, "width": 300, "center": ["x": 500, "y": 650]]),
-                         try call("commit_batch", ["expectedVersion": 0, "summary": "新增标题"]),
-                         try call("finish_batch", ["expectedVersion": 1])]
+                calls = [try call("create_text", ["expectedVersion": 0, "clientObjectKey": "title", "text": "把山风记住", "fontID": "system", "fontSize": 30, "width": 300, "center": ["x": 500, "y": 650]])]
+            case 4: calls = [try call("commit_batch", ["expectedVersion": 0, "summary": "新增标题"])]
             default: calls = [try call("finish_batch", ["expectedVersion": 1])]
             }
         }
         return .init(calls: calls, text: calls.isEmpty ? "好的" : "", continuation: Data(), inputTokens: 100, outputTokens: 100)
+    }
+}
+
+@MainActor private func scriptedCall(_ name: String, _ arguments: [String: Any]) throws -> DiaryAIToolCall {
+    .init(id: UUID().uuidString, name: name, arguments: String(decoding: try JSONSerialization.data(withJSONObject: arguments), as: UTF8.self))
+}
+@MainActor private final class ScriptedWorkspaceModel: DiaryAIModelClient {
+    typealias Response = (Int, String?, [DiaryAIImage], Data?, [DiaryAIToolResult]) throws -> [DiaryAIToolCall]
+    private var round = 0
+    private let response: Response
+    init(_ response: @escaping Response) { self.response = response }
+    func respond(prompt: String?, images: [DiaryAIImage], continuation: Data?, results: [DiaryAIToolResult]) async throws -> DiaryAIModelReply {
+        let calls: [DiaryAIToolCall]
+        if prompt?.contains("只调用 plan_composition") == true {
+            calls = [try scriptedCall("plan_composition", ["expectedVersion": 0, "summary": "主照片突出，顶部预留文字区。"])]
+        } else {
+            round += 1
+            calls = try response(round, prompt, images, continuation, results)
+        }
+        return .init(calls: calls, text: "", continuation: Data([1]), inputTokens: 100, outputTokens: 100)
     }
 }

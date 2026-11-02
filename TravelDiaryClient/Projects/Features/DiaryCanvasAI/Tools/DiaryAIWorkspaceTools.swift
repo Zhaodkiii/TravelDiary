@@ -4,30 +4,31 @@ import CoreGraphics
 enum DiaryAIWorkspaceTools {
     static let operationNames = ["place_layer": "setPlacement", "set_photo_crop": "setPhotoCrop", "set_photo_frame": "setFrameStyle", "create_text": "createText", "update_text": "updateText", "attach_decoration": "setPlacement", "set_decoration_visibility": "setDecorationVisibility"]
     static let descriptions: [String: String] = [
-        "plan_composition": "仅用于整体规划。summary 用80～160字说明主照片、分区和文字留白；不输出坐标列表、图层JSON或文件。调用一次即可。",
+        "plan_composition": "仅用于整体规划。summary 用80～160字说明主照片、分区和文字留白；重新排版可同时提供regions指定照片与文字预留区域（设计单位）。不输出图层JSON或文件。调用一次即可。",
         "get_workspace": "查询当前工作版本、可处理图层和状态。初始输入已包含上下文，只有信息缺失或版本冲突时调用。只读。",
         "get_canvas_image": "查看最新已提交画布。commit_batch已返回相同预览时无需重复调用。只读。",
         "inspect_layers": "仅当本批素材细节看不清时补图；objectIDs最多5个，使用本批L编号或UUID。每批最多两次。只读。",
         "list_fonts": "查询真实可用fontID。上下文已给出字体时直接使用，不要重复查询。只读。",
         "list_frame_styles": "查询可用相框名称。已知名称可直接set_photo_frame，无需先查询。只读。",
-        "place_layer": "暂存一个本批图层的位置、等比尺寸和角度。照片与相框整体移动。center为画布设计单位视觉中心，width是目标可见边界宽度，angle为绝对角度。不会裁剪照片；commit_batch后显示。",
+        "place_layer": "暂存一个本批图层的位置、等比尺寸和角度。照片与相框整体移动。center为画布设计单位视觉中心，width是目标可见边界宽度，提供maxHeight时等比缩小以同时满足宽高上限，angle为绝对角度。不会裁剪照片；commit_batch后显示。",
         "attach_decoration": "暂存本批贴纸的绝对位置、可见宽度和角度，适合放在照片边角。使用画布设计单位，不支持自动锚定或父子绑定。commit_batch后显示。",
         "set_photo_crop": "仅在允许取景时暂存照片内部放大和偏移；cropZoom为1～3，cropX/Y是照片本地坐标偏移，不是画布位置。保留原图和外层位置。特殊槽位不支持时保留原取景。",
         "set_photo_frame": "仅在允许相框调整时暂存一个真实样式名称；客户端生成相框并保持绑定，不返回相框图片或资源JSON。",
         "create_text": "仅在允许新增文字时创建一段可编辑文字。提供稳定clientObjectKey、正文、可用fontID、字号、文本框宽度和视觉中心；可选颜色和纸张。客户端测量换行和高度，不输出字形或文件。commit_batch后显示。",
         "update_text": "修改本批已有文字，只传需要改的字段；保留原文时省略text。width为本地文本框宽度；center为画布视觉中心。只换字体不必重发正文。commit_batch后显示。",
         "set_decoration_visibility": "仅在允许隐藏装饰时暂存本批贴纸可见性，不能隐藏照片、文字或锁定内容。",
-        "commit_batch": "一次提交所有已暂存操作，先校验再整体生效。summary只写一句操作概述，不含JSON。成功返回新版本和最新画布；失败保持原批次，先rollback_batch再重新暂存修复后的操作。不要重复提交。",
+        "commit_batch": "一次提交所有已暂存操作，先校验再整体生效。summary只写一句操作概述，不含JSON。成功返回新版本和最新画布；失败保留暂存操作；按错误修订对应对象，同key的create_text替换暂存文字。仅整批重做时rollback_batch。不要重复提交。",
         "rollback_batch": "丢弃当前尚未提交的操作，之后可重新调用单项工具；不能撤回已提交批次，已提交回退由用户操作。",
         "validate_layout": "读取当前校验状态，不执行排版。commit_batch已返回校验结果时通常无需调用。",
-        "finish_batch": "仅在commit_batch成功且下一轮看到最新画布后调用，结束本批。expectedVersion必须使用提交返回的新版本；不得与首次提交同轮调用。"
+        "request_batch_revision": "看过已提交画布后，仅指出本批需要修复的objectIDs与reason；客户端安排局部修复，最多两轮。不得与commit_batch同轮调用。",
+        "finish_batch": "仅在commit_batch成功且下一轮看到最新画布后调用，结束本批。不得与首次提交同轮调用。"
     ]
     static let fieldDescriptions: [String: String] = [
         "objectID": "本批图层的L编号（如L2）或真实UUID，禁止猜测。",
         "objectIDs": "待补图的本批L编号或UUID数组，最多5个。",
         "expectedVersion": "当前工作版本整数。提交前各操作使用同一版本；提交成功后使用返回的新版本。",
         "center": "画布设计单位的视觉中心{x,y}；不是屏幕像素、左上角或0～1比例。",
-        "width": "place_layer/attach_decoration为目标可见边界宽度；文字工具为本地文本框宽度，单位均为设计单位。",
+        "width": "place_layer/attach_decoration为目标可见边界宽度，指定maxHeight时可能等比缩小；文字工具为本地文本框宽度，单位均为设计单位。",
         "angle": "绝对顺时针角度（度），0为不旋转；不是增量。",
         "text": "要写入的最终正文，禁止代码、图层JSON或说明文字。update_text不改正文时省略。",
         "fontID": "从上下文fonts取真实id，不是字体名称或文件路径。",
@@ -36,6 +37,8 @@ enum DiaryAIWorkspaceTools {
         "color": "六位十六进制颜色，如#355A49。",
         "paper": "文字承托样式ID：none无、torn撕纸、tape胶带、note便签；warmHeart暖纸爱心、blueTape蓝胶带纸卡、pinkWish粉色心愿、titleParchment层叠标题纸、lavenderStrip薰衣草纸条、pinkHeart粉纸手绘心、botanicalLine植物划线卡、coralUnderline珊瑚划线纸、kraftStrip牛皮纸条。客户端按文字自适应，不另建贴纸；省略保留原样。",
         "summary": "简短自然语言概述，不输出操作数组或文件内容。",
+        "maxHeight": "可选最终可见高度上限。客户端在旋转、换框后等比缩小以同时满足width和maxHeight；不得拉伸。",
+        "reason": "具体视觉问题，如照片遮挡人物、标题区被占用；不要笼统说优化。",
         "cropZoom": "内部取景放大1～3，1保留基础取景。",
         "cropX": "照片本地水平偏移，正值向右，不改变外层位置。",
         "cropY": "照片本地垂直偏移，正值向下，不改变外层位置。",
@@ -46,12 +49,13 @@ enum DiaryAIWorkspaceTools {
         let string: [String: Any] = ["type": "string"]
         let number: [String: Any] = ["type": "number"]
         var definitions: [(String, [String: Any], [String])] = [
-            ("plan_composition", ["summary": string], ["summary"]),
+            ("plan_composition", ["summary": string, "regions": ["type": "array", "maxItems": 20, "items": ["type": "object", "additionalProperties": false, "properties": ["role": ["type": "string", "enum": ["photo", "text"]], "objectID": string, "x": number, "y": number, "width": number, "height": number], "required": ["role", "x", "y", "width", "height"]]]], ["summary"]),
+            ("request_batch_revision", ["objectIDs": ["type": "array", "items": string, "minItems": 1, "maxItems": DiaryAIWorkspace.maximumBatchLayers], "reason": string], ["objectIDs", "reason"]),
             ("get_workspace", [:], []), ("get_canvas_image", [:], []), ("list_fonts", [:], []),
             ("list_frame_styles", [:], []),
             ("inspect_layers", ["objectIDs": ["type": "array", "items": string, "maxItems": DiaryAIWorkspace.maximumBatchLayers]], ["objectIDs"]),
             ("commit_batch", ["summary": string], ["summary"]),
-            ("rollback_batch", [:], []), ("validate_layout", [:], []), ("finish_batch", [:], [])
+            ("rollback_batch", [:], []), ("validate_layout", [:], []), ("finish_batch", ["backgroundBrief": string, "backgroundPrompt": string], [])
         ]
         for name in operationNames.keys.sorted() {
             var fields: [String: Any] = [:], required: [String] = []
@@ -60,7 +64,7 @@ enum DiaryAIWorkspaceTools {
             switch name {
             case "place_layer", "attach_decoration":
                 fields["center"] = ["type": "object", "properties": ["x": number, "y": number], "required": ["x", "y"], "additionalProperties": false]
-                fields["width"] = number; fields["angle"] = number; required += ["center", "width", "angle"]
+                fields["width"] = number; fields["maxHeight"] = number; fields["angle"] = number; required += ["center", "width", "angle"]
             case "create_text", "update_text":
                 for key in ["text", "fontID", "color", "paper"] { fields[key] = string }
                 for key in ["fontSize", "width", "angle"] { fields[key] = number }

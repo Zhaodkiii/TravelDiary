@@ -4,6 +4,9 @@ import CryptoKit
 /// All knowledge of the native document, renderer, fonts and transactions stays on this side.
 @MainActor final class DiaryEditorAIBridge: DiaryAIEditorBridge {
     private weak var session: DiaryEditorSession?
+    var autoFitPhotoRegions = false
+    private var locallyPlaced = Set<UUID>()
+    var layoutRegions: [DiaryAILayoutRegion] = []
     var allowedBatchIDs: Set<UUID>?
     var excludedRenderIDs: Set<UUID> = []
     private var base: DiaryDocument?
@@ -218,7 +221,12 @@ import CryptoKit
         if operation.type == "setPlacement", let width = operation.width {
             let bounds = DiaryPageRenderer.bounds(layer, document: document, siblings: siblings).applying(layer.transform.matrix)
             try require(width.isFinite && width > 0 && bounds.width > 0, "最终可见宽度无效")
-            layer.transform.scale *= width / bounds.width
+            var factor = width / bounds.width
+            if let maxHeight = operation.maxHeight {
+                try require(maxHeight.isFinite && maxHeight > 0 && bounds.height > 0, "最终可见高度上限无效")
+                factor = min(factor, maxHeight / bounds.height)
+            }
+            layer.transform.scale *= factor
             try require(layer.transform.scale.isFinite && (0.05...20).contains(layer.transform.scale), "最终缩放超出范围")
         }
         if let center = operation.center {
@@ -227,9 +235,46 @@ import CryptoKit
             layer.transform.position.x += center.x - bounds.midX
             layer.transform.position.y += center.y - bounds.midY
         }
+        if autoFitPhotoRegions, let region = layoutRegions.first(where: { $0.role == "photo" && $0.objectID == id.uuidString })?.bounds {
+            let bounds = DiaryPageRenderer.bounds(layer, document: document, siblings: siblings).applying(layer.transform.matrix)
+            let factor = min(1, region.width / max(1, bounds.width), region.height / max(1, bounds.height))
+            layer.transform.scale *= factor
+            try require(layer.transform.scale >= 0.05, "规划区域太小，无法保留照片可读尺寸")
+            let fitted = DiaryPageRenderer.bounds(layer, document: document, siblings: siblings).applying(layer.transform.matrix)
+            layer.transform.position.x += min(max(fitted.minX, region.minX), region.maxX - fitted.width) - fitted.minX
+            layer.transform.position.y += min(max(fitted.minY, region.minY), region.maxY - fitted.height) - fitted.minY
+        }
+        if autoFitPhotoRegions && role(layer, in: document) == "decoration" {
+            let page = CGRect(origin: .zero, size: context.size)
+            let blockers = siblings.filter { $0.id != id && $0.visible && !excludedRenderIDs.contains($0.id) && role($0, in: document) == "decoration" && (locallyPlaced.contains($0.id) || !(allowedBatchIDs?.contains($0.id) ?? true)) }.map {
+                DiaryPageRenderer.bounds($0, document: document, siblings: siblings).applying($0.transform.matrix)
+            }
+            let bounds = DiaryPageRenderer.bounds(layer, document: document, siblings: siblings).applying(layer.transform.matrix)
+            let textAreas = siblings.filter { $0.id != id && $0.visible && !excludedRenderIDs.contains($0.id) && role($0, in: document) == "text" }.map {
+                DiaryPageRenderer.bounds($0, document: document, siblings: siblings).applying(DiaryPageRenderer.matrix($0, siblings: siblings))
+            }
+            func clear(_ rect: CGRect) -> Bool {
+                page.contains(rect) && !textAreas.contains(where: { $0.intersects(rect) }) && !blockers.contains { other in
+                    let overlap = rect.intersection(other)
+                    return !overlap.isNull && overlap.width * overlap.height / max(1, min(rect.width * rect.height, other.width * other.height)) > 0.3
+                }
+            }
+            if !clear(bounds) {
+                var options = [CGRect]()
+                for other in blockers where bounds.intersects(other) {
+                    options += [bounds.offsetBy(dx: other.maxX + 12 - bounds.minX, dy: 0), bounds.offsetBy(dx: other.minX - 12 - bounds.maxX, dy: 0), bounds.offsetBy(dx: 0, dy: other.maxY + 12 - bounds.minY), bounds.offsetBy(dx: 0, dy: other.minY - 12 - bounds.maxY)]
+                }
+                if let nearest = options.filter(clear).min(by: { hypot($0.midX - bounds.midX, $0.midY - bounds.midY) < hypot($1.midX - bounds.midX, $1.midY - bounds.midY) }) {
+                    layer.transform.position.x += nearest.midX - bounds.midX
+                    layer.transform.position.y += nearest.midY - bounds.midY
+                }
+            }
+        }
+        locallyPlaced.insert(id)
         document.update(id) { $0 = layer }
     }
     func propose(_ plan: DiaryAIPlan) async throws -> DiaryAIDraft {
+        locallyPlaced = []
         guard let base, let context, let request, let session else { throw DiaryAIError.invalid("快照已失效") }
         try require(plan.schemaVersion == 1 && plan.contextID == context.id && plan.baseDigest == context.digest, "计划基础版本不匹配")
         try require(plan.operations.count <= 200 && Set(plan.operations.map(\.operationID)).count == plan.operations.count, "操作重复或过多")
@@ -333,15 +378,78 @@ import CryptoKit
             }
             copy.objects[context.contentID]?.layers = order.compactMap { id in layers.first { $0.id == id } }
         }
+        // Measure the complete decorated card before validating planned regions. Preserve typography and paper.
+        var autoPositionedText = Set<UUID>()
+        for id in changed {
+            guard let layer = copy.layer(id), role(layer, in: copy) == "text" else { continue }
+            let siblings = copy.objects[context.contentID]!.layers
+            let bounds = DiaryPageRenderer.bounds(layer, document: copy, siblings: siblings).applying(DiaryPageRenderer.matrix(layer, siblings: siblings))
+            let canvas = CGRect(origin: .zero, size: context.size)
+            let candidates = layoutRegions.filter { $0.role == "text" && ($0.objectID == nil || $0.objectID == id.uuidString) }.map { $0.bounds.intersection(canvas) }
+            guard !candidates.isEmpty else { continue }
+            let safePages: [CGRect] = context.spineX.map { [CGRect(x: 0, y: 0, width: max(0, $0 - 24), height: canvas.height), CGRect(x: $0 + 24, y: 0, width: max(0, canvas.width - $0 - 24), height: canvas.height)] } ?? [canvas]
+            let expandedCandidates = autoFitPhotoRegions ? candidates.map { rect -> CGRect in
+                let width = max(rect.width, bounds.width), height = max(rect.height, bounds.height)
+                return CGRect(x: min(rect.minX, canvas.maxX - width), y: min(rect.minY, canvas.maxY - height), width: width, height: height)
+            } : candidates
+            var regions = (expandedCandidates.isEmpty ? [canvas] : expandedCandidates).flatMap { region in safePages.map { region.intersection($0) } }.filter { !$0.isNull && $0.width >= bounds.width && $0.height >= bounds.height }
+            if autoFitPhotoRegions {
+                let blockers = siblings.filter { $0.id != id && $0.visible && !excludedRenderIDs.contains($0.id) && ["photo", "text"].contains(role($0, in: copy)) }.map {
+                    DiaryPageRenderer.bounds($0, document: copy, siblings: siblings).applying(DiaryPageRenderer.matrix($0, siblings: siblings)).insetBy(dx: -8, dy: -8)
+                }
+                for obstacle in blockers {
+                    regions = regions.flatMap { region -> [CGRect] in
+                        guard region.intersects(obstacle) else { return [region] }
+                        return [CGRect(x: region.minX, y: region.minY, width: max(0, obstacle.minX - region.minX), height: region.height), CGRect(x: max(region.minX, obstacle.maxX), y: region.minY, width: max(0, region.maxX - max(region.minX, obstacle.maxX)), height: region.height), CGRect(x: region.minX, y: region.minY, width: region.width, height: max(0, obstacle.minY - region.minY)), CGRect(x: region.minX, y: max(region.minY, obstacle.maxY), width: region.width, height: max(0, region.maxY - max(region.minY, obstacle.maxY)))]
+                            .filter { $0.width >= bounds.width && $0.height >= bounds.height && region.contains($0) }
+                    }
+                    if regions.count > 128 { regions = Array(regions.prefix(128)) }
+                }
+            }
+            guard let region = regions.min(by: { hypot($0.midX - bounds.midX, $0.midY - bounds.midY) < hypot($1.midX - bounds.midX, $1.midY - bounds.midY) }) else { continue }
+            if autoFitPhotoRegions { autoPositionedText.insert(id) }
+            let dx = min(max(bounds.minX, region.minX), region.maxX - bounds.width) - bounds.minX
+            let dy = min(max(bounds.minY, region.minY), region.maxY - bounds.height) - bounds.minY
+            if abs(dx) > 0.01 || abs(dy) > 0.01 {
+                copy.update(id) { $0.transform.position.x += dx; $0.transform.position.y += dy }
+                autoPositionedText.insert(id)
+                warnings.append("文字纸卡按真实尺寸移入预留区，字体、字号与纸卡保持不变")
+            }
+        }
         let siblings = copy.objects[context.contentID]!.layers
         for id in changed {
             guard let layer = copy.layer(id), layer.visible else { continue }
             let bounds = DiaryPageRenderer.bounds(layer, document: copy, siblings: siblings).applying(DiaryPageRenderer.matrix(layer, siblings: siblings))
             let originalRole = role(layer, in: copy)
+            func reject(_ code: String, _ suggestion: String) throws -> Never {
+                let key = operations.first { $0.type == "createText" && $0.clientObjectKey.map { createdIDs[$0] == id } == true }?.clientObjectKey
+                let feedback: [String: Any] = ["code": code, "objectID": id.uuidString,
+                    "clientObjectKey": key ?? "", "bounds": [bounds.minX, bounds.minY, bounds.width, bounds.height],
+                    "canvas": [context.size.width, context.size.height], "spineX": context.spineX as Any? ?? NSNull(),
+                    "suggestion": suggestion, "matchingRegions": layoutRegions.filter { $0.role == originalRole }.map { ["x": $0.bounds.minX, "y": $0.bounds.minY, "width": $0.bounds.width, "height": $0.bounds.height] }, "measuredCardSize": [bounds.width, bounds.height]]
+                throw DiaryAIError.invalid(String(decoding: try JSONSerialization.data(withJSONObject: feedback, options: [.sortedKeys]), as: UTF8.self))
+            }
             if originalRole != "background" {
-                try require(bounds.width.isFinite && bounds.height.isFinite && CGRect(origin: .zero, size: context.size).insetBy(dx: -1, dy: -1).contains(bounds), "对象 \(id) 越界，请缩小或移动到画布内")
+                if !bounds.width.isFinite || !bounds.height.isFinite || !CGRect(origin: .zero, size: context.size).insetBy(dx: -1, dy: -1).contains(bounds) {
+                    try reject("out_of_bounds", "保留暂存操作，缩小或移动此对象到画布内")
+                }
                 if let spine = context.spineX, ["text", "photo"].contains(originalRole) {
-                    try require(!(bounds.minX < spine + 24 && bounds.maxX > spine - 24), "文字或照片跨越书脊安全区，请分配到左右页")
+                    if bounds.minX < spine + 24 && bounds.maxX > spine - 24 {
+                        try reject("spine_overlap", "文字或照片跨越书脊安全区；保留暂存操作，将此对象移入左页或右页，离书脊至少24单位")
+                    }
+                }
+            }
+            let regions = layoutRegions.filter { $0.role == originalRole && ($0.objectID == nil || $0.objectID == id.uuidString) }
+            if !regions.isEmpty && !regions.contains(where: { $0.bounds.insetBy(dx: -1, dy: -1).contains(bounds) }) && !(autoFitPhotoRegions && originalRole == "text" && autoPositionedText.contains(id)) {
+                try reject("outside_planned_region", "完整对象超出规划区域，measuredCardSize包含纸卡内边距。优先缩短正文、语义换行或选择能容纳的matchingRegions；保留字体、字号和纸卡，不以取消纸卡或连续缩字作为修复。")
+            }
+            if originalRole == "photo" {
+                if layoutRegions.contains(where: { $0.role == "text" && $0.bounds.intersects(bounds) }) {
+                    try reject("reserved_text_overlap", "照片占用文字预留区；缩小或移动此照片，保留标题和旁注区域")
+                }
+                for upper in siblings.dropFirst((siblings.firstIndex(where: { $0.id == id }) ?? 0) + 1) where upper.visible && !excludedRenderIDs.contains(upper.id) && upper.frameTargetID != id {
+                    let other = DiaryPageRenderer.bounds(upper, document: copy, siblings: siblings).applying(DiaryPageRenderer.matrix(upper, siblings: siblings))
+                    if bounds.intersects(other) { warnings.append("照片\(id)与上方对象\(upper.id)重叠；视觉确认须检查人物及主体遮挡，可request_batch_revision修复") }
                 }
             }
             if originalRole == "text" {
@@ -349,13 +457,13 @@ import CryptoKit
                     let other = DiaryPageRenderer.bounds(upper, document: copy, siblings: siblings).applying(DiaryPageRenderer.matrix(upper, siblings: siblings))
                     let overlap = bounds.intersection(other)
                     if !overlap.isNull && ["photo", "text"].contains(role(upper, in: copy)) {
-                        try require(overlap.width * overlap.height / max(1, bounds.width * bounds.height) < 0.25, "文字被上方照片或文字遮挡，请移动位置或调整层级")
+                        if overlap.width * overlap.height / max(1, bounds.width * bounds.height) >= 0.25 { try reject("text_occluded", "此clientObjectKey文字被上方图层遮挡；保留其他操作，只将此文字移入无冲突的文字区域。不要重复修改未报错标题。") }
                     }
                     if bounds.intersects(other) { warnings.append("文字与上方图层相交，请检查预览：\(layer.name)"); break }
                 }
             }
         }
-        for operation in plan.operations where operation.type == "setPlacement" {
+        for operation in plan.operations where operation.type == "setPlacement" && !autoPositionedText.contains(operation.objectID ?? UUID()) && !(autoFitPhotoRegions && (layoutRegions.contains { $0.role == "photo" && $0.objectID == operation.objectID?.uuidString } || operation.objectID.flatMap { copy.layer($0) }.map { role($0, in: copy) == "decoration" } == true)) {
             guard let id = operation.objectID, let expected = operation.center,
                   let layer = copy.layer(id) else { continue }
             let actual = DiaryPageRenderer.bounds(layer, document: copy, siblings: siblings).applying(DiaryPageRenderer.matrix(layer, siblings: siblings))
@@ -373,7 +481,7 @@ import CryptoKit
     private func validateFields(_ operation: DiaryAIOperation) throws {
         let common: Set<String> = ["operationID", "type", "objectID"]
         let fields: [String: Set<String>] = [
-            "setPlacement": ["center", "scale", "angle", "width"], "setZOrder": ["order"],
+            "setPlacement": ["center", "scale", "angle", "width", "maxHeight"], "setZOrder": ["order"],
             "createText": ["clientObjectKey", "text", "fontID", "fontSize", "width", "color", "paper", "center", "scale", "angle"],
             "updateText": ["text", "fontID", "fontSize", "width", "color", "paper", "center", "scale", "angle"],
             "setPhotoCrop": ["cropZoom", "cropX", "cropY"], "setFrameStyle": ["frameStyle"],

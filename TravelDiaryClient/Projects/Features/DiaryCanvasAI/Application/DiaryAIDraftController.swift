@@ -182,7 +182,7 @@ import Combine
         guard var raw = try JSONSerialization.jsonObject(with: data) as? [String: Any], Set(raw.keys).isSubset(of: ["contextID", "objectIDs", "view", "rect", "plan", "draftRevision"]) else { throw DiaryAIError.invalid("工具包含未知参数") }
         if let plan = raw["plan"] as? [String: Any] {
             guard Set(plan.keys).isSubset(of: ["schemaVersion", "contextID", "baseDigest", "summary", "operations"]) else { throw DiaryAIError.invalid("计划包含未知字段") }
-            let allowed: Set<String> = ["operationID", "type", "objectID", "clientObjectKey", "center", "scale", "angle", "order", "text", "fontID", "fontSize", "width", "color", "paper", "visible", "cropZoom", "cropX", "cropY", "frameStyle", "materialID"]
+            let allowed: Set<String> = ["operationID", "type", "objectID", "clientObjectKey", "center", "scale", "angle", "order", "text", "fontID", "fontSize", "width", "color", "paper", "visible", "maxHeight", "cropZoom", "cropX", "cropY", "frameStyle", "materialID"]
             for operation in plan["operations"] as? [[String: Any]] ?? [] {
                 guard Set(operation.keys).isSubset(of: allowed) else { throw DiaryAIError.invalid("操作包含未知字段") }
             }

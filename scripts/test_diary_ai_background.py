@@ -6,13 +6,14 @@ import subprocess
 from pathlib import Path
 
 parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--full-flow', action='store_true', help='Run real relayout, text and background benchmark (paid calls)')
 parser.add_argument('--live', action='store_true', help='Generate one real Seedream background and save to simulator Photos')
 parser.add_argument('--device', default='728BF62D-9E5A-4B7C-ADB4-97534D0A3BBF')
 parser.add_argument('--output', type=Path, default=Path('/tmp/TravelDiaryBackgroundTestResults'))
 args = parser.parse_args()
 repo = Path(__file__).resolve().parents[1]
-marker = Path('/tmp/traveldiary-background-live-enabled')
-artifacts = Path('/tmp/TravelDiaryBook8Validation/background')
+marker = Path('/tmp/traveldiary-fullflow-benchmark-enabled' if args.full_flow else '/tmp/traveldiary-background-live-enabled')
+artifacts = Path('/tmp/TravelDiaryBook8Validation/fullflow-benchmark' if args.full_flow else '/tmp/TravelDiaryBook8Validation/background')
 args.output.mkdir(parents=True, exist_ok=True)
 keep = {'DiaryAIBackgroundTests.swift', 'DiaryAIWorkspaceTests.swift', 'DiaryCanvasAITests.swift',
         'DiaryAIBook8IntegrationTests.swift', 'DiaryAIBook8TextIntegrationTests.swift',
@@ -23,7 +24,7 @@ command = ['xcodebuild', '-project', 'TravelDiary.xcodeproj', '-scheme', 'Travel
            'test', 'CODE_SIGNING_ALLOWED=NO', 'EXCLUDED_SOURCE_FILE_NAMES=' + ' '.join(excluded),
            '-only-testing:TravelDiaryTests/DiaryAIBackgroundTests', '-only-testing:TravelDiaryTests/DiaryAIWorkspaceTests',
            'OTHER_LDFLAGS=$(inherited) -framework CoreTelephony -framework SystemConfiguration -lresolv']
-if args.live:
+if args.live or args.full_flow:
     if not any(artifacts.parent.glob('已排版项目-*')):
         parser.error('Run scripts/test_diary_ai_book8.py first to create the arranged Book 8 fixture')
     subprocess.run(['xcrun', 'simctl', 'privacy', args.device, 'grant', 'photos-add', 'cn.zhaodk.TravelDiary'], check=True)
@@ -35,7 +36,7 @@ try:
         result = subprocess.run(command, cwd=repo, stdout=log, stderr=subprocess.STDOUT)
 finally:
     marker.unlink(missing_ok=True)
-    if args.live and artifacts.exists():
+    if (args.live or args.full_flow) and artifacts.exists():
         for item in artifacts.iterdir():
             if item.is_file():
                 shutil.copy2(item, args.output / item.name)

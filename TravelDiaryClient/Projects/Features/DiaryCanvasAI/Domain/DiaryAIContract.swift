@@ -31,6 +31,21 @@ nonisolated struct DiaryAIContext: Codable, Sendable {
     var fonts: [DiaryAIFont]
     var frameStyles: [String] = ["手撕纸", "简洁纸边", "拍立得"]
 }
+/// Planned page regions use design units and survive model context recovery.
+nonisolated struct DiaryAILayoutRegion: Codable, Sendable {
+    var role: String
+    var objectID: String?
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+    var bounds: CGRect { CGRect(x: x, y: y, width: width, height: height) }
+}
+nonisolated struct DiaryAIVisualRevision: Codable, Sendable {
+    var ids: [UUID]
+    var reason: String
+    var attempt: Int
+}
 nonisolated struct DiaryAIImage: Sendable { var id: String; var caption: String; var data: Data }
 nonisolated struct DiaryAIOperation: Codable, Sendable {
     var operationID: String
@@ -48,6 +63,7 @@ nonisolated struct DiaryAIOperation: Codable, Sendable {
     var color: String?
     var paper: String?
     var visible: Bool?
+    var maxHeight: Double?
     var cropZoom: Double?
     var cropX: Double?
     var cropY: Double?

@@ -37,7 +37,8 @@ import ZIPFoundation
             if text.hasPrefix("data:image/"), let comma = text.firstIndex(of: ","), let data = Data(base64Encoded: String(text[text.index(after: comma)...])) {
                 return ["attachment": attachment(data, ext: text.hasPrefix("data:image/png") ? "png" : "jpg"), "bytes": data.count] as [String: Any]
             }
-            return text.replacingOccurrences(of: DiaryAITestConfig.apiKey, with: "[REDACTED]")
+            let key = DiaryAITestConfig.apiKey
+            return key.isEmpty ? text : text.replacingOccurrences(of: key, with: "[REDACTED]")
         }
         return value
     }

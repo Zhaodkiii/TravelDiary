@@ -124,12 +124,12 @@ struct DiaryAIWorkspaceView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         if let error = workspace.error { Label(error, systemImage: "exclamationmark.circle").font(.subheadline).foregroundStyle(.orange).padding(12) }
-                        if workspace.needsTextCompletion && !workspace.running {
+                        if workspace.canContinueText && !workspace.running {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("新增文字尚未完成").font(.headline)
+                                Text("待添加文字").font(.headline)
                                 Text("背景将在文字完成或你明确跳过后生成。").font(.caption).foregroundStyle(.secondary)
                                 HStack {
-                                    Button("重试文字") { workspace.processAll() }.buttonStyle(.borderedProminent)
+                                    Button("继续添加文字") { workspace.processAll() }.buttonStyle(.borderedProminent)
                                     Button("跳过文字") { Task { await workspace.skipPendingText() } }.buttonStyle(.bordered)
                                 }
                             }

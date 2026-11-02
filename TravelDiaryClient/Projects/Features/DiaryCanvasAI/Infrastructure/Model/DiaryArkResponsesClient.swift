@@ -4,13 +4,16 @@ import Foundation
 @MainActor final class DiaryArkResponsesClient: DiaryAIModelClient {
     weak var productionLog: DiaryAIProductionLog?
     var expectedWorkspaceVersion: Int?
+    var requiresBackgroundDesign = false
     var workspaceMode = false
     var planning = false
     var allowedLayerReferences: [String]?
     var allowedWorkspaceTools: Set<String>?
     var onTransportEvent: ((String, String) -> Void)?
+    private let apiKeyProvider: @MainActor () throws -> String
     private let session: URLSession
-    init(session: URLSession? = nil) {
+    init(session: URLSession? = nil, apiKeyProvider: @escaping @MainActor () throws -> String = DiaryAITestConfig.requireAPIKey) {
+        self.apiKeyProvider = apiKeyProvider
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = DiaryAIRequestLimits.idleTimeout
         configuration.timeoutIntervalForResource = DiaryAIRequestLimits.requestDeadline
@@ -45,6 +48,7 @@ import Foundation
     }
 
     func respond(prompt: String?, images: [DiaryAIImage], continuation: Data?, results: [DiaryAIToolResult]) async throws -> DiaryAIModelReply {
+        let apiKey = try DiaryAITestConfig.validatedKey(apiKeyProvider())
         var history = try continuation.map { try JSONSerialization.jsonObject(with: $0) as? [[String: Any]] ?? [] } ?? []
         func imageParts(_ values: [DiaryAIImage]) -> [[String: Any]] {
             values.flatMap { image in [
@@ -59,11 +63,18 @@ import Foundation
         var request = URLRequest(url: DiaryAITestConfig.endpoint)
         request.httpMethod = "POST"; request.timeoutInterval = DiaryAIRequestLimits.idleTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(DiaryAITestConfig.apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         var selectedTools = workspaceMode ? DiaryAIWorkspaceTools.schemas.filter { tool in
             guard let name = tool["name"] as? String else { return false }
             return planning ? name == "plan_composition" : name != "plan_composition" && (allowedWorkspaceTools?.contains(name) ?? true)
         } : Self.tools()
+        if workspaceMode, planning, let references = allowedLayerReferences, !references.isEmpty {
+            for index in selectedTools.indices {
+                guard var parameters = selectedTools[index]["parameters"] as? [String: Any], var properties = parameters["properties"] as? [String: Any], var regions = properties["regions"] as? [String: Any], var items = regions["items"] as? [String: Any], var fields = items["properties"] as? [String: Any] else { continue }
+                fields["objectID"] = ["type": "string", "enum": references]
+                items["properties"] = fields; regions["items"] = items; properties["regions"] = regions; parameters["properties"] = properties; selectedTools[index]["parameters"] = parameters
+            }
+        }
         if workspaceMode, !planning, let references = allowedLayerReferences {
             if references.isEmpty {
                 selectedTools.removeAll { tool in
@@ -77,6 +88,13 @@ import Foundation
                 if var object = properties["objectID"] as? [String: Any] { object["enum"] = references; properties["objectID"] = object }
                 if var objects = properties["objectIDs"] as? [String: Any] { objects["items"] = ["type": "string", "enum": references]; properties["objectIDs"] = objects }
                 parameters["properties"] = properties; selectedTools[index]["parameters"] = parameters
+            }
+        }
+        if requiresBackgroundDesign && workspaceMode && !planning {
+            for index in selectedTools.indices where selectedTools[index]["name"] as? String == "finish_batch" {
+                guard var parameters = selectedTools[index]["parameters"] as? [String: Any] else { continue }
+                parameters["required"] = (parameters["required"] as? [String] ?? []) + ["backgroundBrief", "backgroundPrompt"]
+                selectedTools[index]["parameters"] = parameters
             }
         }
         if workspaceMode, expectedWorkspaceVersion != nil {
@@ -93,13 +111,13 @@ import Foundation
         request.httpBody = try JSONSerialization.data(withJSONObject: ["model": DiaryAITestConfig.model, "input": history,
             "tools": selectedTools,
             "tool_choice": workspaceMode ? "required" : "auto",
-            "thinking": ["type": "enabled"], "reasoning": ["effort": planning ? "medium" : "low"],
+            "thinking": ["type": "enabled"], "reasoning": ["effort": "low"],
             "stream": true, "max_output_tokens": planning ? 4096 : 8192, "store": false])
         var received: Data?
         for attempt in 0..<3 {
             try Task.checkCancellation()
             let started = Date()
-            onTransportEvent?("开始连接模型服务", "规划：\(planning ? "是" : "否") · 思考：\(planning ? "medium" : "low")")
+            onTransportEvent?("开始连接模型服务", "规划：\(planning ? "是" : "否") · 思考：\("low")")
             productionLog?.record("request", ["endpoint": request.url!.absoluteString, "attempt": attempt])
             if let body = request.httpBody { productionLog?.data("request-body", body) }
             let (bytes, response) = try await session.bytes(for: request)
@@ -129,16 +147,24 @@ import Foundation
                 onTransportEvent?("模型输出完整接收", String(format: "本次耗时 %.2f 秒；工具参数现在才进入校验", Date().timeIntervalSince(started)))
                 break
             }
+            var errorBody = Data()
+            for try await byte in bytes {
+                errorBody.append(byte)
+                if errorBody.count >= 16_384 { break }
+            }
+            let sanitizedBody = Data(String(decoding: errorBody, as: UTF8.self).replacingOccurrences(of: apiKey, with: "[REDACTED]").utf8)
+            productionLog?.data("response-error", sanitizedBody)
             if status == 429, attempt < 2 {
                 let delay = min(15, max(1, Double((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After") ?? "") ?? Double(2 << attempt)))
                 try await Task.sleep(for: .seconds(delay)); continue
             }
+            let serviceError = DiaryAIServiceError.response(status: status, code: (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "x-error-code"), body: sanitizedBody)
+            if case .authentication = serviceError { throw serviceError }
             let message: String
             switch status {
-            case 401, 403: message = "模型凭据或访问权限不可用，请检查测试配置。"
             case 404: message = "当前模型或接口不可用，请确认模型访问权限。"
             case 429: message = "请求过于频繁，请稍后重试。"
-            case 400, 422: message = "模型未接受当前图片或工具请求，请检查接口兼容性。"
+            case 400, 422: throw serviceError
             default: message = "模型服务暂不可用（HTTP \(status)），请重试。"
             }
             throw DiaryAIError.invalid(message)

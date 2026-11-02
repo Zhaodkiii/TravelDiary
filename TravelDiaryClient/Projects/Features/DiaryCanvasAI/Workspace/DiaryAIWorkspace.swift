@@ -34,9 +34,12 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     var version: Int
     var textDone: Bool? = nil
     var background: DiaryAIBackgroundRecord? = nil
+    var layoutRegions: [DiaryAILayoutRegion]? = nil
+    var visualRevision: DiaryAIVisualRevision? = nil
+    var confirmationScope: DiaryAIVisualRevision? = nil
 }
 
-/// One writer, explicit two-object batches, durable checkpoints before UI publication.
+/// One writer, bounded batches and visual repairs, durable checkpoints before UI publication.
 @MainActor final class DiaryAIWorkspace: ObservableObject {
     static let maximumBatchLayers = 5
     @Published private(set) var active = false
@@ -60,6 +63,9 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private var checkpoints: [DiaryAIWorkspaceCheckpoint] = []
     private var request = DiaryAIRequest.defaults(.relayout)
     private var composition = ""
+    private var layoutRegions: [DiaryAILayoutRegion] = []
+    private var visualRevision: DiaryAIVisualRevision?
+    private var confirmationScope: DiaryAIVisualRevision?
     private var task: Task<Void, Never>?
     private var watchdog: Task<Void, Never>?
     private var generation = UUID()
@@ -75,21 +81,27 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     var hasBackgroundRequest: Bool { request.background != nil }
     var isBackgroundOnly: Bool { request.background?.backgroundOnly == true }
     var needsTextCompletion: Bool { request.action == .relayout && request.canCreateText && !textDone && !isBackgroundOnly }
-    var canGenerateBackground: Bool { active && !running && pending.isEmpty && hasBackgroundRequest && !needsTextCompletion }
+    var canContinueText: Bool {
+        needsTextCompletion && !composition.isEmpty && !pending.contains { id in objects.first { $0.id == id }?.role == "photo" } && !awaitingConfirmation && visualRevision == nil
+    }
+    var canGenerateBackground: Bool { active && !running && pending.isEmpty && hasBackgroundRequest && !needsTextCompletion && visualRevision == nil && !awaitingConfirmation }
     var canRetryAlbum: Bool { !running && backgroundRecord?.layerID != nil && backgroundRecord?.albumState != "saved" }
+    private var pendingBackgroundDesign: DiaryAIBackgroundDesign?
+    private let efficientExecution: Bool
     private let model: any DiaryAIModelClient
     private let productionLog: DiaryAIProductionLog
     private let archiveURL: URL
     private let storage: DiaryAIWorkspaceStore
     private var storageSequence = 0
     var canRollback: Bool { checkpoints.count > 1 && !running }
-    init(session: DiaryEditorSession, model: (any DiaryAIModelClient)? = nil, root: URL? = nil, backgroundProvider: (any DiaryAIBackgroundProvider)? = nil, albumSaver: (any DiaryAIBackgroundAlbumSaving)? = nil) {
+    init(session: DiaryEditorSession, model: (any DiaryAIModelClient)? = nil, root: URL? = nil, backgroundProvider: (any DiaryAIBackgroundProvider)? = nil, albumSaver: (any DiaryAIBackgroundAlbumSaving)? = nil, efficientExecution: Bool? = nil) {
         self.backgroundProvider = backgroundProvider ?? DiarySeedreamBackgroundProvider()
         self.albumSaver = albumSaver ?? DiaryAIBackgroundAlbum()
         productionLog = DiaryAIProductionLog(owner: session.store.ownerID, page: session.document.id, root: root ?? StoragePaths.system.support)
         source = session
         let client = DiaryArkResponsesClient(); client.workspaceMode = true
         self.model = model ?? client
+        self.efficientExecution = efficientExecution ?? (model == nil || model is DiaryArkResponsesClient)
         archiveURL = (root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
             .appendingPathComponent("DiaryCanvasAI/Workspaces/\(DiaryEditorAIBridge(session).storageKey).json")
         storage = DiaryAIWorkspaceStore(url: archiveURL)
@@ -115,12 +127,14 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         (model as? DiaryArkResponsesClient)?.productionLog = productionLog
         (backgroundProvider as? DiarySeedreamBackgroundProvider)?.productionLog = productionLog
         if let bytes = try? JSONEncoder().encode(request) { productionLog.data("settings", bytes) }
+        pendingBackgroundDesign = nil
         source.finishInteraction(); self.request = request; error = nil
         do {
             let saved = try await storage.load()
             if let saved, saved.schema == 1, let last = saved.checkpoints.last,
                try DiaryEditorAIBridge.digest(saved.baseline.restoredDocument) == DiaryEditorAIBridge.digest(source.document) {
                 awaitingConfirmation = saved.awaitingConfirmation ?? false
+                layoutRegions = saved.layoutRegions ?? []; visualRevision = saved.visualRevision; confirmationScope = saved.confirmationScope
                 if let name = saved.logSession { productionLog.resume(name) }
                 backgroundRecord = saved.background
                 baseline = saved.baseline; checkpoints = saved.checkpoints; pending = last.pending
@@ -137,6 +151,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 log("restore", "已恢复上次工作版本", "没有自动发起模型请求。")
             } else {
                 backgroundRecord = nil; backgroundPreview = nil
+                layoutRegions = []; visualRevision = nil; confirmationScope = nil
                 baseline = .init(source.document, pending: [])
                 try await setup(source.document)
                 pending = request.action == .relayout && request.background?.backgroundOnly != true ? objects.filter { $0.editable && $0.role != "background" && (!request.selectedOnly || $0.id == source.selectedID) }.map(\.id) : []
@@ -210,7 +225,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             guard let previous = checkpoints.last else { checkpoints.append(old); return }
             let previousIDs = Set(previous.restoredDocument.objects.values.flatMap(\.layers).map(\.id))
             if old.restoredDocument.objects.values.flatMap(\.layers).contains(where: { $0.kind == .text && !previousIDs.contains($0.id) }) { textDone = false }
-            awaitingConfirmation = false
+            awaitingConfirmation = false; visualRevision = nil; confirmationScope = nil
             pending = previous.pending; version += 1
             try await setup(previous.restoredDocument)
             if let id = backgroundRecord?.layerID, previous.restoredDocument.layer(id) == nil { backgroundRecord = nil; backgroundPreview = nil }
@@ -236,7 +251,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             try await persist()
             try await source.save()
             let needsBackgroundRecovery = request.background != nil && (backgroundRecord?.layerID == nil || (request.background?.saveToAlbum == true && backgroundRecord?.albumState != "saved"))
-            if pending.isEmpty && !needsTextCompletion && !needsBackgroundRecovery { try await removeArchive() }
+            if pending.isEmpty && !needsTextCompletion && !needsBackgroundRecovery && visualRevision == nil && !awaitingConfirmation { try await removeArchive() }
             active = false; source.aiWorkspacePresented = false; return true
         } catch { self.error = error.localizedDescription; return false }
     }
@@ -249,7 +264,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         try await productionLog.flush()
         guard let baseline else { return }
         storageSequence += 1
-        let value = DiaryAIWorkspaceArchive(awaitingConfirmation: awaitingConfirmation, logSession: productionLog.directory.lastPathComponent, baseline: baseline, checkpoints: checkpoints, request: request, events: events, composition: composition, version: version, textDone: textDone, background: backgroundRecord)
+        let value = DiaryAIWorkspaceArchive(awaitingConfirmation: awaitingConfirmation, logSession: productionLog.directory.lastPathComponent, baseline: baseline, checkpoints: checkpoints, request: request, events: events, composition: composition, version: version, textDone: textDone, background: backgroundRecord, layoutRegions: layoutRegions, visualRevision: visualRevision, confirmationScope: confirmationScope)
         try await storage.save(value, sequence: storageSequence)
     }
     private func removeArchive() async throws {
@@ -258,10 +273,14 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     }
     private func run(all: Bool) {
         guard active, !running else { return }
-        if isBackgroundOnly || (hasBackgroundRequest && pending.isEmpty && !composition.isEmpty && !needsTextCompletion) { generateBackground(); return }
+        if isBackgroundOnly || (hasBackgroundRequest && pending.isEmpty && !composition.isEmpty && !needsTextCompletion && visualRevision == nil && !awaitingConfirmation) { generateBackground(); return }
         if hasBackgroundRequest && objects.contains(where: { $0.role == "background" && $0.locked }) {
             error = "背景已锁定：请退出后解除背景锁定，或关闭生成背景再开始。尚未发起模型请求。"
             log("error", "开始前检查未通过", error!); return
+        }
+        if model is DiaryArkResponsesClient && !isBackgroundOnly {
+            do { _ = try DiaryAITestConfig.requireAPIKey() }
+            catch { self.error = error.localizedDescription; stage = "AI 服务配置不可用"; return }
         }
         autoAll = all; running = true; error = nil
         if request.action != .relayout && queue.isEmpty {
@@ -271,15 +290,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         task = Task {
             defer { if generation == token { running = false; processing = []; watchdog?.cancel() } }
             do {
-                if awaitingConfirmation {
-                    (model as? DiaryArkResponsesClient)?.allowedWorkspaceTools = ["finish_batch"]
-                    (model as? DiaryArkResponsesClient)?.planning = false
-                    let reply = try await timedRequest(prompt: "上一批已提交，当前版本\(version)。只调用finish_batch，expectedVersion必须为整数\(version)。禁止重新修改图层。", images: preview.flatMap { $0.jpegData(compressionQuality: 0.8) }.map { [.init(id: "confirmed-canvas", caption: "已提交结果", data: $0)] } ?? [], continuation: nil, results: [], token: token)
-                    guard reply.calls.count == 1, reply.calls.first?.name == "finish_batch" else { throw DiaryAIError.invalid("结果已保存，确认未完成；重试仅确认，不重新排版。") }
-                    let args = try JSONSerialization.jsonObject(with: Data(reply.calls[0].arguments.utf8)) as? [String: Any]
-                    guard args?["expectedVersion"] as? Int == version else { throw DiaryAIError.invalid("确认版本参数必须为整数\(version)") }
-                    awaitingConfirmation = false; try await persist()
-                }
+                if awaitingConfirmation { try await confirmSavedBatch(token: token) }
                 if composition.isEmpty {
                     if request.action == .writing {
                         composition = "仅处理文字，按用户指定的文字形式、字体、颜色和位置执行；保留所有照片、贴纸和背景。优先空白区域，不做整页重排。"
@@ -289,6 +300,12 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 var batches = 0
                 while generation == token && batches < 60 {
                     try Task.checkCancellation()
+                    if let revision = visualRevision {
+                        processing = revision.ids; stage = "正在修复排版"
+                        try await batch(ids: revision.ids, token: token, revision: revision)
+                        batches += 1
+                        continue
+                    }
                     var ids = Array(queue.filter { request.action != .relayout || pending.contains($0) }.prefix(Self.maximumBatchLayers))
                     if ids.isEmpty && autoAll {
                         let order = ["photo", "group", "text", "textImage", "decoration", "frame"]
@@ -307,12 +324,25 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                     try await batch(ids: ids, token: token)
                     queue.removeAll { ids.contains($0) }; batches += 1
                     if ids.isEmpty || request.action == .writing { textDone = true }
-                    if !autoAll && queue.isEmpty { break }
+                    if !autoAll && queue.isEmpty && visualRevision == nil { break }
+                }
+                if efficientExecution && awaitingConfirmation {
+                    for _ in 0..<3 {
+                        try await confirmSavedBatch(token: token)
+                        guard let revision = visualRevision else { break }
+                        try await batch(ids: revision.ids, token: token, revision: revision)
+                    }
+                    guard !awaitingConfirmation else { throw DiaryAIError.invalid("整体视觉验收尚未完成，已提交结果保留。") }
                 }
                 if generation == token && pending.isEmpty && !needsTextCompletion && request.background != nil { try await createBackground(token: token) }
-                if generation == token { stage = needsTextCompletion ? "照片排版已保留，待补充文字" : pending.isEmpty ? "本轮处理完成，可以保存" : "等待选择下一批素材"; log("complete", stage); try await persist() }
+                if generation == token { stage = needsTextCompletion ? "照片排版已保留，待补充文字" : pending.isEmpty ? (events.contains { $0.kind == "warning" } ? "处理完成，仍有视觉问题需检查" : "本轮处理完成，可以保存") : "等待选择下一批素材"; log("complete", stage); try await persist() }
             } catch is CancellationError {} catch {
-                if generation == token { let message = (error as? URLError)?.code == .timedOut ? "模型连接等待超时，已提交批次保留。手动重试会发起新请求，可能再次计费。" : error.localizedDescription; self.error = message; log("error", needsTextCompletion && pending.isEmpty ? "文字阶段未完成，已有排版保留" : pending.isEmpty && hasBackgroundRequest ? "背景阶段未完成，已有排版保留" : "当前批次未完成，已提交批次保留", message); try? await persist() }
+                if generation == token {
+                    if visualRevision != nil { stage = "局部修复未完成，已提交排版保留" }
+                    else if awaitingConfirmation { stage = "排版已保存，待确认效果" }
+                    else if canContinueText || (request.action == .writing && !textDone) { stage = "文字未完成，已提交排版保留；待排素材 \(pending.count) 项" }
+                    else { stage = "已提交排版保留；待排素材 \(pending.count) 项" }
+                    let message = (error as? URLError)?.code == .timedOut ? "模型连接等待超时，已提交批次保留。手动重试会发起新请求，可能再次计费。" : error.localizedDescription; self.error = message; log("error", needsTextCompletion && pending.isEmpty ? "文字阶段未完成，已有排版保留" : pending.isEmpty && hasBackgroundRequest ? "背景阶段未完成，已有排版保留" : "当前批次未完成，已提交批次保留", message); try? await persist() }
             }
         }
     }
@@ -325,7 +355,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         archiveURL.deletingPathExtension().appendingPathComponent(URL(fileURLWithPath: filename).lastPathComponent)
     }
     func skipPendingText() async {
-        guard active, !running, needsTextCompletion else { return }
+        guard active, !running, canContinueText else { return }
         textDone = true
         log("skip", "用户已跳过新增文字", "保留已完成排版，可继续处理素材或生成背景。")
         do { try await persist() } catch { self.error = error.localizedDescription }
@@ -351,6 +381,9 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         let started = Date(), expected = working.document
         let digest = try DiaryEditorAIBridge.digest(expected)
         if backgroundRecord?.inputDigest != digest { backgroundRecord = .init(inputDigest: digest) }
+        if let design = pendingBackgroundDesign, backgroundRecord?.generationPrompt == nil {
+            backgroundRecord?.designBrief = design.brief; backgroundRecord?.generationPrompt = design.prompt
+        }
         guard let recordID = backgroundRecord?.id else { return }
         watchdog?.cancel()
         watchdog = Task { do { try await Task.sleep(for: .seconds(600)); if generation == token { pause(); error = "背景任务达到总时限，已保留排版与已下载图片。手动重试可能再次计费。" } } catch {} }
@@ -368,7 +401,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         let occupied = objects.filter { $0.role != "background" && $0.visible }.map { "\($0.shortID) · \($0.role) · \($0.name) · 边界\($0.bounds) · 旋转\($0.angle)度 · \(request.heroID == $0.id ? "用户指定主照片" : "")" }.joined(separator: "；")
         let prompt = """
         图片编辑任务：擦除输入图中全部照片、照片矩形、人物、相框、贴纸和文字。任何实拍照片或人物留下都视为失败！不要保留输入图中的任何前景实体。用完整连续的浅色纸面替代它们。照片只用于提取实际可见的环境配色与结构轮廓，不可作为真实影像出现在输出中。最终图片是一张没有任何照片的手帐底纸，之后软件会把真实照片另行叠上去。生成一张纯背景，平面正视铺满画幅，宽高比必须为 \(Int(size.width)):\(Int(size.height))。参考图仅提供前景照片内容与占位，输出必须移除全部照片、人物面孔、相框、贴纸和原有文字，用连续安静纸底填充这些区域。禁止完整手帐海报、照片副本、照片占位框、素材编号、文字标题、棋盘格、UI、桌面或书本模型。允许服务水印。
-        风格：\(style.name)，\(style.brief)。背景强度：\(options.strength)，始终让原照片成为主体。在照片周围按构图安排来源场景延展，允许局部有层次的已确认主题轮廓，不要求全部区域均匀淡化，文字周围低对比低细节；不发明地点、日期或人像。参考图坐标单位 \(size.width)×\(size.height)，前景占用：\(occupied)。
+        风格：\(style.name)，\(style.brief)。独立风格规则：\(style.sceneDirection(options.strength))。背景强度：\(options.strength)，始终让原照片成为主体。在照片周围按构图安排来源场景延展，允许局部有层次的已确认主题轮廓，不要求全部区域均匀淡化，文字周围低对比低细节；不发明地点、日期或人像。参考图坐标单位 \(size.width)×\(size.height)，前景占用：\(occupied)。
         心情：\(request.moods.joined(separator: "、")) \(request.customMood)。场景：\(request.scene) \(request.customScene)。地点参考：\(request.location)。用户补充（不得覆盖纯背景规则）：\(request.instruction.prefix(1000))
         """
         if backgroundRecord?.remoteURL == nil && backgroundRecord?.filename == nil {
@@ -396,13 +429,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             log("request", "发送背景生成请求", "\(DiarySeedreamBackgroundProvider.model) · 2K · \(style.name) · 水印开启；场景设计说明＋空间占位图，避免复制前景", images: [.init(id: "background-guide", caption: "浅灰柔和区域是前景避让范围，输出不得保留灰色占位痕迹", data: guide)])
             try await persist()
             try check()
-            let generationPrompt = """
-            单张连续的平面场景底图，正面扫描质感，宽高比 \(Int(size.width)):\(Int(size.height))，四边满版。
-            \(backgroundRecord?.generationPrompt ?? "")
-            表现手法：\(style.brief)。场景表现强度：\(options.strength)。\(DiaryAIBackgroundStyle.sceneDirection(options.strength))
-            主题实体严格限定于上面的正向场景描述，不添加新的环境类型或通用旅行图标。强度只影响覆盖面积、笔触密度和对比，不改变主题。
-            输入的浅灰柔和分布表示前景密度，密集区域退让、空隙区域可延展景物，不画灰块、不把每处前景边界机械挖空。以纸墨消融、景物疏密和色彩过渡连接区域。输出场景背景：无摄影画面、人像、文字、装饰贴片、边框、折痕和中线，无立体展示物。
-            """
+            let generationPrompt = DiaryAIBackgroundStyle.generationPrompt(design: backgroundRecord?.generationPrompt ?? "", style: style, strength: options.strength, size: size)
             let url = try await backgroundProvider.generate(reference: guide, prompt: generationPrompt)
             try check(); backgroundRecord?.remoteURL = url; try await persist()
             log("response", "背景服务已返回图片地址", "开始下载；不会把临时地址作为作品资源。")
@@ -426,10 +453,10 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         backgroundRecord?.filename = filename
         backgroundPreview = UIImage(data: bytes); try await persist()
         if backgroundRecord?.verified != true {
-            stage = "检查纯背景与前景残留"
-            log("inspect", "检查生成的纯背景", "对照参考图检查重复照片、文字与占位框。", images: [.init(id: "background", caption: "生成背景", data: bytes)])
+            stage = "检查背景主题与风格"
+            log("inspect", "检查生成的纯背景", "对照参考图检查重复照片、文字、占位框、主题及\(style.name)的明显媒介错配。", images: [.init(id: "background", caption: "生成背景", data: bytes)])
             try check()
-            try await backgroundProvider.validate(reference: reference, background: bytes); try check()
+            try await backgroundProvider.validate(reference: reference, background: bytes, style: style); try check()
             backgroundRecord?.verified = true; try await persist()
         }
         stage = "正在加入画布"
@@ -488,78 +515,248 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         log("response", "模型已响应", "\(result.calls.count) 个工具调用 · 输入 \(result.inputTokens.map(String.init) ?? "未知") tokens · 输出 \(result.outputTokens.map(String.init) ?? "未知") tokens")
         return result
     }
+    private func modelContext(_ context: DiaryAIContext, text: Bool) throws -> String {
+        guard efficientExecution else { return try DiaryAIDraftController.json(context) }
+        var raw = try JSONSerialization.jsonObject(with: JSONEncoder().encode(context)) as! [String: Any]
+        for key in ["digest", "baseDigest", "id", "contentID", "frameStyles"] { raw.removeValue(forKey: key) }
+        if var objects = raw["objects"] as? [[String: Any]] {
+            for i in objects.indices { objects[i].removeValue(forKey: "assetIDs") }
+            raw["objects"] = objects
+        }
+        if let fonts = raw["fonts"] as? [[String: Any]] {
+            let ids = ["calligraphy.ma-shan-zheng", "calligraphy.long-cang", "handwriting.lxgw.wenkai", "handwriting.yozai", "handwriting.xiaolai", "system"]
+            raw["fonts"] = text ? fonts.filter { ids.contains($0["id"] as? String ?? "") || (($0["name"] as? String).map { !$0.isEmpty && request.instruction.contains($0) } ?? false) } : []
+        }
+        return String(decoding: try JSONSerialization.data(withJSONObject: raw, options: [.sortedKeys]), as: UTF8.self)
+    }
     private func plan(token: UUID) async throws {
         log("phase", "整体构图规划")
         guard let bridge else { return }
-        bridge.allowedBatchIDs = nil; bridge.excludedRenderIDs = Set(pending)
+        bridge.allowedBatchIDs = nil; bridge.excludedRenderIDs = Set(pending).union(request.background == nil ? [] : objects.filter { $0.role == "background" }.map(\.id))
         (model as? DiaryArkResponsesClient)?.planning = true
         var req = request; req.selectedOnly = false
         let context = try await bridge.capture(req)
+        (model as? DiaryArkResponsesClient)?.allowedLayerReferences = context.objects.filter { $0.role == "photo" && $0.editable }.map { $0.id.uuidString }
         var images = try await bridge.initialImages(req)
         if !images.isEmpty { images[0].id = "layout-base"; images[0].caption = "排版基础画布：待排照片、贴纸及绑定相框全部移出；只显示背景和不参与本轮的固定内容。不是原版布局图。素材板与画布分开提供。" }
         if !hasRetainedVisualContent { images.removeAll { $0.id == "layout-base" } }
-        let prompt = "若没有 layout-base，则画布为空白；按尺寸和素材规划。若有，第一张 layout-base 是清理待排素材后的排版基础，不是原来的布局。素材板只用于识别素材，不代表素材已放在页面上。先看清背景的图案、主体和留白，再规划构图。先规划整体构图，不执行图层修改。只调用 plan_composition，expectedVersion=\(version)，summary 用80～160字说明左右页分区、主照片、照片大小比例、文字预留区和贴纸依附关系；只调用此工具一次，禁止输出JSON排版文件、操作数组和长篇正文。避免所有对象缩小聚在中央。背景不可遮挡的主体也需预留。全部图层：\(try DiaryAIDraftController.json(context))。用户要求：\(try DiaryAIDraftController.json(request))。风格：\(DiaryAIStyleLibrary.brief(request.style))。后续每批最多5个图层，同类素材优先一起处理。"
-        let response = try await timedRequest(prompt: prompt, images: images, continuation: nil, results: [], token: token)
-        guard let call = response.calls.first(where: { $0.name == "plan_composition" }), let raw = try JSONSerialization.jsonObject(with: Data(call.arguments.utf8)) as? [String: Any], raw["expectedVersion"] as? Int == version,
-              let summary = raw["summary"] as? String, !summary.isEmpty else { throw DiaryAIError.invalid("模型未给出整体构图，请重试") }
-        composition = summary; log("plan", "整体构图已确定", summary); try await persist()
+        if request.background != nil, !images.isEmpty { images[0].caption = "旧背景将替换，参考图已移除旧背景；不要为旧背景图案保留空间，只保护锁定内容。" }
+        let prompt = (request.background != nil ? "本轮将在排版后生成新背景，旧背景不参与构图，不保护它的文字/人物。" : "") + "若没有 layout-base，则画布为空白；按尺寸和素材规划。若有，第一张 layout-base 是清理待排素材后的排版基础，不是原来的布局。素材板只用于识别素材，不代表素材已放在页面上。先看清背景的图案、主体和留白，再规划构图。先规划整体构图，不执行图层修改。只调用 plan_composition，\(versionInstruction) summary 用80～160字说明左右页分区、主照片、照片大小比例、文字预留区和贴纸依附关系；只调用此工具一次。重新排版时同时提供regions：每张真实照片恰好一个带objectID的photo区域，不能重复照片或给贴纸分配photo区域，授权文字时预留text区域；文字区域需容纳真实文字和纸卡内边距，标题区高度建议400至550、旁注区320至450，不能仅按裸文字高度预留。区域用设计单位x/y/width/height，必须在单页内避开书脊24单位，照片区域不占文字区域。已有图层只规划可编辑对象。禁止输出JSON排版文件、操作数组和长篇正文。避免所有对象缩小聚在中央。背景不可遮挡的主体也需预留。全部图层：\(try modelContext(context, text: false))。用户要求：\(try DiaryAIDraftController.json(request))。风格：\(DiaryAIStyleLibrary.brief(request.style))。后续每批最多5个图层，同类素材优先一起处理。"
+        var planningFeedback = ""
+        for attempt in 0..<3 {
+            let response = try await timedRequest(prompt: prompt + planningFeedback, images: images, continuation: nil, results: [], token: token)
+            do {
+                guard response.calls.count == 1, let call = response.calls.first, call.name == "plan_composition",
+                      let raw = try JSONSerialization.jsonObject(with: Data(call.arguments.utf8)) as? [String: Any], raw["expectedVersion"] as? Int == version,
+                      let summary = raw["summary"] as? String, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw DiaryAIError.invalid("请仅调用一次plan_composition，提供构图说明") }
+                var regions: [DiaryAILayoutRegion] = []
+                if request.action == .relayout, let value = raw["regions"] {
+                    var decoded = try JSONDecoder().decode([DiaryAILayoutRegion].self, from: JSONSerialization.data(withJSONObject: value))
+                    for index in decoded.indices {
+                        if let reference = decoded[index].objectID, let object = context.objects.first(where: { $0.shortID == reference || $0.id.uuidString.caseInsensitiveCompare(reference) == .orderedSame }) { decoded[index].objectID = object.id.uuidString }
+                    }
+                    if efficientExecution {
+                        var seen = Set<String>()
+                        decoded = decoded.filter { region in
+                            guard region.role == "photo" else { return true }
+                            guard let id = region.objectID, context.objects.contains(where: { $0.id.uuidString == id && $0.role == "photo" && $0.editable }) else { return false }
+                            return seen.insert(id).inserted
+                        }
+                    }
+                    regions = try Self.validatedRegions(decoded, context: context, allowsText: request.canCreateText)
+                }
+                if efficientExecution, request.action == .relayout {
+                    let photos = context.objects.filter { $0.role == "photo" && $0.editable }
+                    let occupied = regions.filter { $0.role == "photo" }.reduce(0.0) { total, region in
+                        guard let photo = photos.first(where: { $0.id.uuidString == region.objectID }), photo.bounds.width > 0 else { return total }
+                        let ratio = photo.bounds.height / photo.bounds.width
+                        let width = min(region.width, region.height / ratio)
+                        return total + width * width * ratio
+                    }
+                    if (1...4).contains(photos.count), occupied < context.size.width * context.size.height * 0.2 {
+                        let w = context.size.width, h = context.size.height
+                        regions = photos.enumerated().map { index, photo in
+                            let right = index >= 2, lower = index % 2 == 1
+                            return DiaryAILayoutRegion(role: "photo", objectID: photo.id.uuidString, x: Double(w * (right ? 0.55 : 0.06)), y: Double(h * (lower ? 0.56 : 0.21)), width: Double(w * 0.36), height: Double(h * 0.34))
+                        }
+                        if request.canCreateText {
+                            regions += [.init(role: "text", x: Double(w * 0.06), y: Double(h * 0.035), width: Double(w * 0.36), height: Double(h * 0.16)), .init(role: "text", x: Double(w * 0.55), y: Double(h * 0.035), width: Double(w * 0.36), height: Double(h * 0.16))]
+                        }
+                        regions = try Self.validatedRegions(regions, context: context, allowsText: request.canCreateText)
+                        log("quality", "照片占比过小，采用本地可读布局", "保留原照片比例与文字区，不发起额外模型请求。")
+                    }
+                }
+                layoutRegions = regions; composition = summary
+            } catch {
+                guard attempt < 2 else { throw error }
+                planningFeedback = "\n上次构图未通过检查，请修正规划：" + error.localizedDescription
+                log("recovery", "正在修正构图区域", error.localizedDescription)
+                continue
+            }
+            log("plan", "整体构图已确定", composition); try await persist()
+            return
+        }
+    }
+
+    private func scheduleVisualRevision(_ raw: [String: Any], scope: DiaryAIVisualRevision) async throws {
+        guard let references = (raw["objectIDs"] as? [String]) ?? (raw["objectID"] as? String).map({ [$0] }), !references.isEmpty,
+              references.count <= Self.maximumBatchLayers, let reason = raw["reason"] as? String,
+              !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw DiaryAIError.invalid("修复需提供本批对象和具体原因，最多两轮") }
+        let targets = references.compactMap { reference in objects.first { ($0.shortID == reference || $0.id.uuidString.caseInsensitiveCompare(reference) == .orderedSame) && scope.ids.contains($0.id) }?.id }
+        guard targets.count == references.count, Set(targets).count == targets.count else { throw DiaryAIError.invalid("只能修复本批已提交对象，不允许重复或外部对象") }
+        if scope.attempt >= 2 {
+            log("warning", "仍有视觉问题，需要人工检查", reason)
+            try await finishConfirmation()
+            error = "局部修复已达两轮，仍有问题：" + reason
+            return
+        }
+        let previousRevision = visualRevision, previousScope = confirmationScope
+        visualRevision = .init(ids: targets, reason: reason, attempt: scope.attempt + 1)
+        awaitingConfirmation = false; confirmationScope = nil
+        do { try await persist() } catch {
+            visualRevision = previousRevision; confirmationScope = previousScope; awaitingConfirmation = true; throw error
+        }
+        log("revision", "已安排局部视觉修复", reason)
+    }
+    private func finishConfirmation() async throws {
+        let previousRevision = visualRevision, previousScope = confirmationScope
+        awaitingConfirmation = false; visualRevision = nil; confirmationScope = nil
+        do { try await persist() } catch {
+            visualRevision = previousRevision; confirmationScope = previousScope; awaitingConfirmation = true; throw error
+        }
+    }
+    private func confirmSavedBatch(token: UUID) async throws {
+        let scope = confirmationScope
+        var tools: Set<String> = ["finish_batch"]
+        if scope != nil { tools.insert("request_batch_revision") }
+        if let client = model as? DiaryArkResponsesClient {
+            client.allowedWorkspaceTools = tools; client.planning = false
+            client.requiresBackgroundDesign = efficientExecution && request.background != nil
+            client.allowedLayerReferences = objects.filter { scope?.ids.contains($0.id) == true }.flatMap { [$0.shortID, $0.id.uuidString] }
+        }
+        let qualityRules = efficientExecution ? "这是最终整页验收。只修复主体遮挡、文字不可读、严重碰撞或越界；照片区域是最大容纳范围，不要求铺满，禁止把原始竖照拉成横照。保留所有用户原照片，不因场景不统一要求替换原照片；没有替换、删除或拉伸工具。生成新背景时旧背景的图案与文字将被替换，不为旧背景重新移动照片。有限装饰压边允许，不因主观偏好反复修复。通过时只finish_batch。如开启生成背景，同时在finish_batch给出backgroundBrief（真实照片的共同主题与来源线索）及backgroundPrompt（150至250字纯正向场景底图，绝对位置，按指定视觉语言组织一处主题意象、少量来源呼应与主动留白，不强制写实景深或撕纸，不写照片、人物、贴纸、书页，不复制旧背景）。不合格时只request_batch_revision。" : ""
+        let backgroundStyleRules = request.background.map { options in let style = DiaryAIBackgroundStyle.resolve(options.style); return "背景视觉语言：\(style.name)，\(style.brief)。\(style.sceneDirection(options.strength))。这些规则同时约束backgroundBrief与backgroundPrompt。" } ?? ""
+        let prompt = qualityRules + backgroundStyleRules + "上一批已提交，当前版本\(version)。\(versionInstruction) 检查图片，有问题且允许时调用request_batch_revision，无问题finish_batch；不直接修改图层。允许工具：\(tools.sorted())。用户要求：\(try DiaryAIDraftController.json(request))。构图：\(composition)。结构化区域：\(try DiaryAIDraftController.json(layoutRegions))。确认范围：\(try DiaryAIDraftController.json(scope))。当前图层：\(try DiaryAIDraftController.json(objects))。"
+        var reviewImages = preview.flatMap { $0.jpegData(compressionQuality: 0.8) }.map { [DiaryAIImage(id: "confirmed-canvas", caption: "已提交结果", data: $0)] } ?? []
+        if efficientExecution, request.background != nil, let bridge {
+            bridge.allowedBatchIDs = nil
+            bridge.excludedRenderIDs = Set(objects.filter { $0.role == "background" }.map(\.id)).union(pending)
+            var reviewRequest = request; reviewRequest.selectedOnly = false
+            _ = try await bridge.capture(reviewRequest)
+            reviewImages = [.init(id: "foreground-review", caption: "实际前景布局，旧背景已移除。背景主题仅从这些照片推导，不引用旧背景图案。", data: try await bridge.originalPreview())]
+        }
+        let reply = try await timedRequest(prompt: prompt, images: reviewImages, continuation: nil, results: [], token: token)
+        guard reply.calls.count == 1, let call = reply.calls.first, tools.contains(call.name),
+              let args = try JSONSerialization.jsonObject(with: Data(call.arguments.utf8)) as? [String: Any], args["expectedVersion"] as? Int == version else { throw DiaryAIError.invalid("结果已保存，视觉确认未完成；可继续确认当前版本。") }
+        if call.name == "request_batch_revision", let scope { try await scheduleVisualRevision(args, scope: scope) }
+        else {
+            if efficientExecution, request.background != nil, let brief = args["backgroundBrief"] as? String, let prompt = args["backgroundPrompt"] as? String,
+               brief.count <= 1500, let prepared = try? DiarySeedreamBackgroundProvider.preparePrompt(prompt) {
+                pendingBackgroundDesign = .init(brief: brief, prompt: prepared)
+                log("design", "整页验收复用背景设计", brief + "\n" + prepared)
+            }
+            try await finishConfirmation()
+        }
+    }
+    private var versionInstruction: String {
+        model is DiaryArkResponsesClient ? "版本由客户端注入，不输出expectedVersion。" : "expectedVersion必须为整数\(version)。"
+    }
+    static func validatedRegions(_ regions: [DiaryAILayoutRegion], context: DiaryAIContext, allowsText: Bool) throws -> [DiaryAILayoutRegion] {
+        guard regions.count <= 20 else { throw DiaryAIError.invalid("构图区域过多") }
+        var result: [DiaryAILayoutRegion] = []
+        for var region in regions {
+            guard [region.x, region.y, region.width, region.height].allSatisfy(\.isFinite), region.width > 0, region.height > 0,
+                  CGRect(origin: .zero, size: context.size).contains(region.bounds), ["photo", "text"].contains(region.role) else { throw DiaryAIError.invalid("构图区域无效或越界") }
+            if let spine = context.spineX, region.bounds.minX < spine + 24 && region.bounds.maxX > spine - 24 { throw DiaryAIError.invalid("构图区域跨越书脊，请分配到左右页") }
+            if region.role == "photo" {
+                guard let object = context.objects.first(where: { ($0.shortID == region.objectID || $0.id.uuidString == region.objectID) && $0.role == "photo" && $0.editable }),
+                      !result.contains(where: { $0.objectID == object.id.uuidString }) else { throw DiaryAIError.invalid("照片规划区域必须对应唯一可编辑照片") }
+                region.objectID = object.id.uuidString
+            } else {
+                guard allowsText else { throw DiaryAIError.invalid("未授权文字预留区") }
+                region.objectID = nil
+            }
+            result.append(region)
+        }
+        for photo in result where photo.role == "photo" {
+            guard !result.contains(where: { $0.role == "text" && $0.bounds.intersects(photo.bounds) }) else { throw DiaryAIError.invalid("照片规划占用了文字预留区") }
+        }
+        return result
     }
     static func toolsForBatchStage(base: Set<String>, hasOperations: Bool, committed: Bool) -> Set<String> {
-        if committed { return ["finish_batch"] }
+        if committed { return base.intersection(["finish_batch", "request_batch_revision"]) }
         var tools = base
-        tools.remove("finish_batch")
-        if !hasOperations { tools.remove("commit_batch"); tools.remove("rollback_batch"); tools.remove("validate_layout") }
+        tools.subtract(["finish_batch", "request_batch_revision"])
+        if !hasOperations { tools.subtract(["commit_batch", "rollback_batch", "validate_layout"]) }
         else { tools.subtract(["get_workspace", "get_canvas_image", "list_fonts", "list_frame_styles", "inspect_layers", "validate_layout"]) }
         return tools
     }
-    private func batch(ids: [UUID], token: UUID) async throws {
+    private func batch(ids: [UUID], token: UUID, revision: DiaryAIVisualRevision? = nil) async throws {
         let names = ids.compactMap { id in objects.first { $0.id == id }?.shortID }.joined(separator: "、")
         let count = events.filter { $0.kind == "phase" && $0.title.hasPrefix("第 ") }.count + 1
         log("phase", "第 \(count) 批 · \(ids.isEmpty ? "新增文字" : names)", "本批\(ids.count)个已有图层；逐项操作、统一提交后确认。")
         guard let bridge, let working else { return }
         (model as? DiaryArkResponsesClient)?.planning = false
+        (model as? DiaryArkResponsesClient)?.requiresBackgroundDesign = false
         let batchStarted = Date()
         batchExpires = batchStarted.addingTimeInterval(DiaryAIRequestLimits.batchDeadline)
         defer { batchExpires = nil }
+        bridge.autoFitPhotoRegions = efficientExecution && request.action == .relayout
         bridge.allowedBatchIDs = Set(ids); bridge.excludedRenderIDs = Set(pending)
+        bridge.layoutRegions = layoutRegions
         var req = request; req.selectedOnly = false
         if !ids.isEmpty && request.action == .relayout { req.allowsText = false }
+        let originalObjectIDs = Set(bridge.objectChoices.map(\.id))
         var context = try await bridge.capture(req)
         context.objects = context.objects.filter { ids.contains($0.id) || (!pending.contains($0.id) && $0.visible) }
         var images = [DiaryAIImage(id: "current-canvas", caption: "最新排版画布：背景＋已完成摆放的对象；未完成照片、贴纸、相框不在画布中。本批素材单独附图。", data: try await bridge.originalPreview())]
         if !hasRetainedVisualContent { images = [] }
         if !ids.isEmpty { images += try await bridge.inspect(.init(contextID: context.id, objectIDs: ids, view: "fullAsset")) }
+        var batchTools: Set<String> = ["get_workspace", "get_canvas_image", "list_fonts", "list_frame_styles", "rollback_batch", "commit_batch", "finish_batch"]
+        if !ids.isEmpty {
+            batchTools.insert("inspect_layers")
+            if req.canMove || context.objects.contains(where: { ids.contains($0.id) && $0.role == "text" }) { batchTools.insert("place_layer") }
+            if context.objects.contains(where: { ids.contains($0.id) && $0.role == "text" }) { batchTools.insert("update_text") }
+            if req.allowsCrop { batchTools.insert("set_photo_crop") }
+            if req.allowsFrames { batchTools.insert("set_photo_frame") }
+            if req.allowsDecorations { batchTools.insert("set_decoration_visibility") }
+        }
+        if req.canCreateText && revision == nil { batchTools.insert("create_text") }
+        batchTools.insert("request_batch_revision")
         if let client = model as? DiaryArkResponsesClient {
-            var tools: Set<String> = ["get_workspace", "get_canvas_image", "list_fonts", "list_frame_styles", "inspect_layers", "rollback_batch", "commit_batch", "validate_layout", "finish_batch"]
-            if req.canMove || ids.contains(where: { id in context.objects.first { $0.id == id }?.role == "text" }) { tools.insert("place_layer") }
-            if ids.contains(where: { id in context.objects.first { $0.id == id }?.role == "text" }) { tools.insert("update_text") }
-            if req.canCreateText { tools.insert("create_text") }
-            if req.allowsCrop { tools.insert("set_photo_crop") }
-            if req.allowsFrames { tools.insert("set_photo_frame") }
-            if req.allowsDecorations { tools.insert("set_decoration_visibility") }
-            client.allowedWorkspaceTools = tools
             client.allowedLayerReferences = context.objects.filter { ids.contains($0.id) }.flatMap { [$0.shortID, $0.id.uuidString] }
         }
         var operations: [DiaryAIOperation] = [], continuation: Data?, results: [DiaryAIToolResult] = []
         var committed = false, committedRound: Int?, seen: [String: String] = [:]
-        let batchVersion = version
         var commitFailed = false
         var inspections = 0
         var missingCallRetries = 0
         var repeatedErrors = 0
         var recoveryPrompt: String?
-        let batchTools = (model as? DiaryArkResponsesClient)?.allowedWorkspaceTools ?? []
-        for round in 0..<8 {
+        var resetContext = false
+        var noProgressRounds = 0
+        var confirmationIDs = ids
+        for round in 0..<(efficientExecution ? 3 : 16) {
             guard Date().timeIntervalSince(batchStarted) < DiaryAIRequestLimits.batchDeadline else { throw DiaryAIError.invalid("本批达到总时限，已提交操作保留。手动重试可能产生新请求和费用。") }
-            if let client = model as? DiaryArkResponsesClient {
-                client.allowedWorkspaceTools = Self.toolsForBatchStage(base: batchTools, hasOperations: !operations.isEmpty, committed: committed)
-                if !committed && ids.isEmpty && !operations.isEmpty { client.allowedWorkspaceTools = commitFailed ? ["rollback_batch", "create_text"] : ["commit_batch"] }
+            var offeredTools = Self.toolsForBatchStage(base: batchTools, hasOperations: !operations.isEmpty, committed: committed)
+            if !committed && ids.isEmpty && !operations.isEmpty {
+                offeredTools = commitFailed ? ["rollback_batch", "create_text"] : ["commit_batch", "create_text", "rollback_batch"]
             }
-            let prompt = round == 0 ? """
+            if noProgressRounds >= 2 && !committed {
+                offeredTools.subtract(["get_workspace", "get_canvas_image", "list_fonts", "list_frame_styles", "inspect_layers"])
+            }
+            if efficientExecution && !committed {
+                offeredTools.subtract(["commit_batch", "finish_batch", "request_batch_revision", "rollback_batch"])
+                if !operations.isEmpty { offeredTools = batchTools.subtracting(["commit_batch", "finish_batch", "request_batch_revision", "rollback_batch"]) }
+            }
+            (model as? DiaryArkResponsesClient)?.allowedWorkspaceTools = offeredTools
+            let initialPrompt = """
             输出约定：只通过工具调用完成操作，不输出正文说明、Markdown、完整排版JSON、operations数组或任何文件。只传工具必填参数和确实要改的字段。客户端负责UUID解析、坐标换算、字体测量、资源和保存，你不需要生成这些数据。图层objectID优先使用本批L编号，版本号从工具返回读取。
             最短流程：新增文字批次先create_text；已有图层批次先place_layer或update_text。然后commit_batch；下一轮查看提交返回图片后finish_batch。必要时先裁剪或调整相框。已有图片、字体和版本足够时不要重复查询；不要输出长篇设计说明。commit_batch失败保留已暂存操作，按错误修订对应图层后再次提交。只有需要清空整批重做才用rollback_batch，清空后必须补齐全部对象。
-            你在图层工作台中逐步设计手帐。仅使用工具处理本批对象，不返回完整文件或全页计划。先调用单项图层工具，修改暂存；commit_batch 原子执行并显示画布，返回图片用于确认已执行结果，提交后只调用finish_batch，不再调用修改工具；需要进一步调整留给下一批。每个工具必须带 expectedVersion，当前版本 \(batchVersion)。提交后版本加1。
-            操作权限：\(try DiaryAIDraftController.json(request))。照片默认等比缩放；width 表示当前旋转可见边界的目标宽度，center={x,y} 是设计单位的视觉中心。set_photo_crop 只在授权时使用。create_text 必须有稳定 clientObjectKey；同key再次create_text表示修订暂存文字，可调整位置和文本框，不要用update_text修改尚未提交的新文字。文字不能放在spineX中央，左右各留24设计单位；使用左右页空白区。create_text必须使用目录中的fontID；用户指定字体与纸卡时遵从指定，否则按标题、旁注角色选择目录内字体和承托。主标题用短句与语义换行，正文/旁注与标题形成字号层级；完整词语不能被拆到两行。可用paper选择文字承托，标题优先titleParchment，短注可用warmHeart、blueTape、kraftStrip，心愿可用pinkWish，植物场景botanicalLine；不为所有文字都加纸卡，避免装饰堆积。禁止虚构事实。不要移动本批之外的对象。不删除、解锁，不修改背景。单项工具参数未知时调用查询。
+            你在图层工作台中逐步设计手帐。仅使用工具处理本批对象，不返回完整文件或全页计划。先调用单项图层工具，修改暂存；commit_batch 原子执行并显示画布，返回图片用于确认已执行结果，提交后检查图片，无问题调用finish_batch；有主体遮挡、留白被占等问题调用request_batch_revision指定对象和原因。禁止同轮提交和确认。\(versionInstruction) 当前版本\(version)。提交后版本加1。
+            操作权限：\(try DiaryAIDraftController.json(request))。照片默认等比缩放；width 表示当前旋转可见边界的目标宽度，center={x,y} 是设计单位的视觉中心。set_photo_crop 只在授权时使用。create_text 必须有稳定 clientObjectKey；同key再次create_text表示修订暂存文字，可调整位置和文本框，不要用update_text修改尚未提交的新文字。文字不能放在spineX中央，左右各留24设计单位；使用左右页空白区。create_text必须使用目录中的fontID；用户指定字体与纸卡时遵从指定，否则按标题、旁注角色选择目录内字体和承托。主标题用短句与语义换行，正文/旁注与标题形成字号层级；完整词语不能被拆到两行。可用paper选择文字承托，标题优先titleParchment，短注可用warmHeart、blueTape、kraftStrip，心愿可用pinkWish，植物场景botanicalLine；不为所有文字都加纸卡，避免装饰堆积。禁止虚构事实：静态照片不能证明停留时长、声音、具体日期或未提供的地名；地点未提供时不猜测。文字卡片超出规划时先修正位置或精简文案，保留用户默认字体与纸卡，不连续缩字或去掉纸卡。不要移动本批之外的对象。不删除、解锁，不修改背景。单项工具参数未知时调用查询。
+            批次类型：\(revision != nil ? "visualRevision" : ids.isEmpty ? "createText（没有已有ID是正常的，必须根据构图和用户要求创作文案）" : "layout")。修复要求：\(revision?.reason ?? "无")。
+            结构化构图区域：\(try DiaryAIDraftController.json(layoutRegions))。照片须在所属区域内，文字须在文字区内；按照片宽高比同时计算宽高，可用maxHeight限制旋转换框后的高度。
             本批ID：\(ids.map(\.uuidString))。待排ID：\(pending.map(\.uuidString))。
             全局构图：\(composition)。本批定位不能把所有照片缩小到页面中心，要形成主次、留白和阅读顺序。
             place_layer 的 width 是换框、旋转后的最终可见包围盒宽度，center 是最终可见中心；客户端先完成裁剪与相框再统一定位，无需重复补偿相框尺寸。
@@ -567,18 +764,41 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             已授权新增文字时，本批照片保持文字预留区；文字阶段必须实际创建可编辑文字，不能仅在说明中声称完成。
             页面及每个图层详细数据（只读输入，绝不复述或原样输出）：\(try DiaryAIDraftController.json(context))
             不能把素材编号、透明底板写入作品。先提交本批后再看最新整页图。需要新增文字且本批为空时只创建文字。已有文字按权限保留正文。
-            """ : recoveryPrompt
-            recoveryPrompt = nil
-            let reply = try await timedRequest(prompt: prompt, images: round == 0 ? images : [], continuation: continuation, results: results, token: token)
+            """
+            let rebuilding = resetContext || round == 0
+            let state = "当前版本\(version)，已提交=\(committed)；允许工具：\(offeredTools.sorted())。暂存操作（修订时复用clientObjectKey）：\(try DiaryAIDraftController.json(operations))。待确认对象：\(confirmationIDs)。"
+            var prompt: String? = rebuilding ? initialPrompt + "\n" + state : recoveryPrompt
+            if efficientExecution {
+                prompt = "一次返回本批全部必要操作，客户端自动校验并提交；不要调用commit/finish，不输出文件。照片按对应region设计主次，客户端会按真实尺寸容纳区域。简短补充仅创建1个短标题与1个旁注，不堆叠三段文字；字号不得小于画布宽度的1.4%（4370宽时至少62），文字放不下优先精简句子，不缩小字号或取消纸卡；文字按语义换行，默认马善政与blueTape纸卡，不编造地点、声音、时长；writesLocation=false时绝对不能把location字段写进正文，location只作背景参考；标题与旁注分层。装饰依附照片外缘，不遮人脸和正文。\(versionInstruction) 构图：\(composition)。区域：\(try DiaryAIDraftController.json(layoutRegions))。本批：\(ids)。修复：\(revision?.reason ?? "无")。权限：\(try DiaryAIDraftController.json(req))。上下文：\(try modelContext(context, text: ids.isEmpty || ids.contains { id in objects.first { $0.id == id }?.role == "text" }))。已暂存：\(try DiaryAIDraftController.json(operations))。最近错误：\(recoveryPrompt ?? results.map(\.text).joined(separator: "\n"))"
+                continuation = nil; results = []
+            }
+            if rebuilding, let recoveryPrompt { prompt! += "\n最近反馈：" + recoveryPrompt }
+            if resetContext {
+                // A new conversation must not contain orphan function_call_output records.
+                prompt! += "\n最近工具结果：" + results.map(\.text).joined(separator: "\n")
+                continuation = nil; results = []
+            }
+            recoveryPrompt = nil; resetContext = false
+            let recoveryImages = committed ? preview.flatMap { $0.jpegData(compressionQuality: 0.82) }.map { [DiaryAIImage(id: "confirmed-canvas", caption: "最新已提交画布", data: $0)] } ?? images : images
+            var reply = try await timedRequest(prompt: prompt, images: (rebuilding || efficientExecution) ? recoveryImages : [], continuation: continuation, results: results, token: token)
+            if efficientExecution && reply.calls.contains(where: { DiaryAIWorkspaceTools.operationNames[$0.name] != nil }) {
+                log("client", "客户端自动提交本批", "已完整接收工具参数；不额外调用模型决定提交。")
+                let args = try DiaryAIDraftController.json(["expectedVersion": version])
+                reply.calls.append(.init(id: "auto-" + UUID().uuidString, name: "commit_batch", arguments: args))
+                offeredTools.insert("commit_batch")
+            }
             continuation = reply.continuation; results = []
             if reply.calls.isEmpty {
                 guard missingCallRetries < 2 else { throw DiaryAIError.invalid(committed ? "本批已保存，模型未完成结果确认；请检查画布后继续。" : "模型未完成必要操作，当前批次未提交，已完成批次保留。") }
                 missingCallRetries += 1
-                let next = committed ? "已提交并附上最新画布，当前版本\(version)，请仅调用finish_batch。" : operations.isEmpty ? "尚未暂存操作；新增文字请先create_text，已有图层请先place_layer/update_text。禁止finish_batch。" : "已有\(operations.count)项暂存操作，请调用commit_batch。禁止finish_batch。"
+                let next = committed ? "已提交并附上最新画布，当前版本\(version)，检查后通过finish_batch，有问题且允许时request_batch_revision。" : operations.isEmpty ? "尚未暂存操作；新增文字请先create_text，已有图层请先place_layer/update_text。禁止finish_batch。" : "已有\(operations.count)项暂存操作，请调用commit_batch。禁止finish_batch。"
                 recoveryPrompt = "请继续完成本批，必须调用当前允许的工具，不要回复说明文字。" + next
+                resetContext = true; noProgressRounds += 1
                 log("recovery", "正在纠正模型调用顺序", next)
                 continue
             }
+            var madeProgress = false
+            var automaticInputFailed = false
             for call in reply.calls {
                 if let previous = seen[call.id] {
                     guard previous == call.arguments else { throw DiaryAIError.invalid("重复工具调用内容冲突") }
@@ -587,19 +807,26 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 seen[call.id] = call.arguments
                 log("tool", "调用 \(call.name)", call.arguments)
                 do {
-                    let allowed = Self.toolsForBatchStage(base: batchTools, hasOperations: !operations.isEmpty, committed: committed)
-                    guard allowed.contains(call.name) || !(model is DiaryArkResponsesClient) else { throw DiaryAIError.invalid("工具不属于当前阶段；允许：\(allowed.sorted().joined(separator: ","))") }
-                    if committed && call.name != "finish_batch" { throw DiaryAIError.invalid("本批已提交，当前版本\(version)；下一轮只调用finish_batch，不要再移动或回滚图层。") }
+                    guard offeredTools.contains(call.name) else { throw DiaryAIError.invalid("工具不属于当前阶段；本批类型：\(ids.isEmpty ? "新增文字，请create_text" : "已有图层")；允许：\(offeredTools.sorted().joined(separator: ","))") }
+                    if committed && !["finish_batch", "request_batch_revision"].contains(call.name) { throw DiaryAIError.invalid("本批已提交，当前版本\(version)；下一轮检查图片，通过finish_batch，有问题且允许时request_batch_revision，不要直接移动或回滚。") }
                     guard let raw = try JSONSerialization.jsonObject(with: Data(call.arguments.utf8)) as? [String: Any] else { throw DiaryAIError.invalid("参数必须为JSON对象") }
                     guard raw["expectedVersion"] != nil else { throw DiaryAIError.invalid("缺少expectedVersion字段") }
                     guard raw["expectedVersion"] is NSNumber, !(raw["expectedVersion"] is String) else { throw DiaryAIError.invalid("expectedVersion类型错误：必须是整数\(version)，不能是字符串") }
                     guard raw["expectedVersion"] as? Int == version else { throw DiaryAIError.invalid("版本不匹配，当前版本 \(version)") }
-                    for key in ["width", "angle", "fontSize"] where raw[key] != nil { guard raw[key] is NSNumber else { throw DiaryAIError.invalid("\(key)必须是数字，不能是字符串") } }
+                    for key in ["width", "maxHeight", "angle", "fontSize"] where raw[key] != nil { guard raw[key] is NSNumber else { throw DiaryAIError.invalid("\(key)必须是数字，不能是字符串") } }
                     if let center = raw["center"] { guard let point = center as? [String: Any], point["x"] is NSNumber, point["y"] is NSNumber else { throw DiaryAIError.invalid("center必须是包含数字x、y的对象，不能是JSON字符串") } }
                     var text = "", feedback: [DiaryAIImage] = []
-                    if let operation = try DiaryAIWorkspaceTools.parse(call, version: version, context: context) {
+                    if var operation = try DiaryAIWorkspaceTools.parse(call, version: version, context: context) {
                         guard !committed, operations.count < 30 else { throw DiaryAIError.invalid("本批已提交或操作数过多") }
                         if operation.type != "createText" { guard let id = operation.objectID, ids.contains(id) else { throw DiaryAIError.invalid("只能处理本批对象") } }
+                        if efficientExecution && operation.type == "createText" && req.instruction.isEmpty {
+                            operation.fontSize = max(operation.fontSize ?? 72, min(72, max(12, ceil(Double(context.size.width) * 0.014))))
+                            if req.instruction.isEmpty && operation.paper == "none" { operation.paper = "blueTape" }
+                        }
+                        if operation.type == "setPlacement", let id = operation.objectID,
+                           let region = layoutRegions.first(where: { $0.role == "photo" && $0.objectID == id.uuidString }) {
+                            operation.maxHeight = min(operation.maxHeight ?? region.height, region.height)
+                        }
                         if let index = operations.firstIndex(where: { $0.type == operation.type && (($0.objectID != nil && $0.objectID == operation.objectID) || ($0.clientObjectKey != nil && $0.clientObjectKey == operation.clientObjectKey)) }) {
                             let old = operations[index]
                             if operation.type == "setPlacement", let previous = old.scale, let next = operation.scale, next < previous * 0.5 {
@@ -608,11 +835,11 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                             operations[index] = operation
                             log("revision", "修订已暂存图层", "同一图层的同类操作已替换，不重复执行。")
                         } else { operations.append(operation) }
-                        commitFailed = false
-                        text = "操作已暂存（\(operations.count)项），当前版本\(version)。下一步：完成本批必要操作后立即commit_batch；不要get_workspace、validate_layout或重复创建相同文字。"
+                        commitFailed = false; madeProgress = true; repeatedErrors = 0; missingCallRetries = 0
+                        text = "操作已暂存（\(operations.count)项），当前版本\(version)。下一步：完成本批必要操作后立即commit_batch；不要重复查询；如需修订文字，使用同clientObjectKey替换暂存内容。"
                     } else {
                         switch call.name {
-                        case "get_workspace": text = "当前版本 \(version)；已暂存\(operations.count)项；已提交=\(committed)。\(operations.isEmpty ? "请先创建或调整本批对象" : "请立即commit_batch")。\(try DiaryAIDraftController.json(context))"
+                        case "get_workspace": text = state + "\n" + initialPrompt
                         case "list_fonts": text = try DiaryAIDraftController.json(context.fonts)
                         case "list_frame_styles": text = context.frameStyles.joined(separator: "、")
                         case "inspect_layers":
@@ -623,8 +850,9 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                         case "get_canvas_image":
                             let bytes = committed ? (preview?.jpegData(compressionQuality: 0.82) ?? Data()) : try await bridge.originalPreview()
                             feedback = [.init(id: "canvas-v\(version)", caption: "当前已提交画布", data: bytes)]; text = "当前画布"
-                        case "rollback_batch": guard !committed else { throw DiaryAIError.invalid("已提交批次需用户回退") }; operations = []; commitFailed = false; text = "已清空本批全部未提交操作（不只失败的一项）。必须重新摆放全部对象：\(ids.compactMap { id in context.objects.first { $0.id == id }?.shortID }.joined(separator: "、"))，全部暂存后才能commit_batch。"
+                        case "rollback_batch": guard !committed else { throw DiaryAIError.invalid("已提交批次需用户回退") }; operations = []; commitFailed = false; text = ids.isEmpty ? "已清空本批新增文字；请按原文字计划重新创建，复用原clientObjectKey。" : "已清空本批全部未提交操作（不只失败的一项）。必须重新摆放全部对象：\(ids.compactMap { id in context.objects.first { $0.id == id }?.shortID }.joined(separator: "、"))，全部暂存后才能commit_batch。"
                         case "commit_batch":
+                            guard !efficientExecution || !automaticInputFailed else { throw DiaryAIError.invalid("本轮有操作参数无效，未自动提交；先修正失败操作") }
                             guard !committed, !operations.isEmpty else { throw DiaryAIError.invalid("没有待提交操作或已经提交") }
                             if request.action == .relayout {
                                 guard Set(ids).isSubset(of: Set(operations.filter { $0.type == "setPlacement" || ($0.type == "updateText" && $0.center != nil) }.compactMap(\.objectID))) else { throw DiaryAIError.invalid("本批尚未摆放：\(ids.filter { id in !operations.contains { $0.objectID == id && ($0.type == "setPlacement" || ($0.type == "updateText" && $0.center != nil)) } }.compactMap { id in context.objects.first { $0.id == id }?.shortID }.joined(separator: "、"))。保留已有暂存操作，补齐这些对象后再提交。") }
@@ -636,19 +864,29 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                             let previous = pending; pending.removeAll { ids.contains($0) }
                             let previousTextDone = textDone
                             if operations.contains(where: { $0.type == "createText" }) { textDone = true }
+                            let previousScope = confirmationScope
+                            confirmationIDs = ids + bridge.objectChoices.filter { !originalObjectIDs.contains($0.id) && $0.role == "text" }.map(\.id)
+                            confirmationScope = .init(ids: efficientExecution ? Array(Set(confirmationIDs + (previousScope?.ids ?? []))) : confirmationIDs, reason: revision?.reason ?? "", attempt: revision?.attempt ?? 0)
                             checkpoints.append(.init(working.document, pending: pending)); version += 1; awaitingConfirmation = true
                             do { try await persist() } catch {
                                 checkpoints.removeLast(); pending = previous; textDone = previousTextDone; version -= 1
+                                confirmationScope = previousScope; awaitingConfirmation = false
                                 if let last = checkpoints.last { try await setup(last.restoredDocument) }
                                 throw error
                             }
                             committed = true; committedRound = round; preview = UIImage(data: draft.preview); objects = bridge.objectChoices
-                            feedback = [.init(id: "canvas-v\(version)", caption: "本批已提交，请检查效果后 finish_batch", data: draft.preview)]
-                            text = "提交成功，版本 \(version)。\(draft.summary)；\(draft.warnings.joined(separator: "；"))。实际位置：\(objects.filter { ids.contains($0.id) }.map { "\($0.shortID)中心\($0.center)" }.joined(separator: "；"))。对照规划检查贴纸是否依附对应照片，禁止把贴纸排成左上素材清单；检查文字换行与下方留白用途。"
+                            madeProgress = true; repeatedErrors = 0; missingCallRetries = 0
+                            (model as? DiaryArkResponsesClient)?.allowedLayerReferences = objects.filter { confirmationIDs.contains($0.id) }.flatMap { [$0.shortID, $0.id.uuidString] }
+                            feedback = [.init(id: "canvas-v\(version)", caption: "本批已提交，检查主体遮挡和文字留白；通过finish_batch，有问题request_batch_revision", data: draft.preview)]
+                            text = "提交成功，版本 \(version)。\(draft.summary)；\(draft.warnings.joined(separator: "；"))。实际位置：\(objects.filter { confirmationIDs.contains($0.id) }.map { "\($0.shortID)中心\($0.center)，可见宽高\($0.bounds.size)" }.joined(separator: "；"))。对照规划检查贴纸是否依附对应照片，禁止把贴纸排成左上素材清单；检查文字换行与下方留白用途。"
                         case "validate_layout": text = committed ? "本批已通过原生文档和几何校验，请结合图片检查效果。" : "请先 commit_batch，失败会返回具体校验错误。"
+                        case "request_batch_revision":
+                            guard committed, let committedRound, round > committedRound else { throw DiaryAIError.invalid("修复须在提交后的下一轮看图后请求") }
+                            try await scheduleVisualRevision(raw, scope: .init(ids: confirmationIDs, reason: revision?.reason ?? "", attempt: revision?.attempt ?? 0))
+                            return
                         case "finish_batch":
-                            guard committed, let committedRound, round > committedRound else { throw DiaryAIError.invalid(committed ? "本批已提交；下一轮查看返回图片后仅调用finish_batch，版本\(version)" : operations.isEmpty ? "尚未创建或修改图层；请先create_text或place_layer，再commit_batch" : "已有暂存操作，请先commit_batch；下一轮看图后再finish_batch") }
-                            awaitingConfirmation = false; try await persist()
+                            guard committed, let committedRound, round > committedRound else { throw DiaryAIError.invalid(committed ? "本批已提交；下一轮查看返回图片后确认或请求修复，版本\(version)" : operations.isEmpty ? "尚未创建或修改图层；请先create_text或place_layer，再commit_batch" : "已有暂存操作，请先commit_batch；下一轮看图后再finish_batch") }
+                            try await finishConfirmation()
                             log("batch", "本批完成", "版本 \(version) 已保存；剩余 \(pending.count) 项")
                             return
                         default: throw DiaryAIError.invalid("本工作台不支持该工具")
@@ -662,13 +900,23 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 catch {
                     repeatedErrors += 1
                     if repeatedErrors >= 2 {
-                        continuation = nil
-                        recoveryPrompt = "当前版本\(version)，已提交=\(committed)。只处理本批ID：\(ids)。\(committed ? "只调用finish_batch。" : "参数用原生数字与对象，仅提交本批必要操作。") 最近错误：\(error.localizedDescription)"
+                        resetContext = true
+                        recoveryPrompt = "当前版本\(version)，已提交=\(committed)。只处理本批ID：\(ids)。\(committed ? "检查最新图片；通过finish_batch，有问题且允许时request_batch_revision。" : "参数用原生数字与对象，仅提交本批必要操作。") 最近错误：\(error.localizedDescription)"
                         repeatedErrors = 0
                     }
+                    if efficientExecution && call.name != "commit_batch" { automaticInputFailed = true }
                     if call.name == "commit_batch" { commitFailed = true }; log("error", "\(call.name) 未执行", error.localizedDescription); results.append(.init(callID: call.id, text: "ERROR: \(error.localizedDescription)。请修复参数。")) }
             }
+            if efficientExecution && committed {
+                log("batch", "本批已自动提交，整页统一验收", "版本\(version)，最新画布将作为下一批输入；保留最终视觉检查。")
+                visualRevision = nil
+                try await persist()
+                return
+            }
+            noProgressRounds = madeProgress ? 0 : noProgressRounds + 1
+            if noProgressRounds >= 2 { resetContext = true }
+            if noProgressRounds >= 5 { throw DiaryAIError.invalid("连续纠错仍未推进，已提交内容保留；可从当前阶段继续，或恢复排版前版本。") }
         }
-        throw DiaryAIError.invalid(committed ? "本批已保存，但视觉确认未完成；请检查画布后继续。" : "本批达到调用上限，请调整要求后重试。")
+        throw DiaryAIError.invalid(committed ? "本批已保存，但视觉确认未完成；请检查画布后继续。" : "本批达到调用上限，已提交内容保留；可从当前阶段继续，或恢复排版前版本。")
     }
 }
