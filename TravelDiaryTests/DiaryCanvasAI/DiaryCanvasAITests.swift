@@ -91,6 +91,26 @@ import SwiftUI
         let visibleCard = try #require(bridge.objectChoices.first { $0.text == "山风正好" })
         #expect(visibleCard.bounds.minY >= -0.01)
     }
+    @Test func newPaperCardAutomaticallyAvoidsPhotoWithoutChangingContentOrFont() async throws {
+        let (session, root) = fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = try #require(UIGraphicsImageRenderer(size: CGSize(width: 200, height: 300)).image { c in UIColor.green.setFill(); c.fill(CGRect(x: 0, y: 0, width: 200, height: 300)) }.pngData())
+        let (asset, image) = try await session.store.importImage(bytes, documentID: session.document.id)
+        var document = session.document; document.objects[session.contentID]?.layers = []; document.assets[asset.id] = asset
+        var photo = DiaryLayer.photo(asset: asset, center: CGPoint(x: 500, y: 400)); photo.size = CGSize(width: 200, height: 300); photo.transform.scale = 1
+        document.appendObject(containing: photo)
+        let editor = DiaryEditorSession(document: document, images: [asset.id: image], store: session.store)
+        let bridge = DiaryEditorAIBridge(editor)
+        let context = try await bridge.capture(.defaults(.writing))
+        let photoBefore = try #require(context.objects.first { $0.role == "photo" })
+        let operation = DiaryAIOperation(operationID: "card", type: "createText", clientObjectKey: "caption", center: photoBefore.center, text: "把这一刻留下", fontID: "system", fontSize: 32, width: 260, paper: "blueTape")
+        _ = try await bridge.propose(plan(context, [operation])); try bridge.apply()
+        let card = try #require(bridge.objectChoices.first { $0.text == "把这一刻留下" })
+        #expect(card.bounds.intersection(photoBefore.bounds).isNull)
+        #expect(CGRect(origin: .zero, size: context.size).contains(card.bounds))
+        #expect(bridge.objectChoices.first { $0.id == photoBefore.id }?.bounds == photoBefore.bounds)
+        let text = try #require(editor.document.objects.values.flatMap(\.layers).first { $0.text == "把这一刻留下" })
+        #expect(text.fontSize == 32 && text.textAppearance?.paper?.kind == .blueTape)
+    }
     @Test func efficientTextCanExtendShortRegionWithoutShrinkingCard() async throws {
         let (session, root) = fixture(); defer { try? FileManager.default.removeItem(at: root) }
         var empty = session.document; empty.objects[session.contentID]?.layers = []

@@ -84,6 +84,9 @@ import Foundation
             ("照片旁边", "预留区外侧"), ("照片上方", "预留区上方"),
             ("照片下方", "预留区下方"), ("照片右侧", "预留区右侧"), ("照片左侧", "预留区左侧")
         ] { text = text.replacingOccurrences(of: source, with: target) }
+        // A model may append a negative list despite the positive-only contract.
+        // Remove that prohibition sentence, never a positive subject description.
+        text = text.replacingOccurrences(of: "(?:不出现|不包含|不得出现|禁止出现)[^。；\\n]*[。；]?", with: "", options: .regularExpression)
         let banned = ["照片", "拍立得", "人物", "相框", "贴纸", "书", "手帐", "跨页"].filter(text.contains)
         guard banned.isEmpty else {
             throw DiaryAIError.invalid("主题分析已完成，生图提示词校验未通过：包含\(banned.joined(separator: "、"))。分析结果已保留，尚未调用生图；可重新生成以重做分析。")

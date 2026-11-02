@@ -119,7 +119,7 @@ import SwiftUI
             for task in tasks { await task.value }
         }
     }
-    @Test func liveBook8FullFlowBenchmark() async throws {
+    @Test(arguments: [false, true, true]) func liveBook8FullFlowBenchmark(_ parallel: Bool) async throws {
         guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-fullflow-benchmark-enabled") else { return }
         let output = URL(fileURLWithPath: "/tmp/TravelDiaryBook8Validation/fullflow-benchmark")
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
@@ -133,7 +133,8 @@ import SwiftUI
         let loaded = try await store.load(page.id)
         let session = DiaryEditorSession(document: loaded.document, images: loaded.images, store: store)
         let before = session.document
-        let w = DiaryAIWorkspace(session: session, root: root)
+        let w = DiaryAIWorkspace(session: session, root: root, parallelExecution: parallel)
+        let measuredStart = Date()
         var r = DiaryAIRequest.defaults(.relayout); r.allowsText = true; r.background = .init(saveToAlbum: false); r.scene = "山野徒步"; r.location = "雨崩"
         await w.enter(r); w.processAll()
         let deadline = Date().addingTimeInterval(1200)
@@ -146,10 +147,23 @@ import SwiftUI
             }
             try await Task.sleep(for: .milliseconds(250))
         }
+        // Test-only explicit retries: production never automatically repeats a paid image.
+        var backgroundRetries = 0
+        while w.error != nil && w.pending.isEmpty && !w.needsTextCompletion && w.backgroundRecord?.layerID == nil && backgroundRetries < 2 {
+            backgroundRetries += 1
+            print("BENCHMARK_TEST_RETRY mode=\(parallel) attempt=\(backgroundRetries) reason=\(w.error ?? "")")
+            w.generateBackground(regenerate: true)
+            let retryDeadline = Date().addingTimeInterval(600)
+            while w.running && Date() < retryDeadline { try await Task.sleep(for: .milliseconds(250)) }
+            if w.error == nil && parallel { w.processAll(); while w.running && Date() < retryDeadline { try await Task.sleep(for: .milliseconds(250)) } }
+        }
         try JSONEncoder().encode(w.events).write(to: output.appendingPathComponent("events.json"), options: .atomic)
         if let png = w.backgroundPreview?.pngData() { try png.write(to: output.appendingPathComponent("background.png")) }
         if let jpg = w.preview?.jpegData(compressionQuality: 0.9) { try jpg.write(to: output.appendingPathComponent("composed.jpg")) }
-        print("BACKGROUND_LIVE_RESULT \(w.error ?? w.stage)")
+        print("BENCHMARK mode=\(parallel ? "parallel" : "serial") seconds=\(Date().timeIntervalSince(measuredStart)) result=\(w.error ?? w.stage)")
+        let runFolder = output.appendingPathComponent((parallel ? "parallel-" : "serial-") + UUID().uuidString)
+        try FileManager.default.createDirectory(at: runFolder, withIntermediateDirectories: true)
+        for name in ["events.json", "background.png", "composed.jpg"] { if FileManager.default.fileExists(atPath: output.appendingPathComponent(name).path) { try FileManager.default.copyItem(at: output.appendingPathComponent(name), to: runFolder.appendingPathComponent(name)) } }
         #expect(!w.running && w.backgroundRecord?.layerID != nil)
         #expect(w.error == nil)
         guard w.backgroundRecord?.layerID != nil else { return }
@@ -292,6 +306,12 @@ import SwiftUI
         let restored = DiaryAIWorkspace(session: session, root: root, backgroundProvider: provider, albumSaver: album)
         await restored.enter(r)
         #expect(restored.needsTextCompletion && !restored.canContinueText)
+    }
+    @Test func negativeSubjectListDoesNotBlockParallelBackground() throws {
+        let cleaned = try DiarySeedreamBackgroundProvider.preparePrompt("暖白纸底，深绿山谷与彩旗。不出现水岸、建筑、人物或任何文字。")
+        #expect(cleaned.contains("深绿山谷与彩旗"))
+        #expect(!cleaned.contains("人物"))
+        #expect(throws: (any Error).self) { try DiarySeedreamBackgroundProvider.preparePrompt("暖白纸底，人物站在山谷中。") }
     }
     @Test func promptRepairKeepsThemeAndDoesNotEraseSubjectInstructions() throws {
         let source = "左上区域在照片后方延展淡黄色与淡粉色的小色块与细黑线条。右侧中部照片群之后，用细黑线勾一条柔和的屋檐轮廓。"

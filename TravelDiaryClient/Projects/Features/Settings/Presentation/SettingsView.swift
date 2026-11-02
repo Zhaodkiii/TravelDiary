@@ -7,6 +7,7 @@ struct SettingsView: View {
     let onAccountEntryTap: () -> Void
 
     @ObservedObject private var help = HelpFeedbackService.shared
+    @AppStorage("DiaryCanvasAI.parallelExecution") private var parallelAI = false
     @State private var legalDocument: IdentifiableURL?
 
     var body: some View {
@@ -31,6 +32,15 @@ struct SettingsView: View {
                 NavigationLink { FontGalleryScreen() } label: { SupportNavigationRow(title: "字体集市", symbol: "textformat.abc", detail: "发现适合旅途记录的字体") }.buttonStyle(.plain).feedbackPaperCard()
                 NavigationLink { FontStorageScreen() } label: { SupportNavigationRow(title: "字体存储", symbol: "internaldrive", detail: "查看字体下载与占用空间") }.buttonStyle(.plain).feedbackPaperCard()
                 sectionTitle("通用")
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("AI 运行方式").font(.headline)
+                    Picker("AI 运行方式", selection: $parallelAI) {
+                        Text("原方案 · 串行").tag(false)
+                        Text("新方案 · 并行").tag(true)
+                    }.pickerStyle(.segmented)
+                    Text("并行时背景与图层排版同时进行。切换后对新打开的 AI 任务生效。").font(.caption).foregroundStyle(.secondary)
+                }.padding(16).feedbackPaperCard()
+
                 NavigationLink {
                     StorageManagementScreen(owner: String(session.accountID), service: storageService).id(session.accountID)
                 } label: { SupportNavigationRow(title: "存储空间", symbol: "internaldrive", detail: "管理本机文件与缓存") }.buttonStyle(.plain).feedbackPaperCard()

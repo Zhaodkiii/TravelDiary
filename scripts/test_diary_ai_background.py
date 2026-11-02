@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--regression', action='store_true', help='Run all eight retained AI/editor regression suites without paid API calls')
 parser.add_argument('--full-flow', action='store_true', help='Run real relayout, text and background benchmark (paid calls)')
 parser.add_argument('--live', action='store_true', help='Generate one real Seedream background and save to simulator Photos')
 parser.add_argument('--device', default='728BF62D-9E5A-4B7C-ADB4-97534D0A3BBF')
@@ -24,6 +25,12 @@ command = ['xcodebuild', '-project', 'TravelDiary.xcodeproj', '-scheme', 'Travel
            'test', 'CODE_SIGNING_ALLOWED=NO', 'EXCLUDED_SOURCE_FILE_NAMES=' + ' '.join(excluded),
            '-only-testing:TravelDiaryTests/DiaryAIBackgroundTests', '-only-testing:TravelDiaryTests/DiaryAIWorkspaceTests',
            'OTHER_LDFLAGS=$(inherited) -framework CoreTelephony -framework SystemConfiguration -lresolv']
+if args.regression:
+    if args.live or args.full_flow:
+        parser.error('--regression cannot enable paid calls')
+    if list(Path('/tmp').glob('traveldiary-*-enabled')):
+        parser.error('A paid integration marker is active; finish that test first')
+    command = [part for part in command if not part.startswith('-only-testing:')]
 if args.live or args.full_flow:
     if not any(artifacts.parent.glob('已排版项目-*')):
         parser.error('Run scripts/test_diary_ai_book8.py first to create the arranged Book 8 fixture')

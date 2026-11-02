@@ -34,7 +34,7 @@ nonisolated struct DiaryAIRequest: Codable, Equatable, Sendable {
     var heroID: UUID?
     var materialIDs: [UUID] = []
     var writingKind = "随手一句"
-    var textDensity = "简短补充"
+    var textDensity = "丰富记录"
     var strength = "保守"
     var understandsPhotos = true
     var canSubmit: Bool { background?.backgroundOnly == true || action != .custom || !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }

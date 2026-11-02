@@ -26,19 +26,20 @@ import SwiftUI
         let deadline = Date().addingTimeInterval(15)
         while workspace.running && Date() < deadline { try await Task.sleep(for: .milliseconds(30)) }
     }
-    @Test func allBatchesFinishBeforeBackgroundGeneration() async throws {
+    @Test(arguments: [false, true]) func backgroundModesFinishSaveAndUndo(_ parallel: Bool) async throws {
         let (session, root) = try await fixture(count: 7); defer { try? FileManager.default.removeItem(at: root) }
         let format = UIGraphicsImageRendererFormat(); format.scale = 1
         let bytes = try #require(UIGraphicsImageRenderer(size: CGSize(width: 1000, height: 800), format: format).image { context in
             UIColor.white.setFill(); context.fill(CGRect(x: 0, y: 0, width: 1000, height: 800))
         }.pngData())
         let provider = BackgroundFake(bytes), album = BackgroundAlbumFake(), model = WorkspaceModel()
-        let w = DiaryAIWorkspace(session: session, model: model, root: root, backgroundProvider: provider, albumSaver: album)
+        let w = DiaryAIWorkspace(session: session, model: model, root: root, backgroundProvider: provider, albumSaver: album, parallelExecution: parallel)
         var request = DiaryAIRequest.defaults(.relayout); request.background = .init()
         await w.enter(request); w.processAll(); try await wait(w)
         #expect(w.error == nil && w.pending.isEmpty)
         #expect(model.batchSizes == [5, 2] && provider.generations == 1 && album.saves == 1)
         #expect(w.version == 3)
+        #expect(w.events.contains { $0.kind == "parallel" } == parallel)
         #expect(await w.save())
         #expect(session.scopeLayers.filter { $0.semanticKind == .background }.count == 1)
         #expect(session.undoStack.count == 1)
@@ -261,7 +262,7 @@ import SwiftUI
         let committed = DiaryAIWorkspace.toolsForBatchStage(base: all, hasOperations: true, committed: true)
         #expect(committed.contains("finish_batch") && !committed.contains("create_text") && !committed.contains("commit_batch"))
     }
-    @Test func recoveryRebuildsTextTaskWithoutOrphanResultsAndRepairsSameKey() async throws {
+    @Test func recoveryRebuildsTextTaskAndAutomaticallyPlacesCard() async throws {
         let (session, root) = try await fixture(count: 1, size: CGSize(width: 4370, height: 3130))
         defer { try? FileManager.default.removeItem(at: root) }
         let model = ScriptedWorkspaceModel { round, prompt, images, continuation, results in
@@ -280,9 +281,9 @@ import SwiftUI
             case 3: return [try scriptedCall("commit_batch", ["expectedVersion": 0, "summary": "创建标题"])]
             case 4:
                 let error = try #require(results.first?.text)
-                #expect(error.contains("spine_overlap") && error.contains("clientObjectKey") && error.contains("title"))
-                return [try scriptedCall("create_text", ["expectedVersion": 0, "clientObjectKey": "title", "text": "山风与经幡", "fontID": "system", "fontSize": 80, "width": 1200, "center": ["x": 1000, "y": 400]])]
-            case 5: return [try scriptedCall("commit_batch", ["expectedVersion": 0, "summary": "修复标题位置"])]
+                #expect(error.contains("提交成功"))
+                return [try scriptedCall("finish_batch", ["expectedVersion": 1])]
+
             default: return [try scriptedCall("finish_batch", ["expectedVersion": 1])]
             }
         }
@@ -381,7 +382,7 @@ import SwiftUI
         #expect(second.error == nil && second.version == 2)
         #expect(second.objects.first { $0.id == id }?.center.x == 400)
     }
-    @Test func reservedTextRegionRejectsPhotoWithoutChangingDocument() async throws {
+    @Test func advisoryTextRegionAllowsPhotoAndWarnsBeforeCommit() async throws {
         let (session, root) = try await fixture(count: 1)
         defer { try? FileManager.default.removeItem(at: root) }
         let before = session.document
@@ -390,10 +391,8 @@ import SwiftUI
         let target = try #require(context.objects.first)
         bridge.layoutRegions = [.init(role: "text", x: 50, y: 50, width: 400, height: 150)]
         let move = DiaryAIOperation(operationID: "move", type: "setPlacement", objectID: target.id, center: CGPoint(x: 250, y: 160), scale: target.scale, angle: 0, width: 180)
-        do {
-            _ = try await bridge.propose(.init(schemaVersion: 1, contextID: context.id, baseDigest: context.digest, summary: "错误地占用标题区", operations: [move]))
-            Issue.record("应阻止照片占用文字区域")
-        } catch { #expect(error.localizedDescription.contains("reserved_text_overlap")) }
+        let draft = try await bridge.propose(.init(schemaVersion: 1, contextID: context.id, baseDigest: context.digest, summary: "建议区不是实际文字", operations: [move]))
+        #expect(draft.warnings.contains { $0.contains("建议文字区域") })
         #expect(session.document == before)
     }
     @Test func maxHeightFitsFinalRotatedFrameWithoutStretching() async throws {
@@ -422,7 +421,7 @@ import SwiftUI
         let regions = try DiaryAIWorkspace.validatedRegions([photo, text], context: context, allowsText: true)
         #expect(regions.first?.objectID == id.uuidString)
         var overlap = text; overlap.y = 220
-        #expect(throws: (any Error).self) { try DiaryAIWorkspace.validatedRegions([photo, overlap], context: context, allowsText: true) }
+        #expect(try DiaryAIWorkspace.validatedRegions([photo, overlap], context: context, allowsText: true).count == 2)
         var crossing = photo; crossing.x = 300
         #expect(throws: (any Error).self) { try DiaryAIWorkspace.validatedRegions([crossing], context: context, allowsText: true) }
     }
