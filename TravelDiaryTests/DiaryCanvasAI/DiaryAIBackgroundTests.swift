@@ -120,6 +120,17 @@ import SwiftUI
         }
     }
     @Test(arguments: [false, true, true]) func liveBook8FullFlowBenchmark(_ parallel: Bool) async throws {
+        guard !FileManager.default.fileExists(atPath: "/tmp/traveldiary-design-flow-enabled") else { return }
+        try await runFullFlow(parallel)
+    }
+    @Test(arguments: Array(0..<8)) func liveDesignFlow(_ index: Int) async throws {
+        guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-design-flow-enabled") else { return }
+        let selectedCase = try String(contentsOfFile: "/tmp/traveldiary-design-flow-enabled", encoding: .utf8)
+        guard selectedCase == "all" || selectedCase == String(index) else { return }
+        let layouts: [DiaryAILayout] = [.hero, .story, .headline, .collage, .editorial, .automatic]
+        try await runFullFlow(true, design: .init(layout: layouts[index % 6], style: DiaryAIPageStyle.allCases[index % 6]), dataset: index >= 6 ? (index == 6 ? "wedding" : "coast") : nil)
+    }
+    private func runFullFlow(_ parallel: Bool, design: DiaryAIDesignSelection? = nil, dataset: String? = nil) async throws {
         guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-fullflow-benchmark-enabled") else { return }
         let output = URL(fileURLWithPath: "/tmp/TravelDiaryBook8Validation/fullflow-benchmark")
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
@@ -131,11 +142,24 @@ import SwiftUI
         let page = try #require(book.pages.first { $0.id.uuidString == "E7377B9C-4F4B-4943-B1F4-460568CB6748" })
         let store = DiaryDocumentStore(ownerID: owner, baseDirectory: root, bookID: book.id)
         let loaded = try await store.load(page.id)
-        let session = DiaryEditorSession(document: loaded.document, images: loaded.images, store: store)
+        var sourceDocument = loaded.document
+        if dataset != nil { sourceDocument.objects[sourceDocument.rootContentID]?.layers = [] }
+        let session = DiaryEditorSession(document: sourceDocument, images: loaded.images, store: store)
+        if let dataset {
+            let input = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("DesignFixtures/" + dataset)
+            let photos = try FileManager.default.contentsOfDirectory(at: input.appendingPathComponent("photos"), includingPropertiesForKeys: nil).sorted { $0.path < $1.path }
+            #expect(await session.importPhotos(try photos.map { try Data(contentsOf: $0) }))
+            for sticker in try FileManager.default.contentsOfDirectory(at: input.appendingPathComponent("stickers"), includingPropertiesForKeys: nil).sorted(by: { $0.path < $1.path }) {
+                #expect(await session.importPhoto(try Data(contentsOf: sticker), asSticker: true, stickerName: sticker.deletingPathExtension().lastPathComponent))
+            }
+        }
         let before = session.document
         let w = DiaryAIWorkspace(session: session, root: root, parallelExecution: parallel)
         let measuredStart = Date()
         var r = DiaryAIRequest.defaults(.relayout); r.allowsText = true; r.background = .init(saveToAlbum: false); r.scene = "山野徒步"; r.location = "雨崩"
+        if dataset != nil { r.scene = "不指定"; r.location = "" }
+        r.design = design; r = r.coordinated()
+        print("DESIGN_CASE \(design?.layout.rawValue ?? "legacy") \(design?.style.rawValue ?? "legacy")")
         await w.enter(r); w.processAll()
         let deadline = Date().addingTimeInterval(1200)
         var count = 0
@@ -149,7 +173,7 @@ import SwiftUI
         }
         // Test-only explicit retries: production never automatically repeats a paid image.
         var backgroundRetries = 0
-        while w.error != nil && w.pending.isEmpty && !w.needsTextCompletion && w.backgroundRecord?.layerID == nil && backgroundRetries < 2 {
+        while w.error != nil && w.pending.isEmpty && !w.needsTextCompletion && w.backgroundRecord?.layerID == nil && w.canGenerateBackground && backgroundRetries < 2 {
             backgroundRetries += 1
             print("BENCHMARK_TEST_RETRY mode=\(parallel) attempt=\(backgroundRetries) reason=\(w.error ?? "")")
             w.generateBackground(regenerate: true)
@@ -161,7 +185,7 @@ import SwiftUI
         if let png = w.backgroundPreview?.pngData() { try png.write(to: output.appendingPathComponent("background.png")) }
         if let jpg = w.preview?.jpegData(compressionQuality: 0.9) { try jpg.write(to: output.appendingPathComponent("composed.jpg")) }
         print("BENCHMARK mode=\(parallel ? "parallel" : "serial") seconds=\(Date().timeIntervalSince(measuredStart)) result=\(w.error ?? w.stage)")
-        let runFolder = output.appendingPathComponent((parallel ? "parallel-" : "serial-") + UUID().uuidString)
+        let runFolder = output.appendingPathComponent((design.map { "design-" + $0.layout.rawValue + "-" + $0.style.rawValue + "-" } ?? (parallel ? "parallel-" : "serial-")) + UUID().uuidString)
         try FileManager.default.createDirectory(at: runFolder, withIntermediateDirectories: true)
         for name in ["events.json", "background.png", "composed.jpg"] { if FileManager.default.fileExists(atPath: output.appendingPathComponent(name).path) { try FileManager.default.copyItem(at: output.appendingPathComponent(name), to: runFolder.appendingPathComponent(name)) } }
         #expect(!w.running && w.backgroundRecord?.layerID != nil)

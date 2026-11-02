@@ -12,6 +12,7 @@ nonisolated enum DiaryAIAction: String, CaseIterable, Identifiable, Codable, Sen
 }
 
 nonisolated struct DiaryAIRequest: Codable, Equatable, Sendable {
+    var design: DiaryAIDesignSelection? = nil
     var background: DiaryAIBackgroundOptions? = nil
     var action: DiaryAIAction
     var style = "保持当前风格"
@@ -45,6 +46,7 @@ nonisolated struct DiaryAIRequest: Codable, Equatable, Sendable {
     static func editorDefaults(_ action: DiaryAIAction) -> Self {
         var request = defaults(action)
         if action == .relayout {
+            request.design = DiaryAIDesignSelection()
             request.background = DiaryAIBackgroundOptions()
             request.allowsText = true
             request.allowsFrames = true
@@ -56,5 +58,16 @@ nonisolated struct DiaryAIRequest: Codable, Equatable, Sendable {
         if action == .relayout { request.style = "自动匹配" }
         if action == .custom { request.selectedOnly = true; request.allowsPlacement = false }
         return request
+    }
+}
+
+
+extension DiaryAIRequest {
+    var designBrief: String { design?.brief ?? DiaryAIStyleLibrary.brief(style) }
+    /// Keep an explicit background-off choice. Normalize only its medium, never permissions.
+    func coordinated() -> Self {
+        var value = self
+        if let design, value.background != nil { value.background?.style = design.style.backgroundID }
+        return value
     }
 }

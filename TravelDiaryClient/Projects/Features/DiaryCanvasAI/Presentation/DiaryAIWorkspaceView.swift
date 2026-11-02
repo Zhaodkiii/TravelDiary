@@ -221,7 +221,9 @@ struct DiaryAIInlinePanel: View {
     @State private var customizing = false
     @State private var showingDetails = false
     @State private var action = DiaryAIAction.relayout
-    @State private var style = "自动匹配"
+    @State private var design = DiaryAIDesignSelection()
+    @State private var choosingDesign = false
+    @State private var designTab = 0
     @State private var instruction = ""
     @State private var started = false
     var body: some View {
@@ -245,19 +247,16 @@ struct DiaryAIInlinePanel: View {
                     }
                 }.padding(20)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        Button("自动匹配") { style = "自动匹配" }.buttonStyle(.bordered)
-                        ForEach(DiaryAIStyleLibrary.styles) { item in
-                            Button { style = item.name } label: {
-                                VStack(spacing: 4) {
-                                    Image(item.imageName).resizable().scaledToFill().frame(width: 92, height: 60).clipped().clipShape(RoundedRectangle(cornerRadius: 10))
-                                    Text(item.name).font(.caption)
-                                }.padding(4).background(style == item.name ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 12))
-                            }.buttonStyle(.plain)
-                        }
-                    }.padding(.horizontal, 20)
-                }
+                HStack(spacing: 12) {
+                    Button { designTab = 0; choosingDesign = true } label: {
+                        Label("排版 · \(design.layout.name)", systemImage: "rectangle.3.group")
+                    }
+                    Button { designTab = 1; choosingDesign = true } label: {
+                        Label("风格 · \(design.style.name)", systemImage: "paintpalette")
+                    }
+                }.buttonStyle(.bordered).font(.subheadline).padding(.horizontal, 16)
+                Text(controller.form(action).background == nil ? "保留现有背景 · 按所选排版与风格制作" : "自动生成背景 · 按所选排版与风格制作标题及旁注")
+                    .font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Menu {
                         Picker("选择功能", selection: $action) {
@@ -267,25 +266,16 @@ struct DiaryAIInlinePanel: View {
                         VStack(spacing: 4) { Image(systemName: action.symbol); Text(action.rawValue).font(.caption) }
                     }
                     Spacer()
-                    Menu {
-                        Picker("选择模板", selection: $style) {
-                            Text("自动匹配").tag("自动匹配")
-                            ForEach(DiaryAIStyleLibrary.styles) { Text($0.name).tag($0.name) }
-                        }
-                    } label: {
-                        VStack(spacing: 4) { Image(systemName: "rectangle.3.group"); Text("选择模板").font(.caption) }
-                    }
-                    Spacer()
                     Button {
                         var request = controller.form(action)
-                        request.style = style; request.selectedOnly = false
+                        request.design = design; request = request.coordinated(); request.selectedOnly = false
                         if !instruction.isEmpty { request.instruction = instruction }
                         controller.setForm(request); customizing = true
-                    } label: { VStack(spacing: 4) { Image(systemName: "slider.horizontal.3"); Text("自定义").font(.caption) } }
+                    } label: { VStack(spacing: 4) { Image(systemName: "slider.horizontal.3"); Text("更多").font(.caption) } }
                     Spacer()
                     Button(action.submitTitle) {
                         var request = controller.form(action)
-                        request.style = style; request.selectedOnly = false
+                        request.design = design; request = request.coordinated(); request.selectedOnly = false
                         if !instruction.isEmpty { request.instruction = instruction }
                         started = true; workspace.configureAndStart(request)
                     }.buttonStyle(.borderedProminent).controlSize(.large)
@@ -295,6 +285,24 @@ struct DiaryAIInlinePanel: View {
             Spacer(minLength: 0)
         }.padding(.top, 12).background(DiaryLibraryStyle.background)
             .tint(Color(red: 0.24, green: 0.39, blue: 0.34))
+            .onAppear { design = controller.form(action).design ?? .init() }
+            .onChange(of: action) { _, value in design = controller.form(value).design ?? .init() }
+            .sheet(isPresented: $choosingDesign) {
+                NavigationStack {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 20) {
+                            DiaryAIDesignPreview(design: design, photos: workspace.objects.filter { $0.role == "photo" }.compactMap { workspace.thumbnails[$0.id] })
+                            DiaryAIDesignChooser(selection: $design, photos: workspace.objects.filter { $0.role == "photo" }.compactMap { workspace.thumbnails[$0.id] }, initialTab: designTab)
+                            Text("示意仅展示前三张照片的位置关系；制作时使用全部已选照片，背景按照片主题生成。")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }.padding(20)
+                    }.navigationTitle("排版与风格").navigationBarTitleDisplayMode(.inline)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") {
+                            var request = controller.form(action); request.design = design
+                            controller.setForm(request.coordinated()); choosingDesign = false
+                        } } }
+                }.presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+            }
             .sheet(isPresented: $showingDetails) {
                 DiaryAIWorkspaceView(onCloseDetails: { showingDetails = false }, workspace: workspace).panel
                     .presentationDetents([.medium, .large])
@@ -303,7 +311,7 @@ struct DiaryAIInlinePanel: View {
             .sheet(isPresented: $customizing) {
                 DiaryAIRequestSheet(controller: controller, action: action, onConfigure: { request in
                     controller.setForm(request)
-                    action = request.action; style = request.style; instruction = request.instruction
+                    action = request.action; design = request.design ?? .init(); instruction = request.instruction
                 })
             }
     }
@@ -343,5 +351,103 @@ struct DiaryAIMaterialRows: View {
                 if ids.isEmpty { Text("暂无待处理\(title)").font(.caption2).foregroundStyle(.tertiary).frame(maxWidth: .infinity, alignment: .leading) }
             }.frame(height: 66)
         }.frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+}
+
+/// Local, zero-request composition preview. It never represents a generated background.
+struct DiaryAIDesignPreview: View {
+    let design: DiaryAIDesignSelection
+    var photos: [UIImage] = []
+    private var ink: Color {
+        switch design.style {
+        case .scenic: Color(red: 0.18, green: 0.32, blue: 0.27)
+        case .illustrated: Color(red: 0.21, green: 0.36, blue: 0.48)
+        case .vintage: Color(red: 0.40, green: 0.27, blue: 0.17)
+        case .clean: Color(red: 0.20, green: 0.28, blue: 0.34)
+        case .playful: Color(red: 0.75, green: 0.30, blue: 0.19)
+        case .gentle: Color(red: 0.57, green: 0.35, blue: 0.36)
+        }
+    }
+    private var frames: [CGRect] {
+        switch design.layout {
+        case .hero: [CGRect(x: 0.06, y: 0.26, width: 0.53, height: 0.58), CGRect(x: 0.64, y: 0.27, width: 0.27, height: 0.26), CGRect(x: 0.64, y: 0.57, width: 0.27, height: 0.26)]
+        case .headline: [CGRect(x: 0.08, y: 0.48, width: 0.44, height: 0.41), CGRect(x: 0.57, y: 0.49, width: 0.34, height: 0.25), CGRect(x: 0.70, y: 0.76, width: 0.21, height: 0.16)]
+        case .collage: [CGRect(x: 0.07, y: 0.24, width: 0.41, height: 0.53), CGRect(x: 0.50, y: 0.37, width: 0.35, height: 0.37), CGRect(x: 0.24, y: 0.69, width: 0.30, height: 0.24)]
+        case .editorial: [CGRect(x: 0.07, y: 0.27, width: 0.43, height: 0.30), CGRect(x: 0.07, y: 0.62, width: 0.43, height: 0.29), CGRect(x: 0.58, y: 0.59, width: 0.33, height: 0.23)]
+        case .automatic, .story: [CGRect(x: 0.07, y: 0.28, width: 0.39, height: 0.43), CGRect(x: 0.55, y: 0.30, width: 0.35, height: 0.27), CGRect(x: 0.57, y: 0.65, width: 0.33, height: 0.26)]
+        }
+    }
+    var body: some View {
+        GeometryReader { proxy in
+            let size = proxy.size
+            ZStack(alignment: .topLeading) {
+                Color(uiColor: .secondarySystemGroupedBackground)
+                Ellipse().fill(ink.opacity(0.10)).frame(width: size.width * 0.75, height: size.height * 0.7).offset(x: size.width * 0.4, y: size.height * 0.5)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(design.layout == .headline ? "把这一刻\n留在手帐里" : "把日子收藏").font(.system(size: size.width * (design.layout == .headline ? 0.085 : 0.064), weight: .bold, design: .serif))
+                    if design.layout != .headline { Text("照片与故事 · 留下此刻").font(.system(size: size.width * 0.027)) }
+                }.foregroundStyle(ink).offset(x: size.width * 0.07, y: size.height * 0.05)
+                ForEach(Array(frames.enumerated()), id: \.offset) { index, rect in
+                    ZStack {
+                        Color.white
+                        if photos.indices.contains(index) {
+                            Image(uiImage: photos[index]).resizable().scaledToFit().padding(3)
+                        } else {
+                            Image(systemName: "photo").resizable().scaledToFit().foregroundStyle(ink.opacity(0.4)).padding(10)
+                        }
+                    }.frame(width: size.width * rect.width, height: size.height * rect.height)
+                        .rotationEffect(.degrees(design.layout == .collage ? (index == 1 ? 5 : -4) : 0))
+                        .offset(x: size.width * rect.minX, y: size.height * rect.minY)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(0..<3) { index in Rectangle().fill(ink.opacity(0.55)).frame(width: size.width * (index == 2 ? 0.13 : 0.22), height: 2) }
+                }.offset(x: size.width * (design.layout == .editorial ? 0.59 : 0.08), y: size.height * (design.layout == .editorial ? 0.32 : 0.85))
+            }.clipShape(RoundedRectangle(cornerRadius: 12))
+        }.aspectRatio(1.4, contentMode: .fit)
+            .accessibilityLabel("\(design.layout.name)，\(design.style.name)，构图示意，非生成成品")
+    }
+}
+
+struct DiaryAIDesignChooser: View {
+    @Binding var selection: DiaryAIDesignSelection
+    var photos: [UIImage] = []
+    @State private var tab: Int
+    init(selection: Binding<DiaryAIDesignSelection>, photos: [UIImage] = [], initialTab: Int = 0) {
+        self._selection = selection; self.photos = photos; self._tab = State(initialValue: initialTab)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker("设计选项", selection: $tab) {
+                Text("排版").tag(0); Text("风格").tag(1)
+            }.pickerStyle(.segmented)
+            Text(tab == 0 ? "决定照片主次与阅读顺序" : "统一背景、字体、纸卡与装饰")
+                .font(.caption).foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    if tab == 0 {
+                        ForEach(DiaryAILayout.allCases) { layout in
+                            card(.init(layout: layout, style: selection.style), title: layout.name, detail: layout.detail, selected: selection.layout == layout) { selection.layout = layout }
+                        }
+                    } else {
+                        ForEach(DiaryAIPageStyle.allCases) { style in
+                            card(.init(layout: selection.layout, style: style), title: style.name, detail: style.detail, selected: selection.style == style) { selection.style = style }
+                        }
+                    }
+                }.padding(2)
+            }
+            Text("构图与配色示意 · 正式背景将根据你的照片生成，照片数量自适应")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+    private func card(_ design: DiaryAIDesignSelection, title: String, detail: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                DiaryAIDesignPreview(design: design, photos: photos)
+                HStack { Text(title).font(.subheadline.weight(.semibold)); Spacer(); if selected { Image(systemName: "checkmark.circle.fill") } }
+                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2).frame(height: 32, alignment: .topLeading)
+            }.padding(10).frame(width: 190)
+                .background(selected ? Color.accentColor.opacity(0.10) : Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(selected ? Color.accentColor : .clear, lineWidth: 2))
+        }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

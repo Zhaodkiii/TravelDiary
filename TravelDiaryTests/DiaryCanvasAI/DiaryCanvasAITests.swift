@@ -5,6 +5,24 @@ import SwiftUI
 
 @Suite(.serialized)
 @MainActor struct DiaryCanvasAITests {
+    @Test func coordinatedDesignRoundTripsAndHonorsBackgroundOff() throws {
+        for layout in DiaryAILayout.allCases {
+            for style in DiaryAIPageStyle.allCases {
+                var request = DiaryAIRequest.editorDefaults(.relayout)
+                request.design = .init(layout: layout, style: style)
+                let value = request.coordinated()
+                #expect(value.background?.style == style.backgroundID)
+                #expect(DiaryAIBackgroundStyle.resolve(style.backgroundID).id == style.backgroundID)
+                #expect(value.designBrief.contains(layout.name) && value.designBrief.contains(style.name))
+                #expect(try JSONDecoder().decode(DiaryAIRequest.self, from: JSONEncoder().encode(value)) == value)
+                request.background = nil
+                #expect(request.coordinated().background == nil)
+            }
+        }
+        var legacy = DiaryAIRequest.defaults(.relayout); legacy.style = "复古票根"
+        #expect(legacy.coordinated().design == nil)
+        #expect(legacy.designBrief.contains("暖棕"))
+    }
     private func fixture() -> (DiaryEditorSession, URL) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         var document = DiaryDocument()
@@ -14,6 +32,20 @@ import SwiftUI
             size: CGSize(width: 200, height: 50), text: "雨崩", fontSize: 28)
         document.appendObject(containing: text)
         return (DiaryEditorSession(document: document, images: [:], store: DiaryDocumentStore(ownerID: "ai-test", baseDirectory: root)), root)
+    }
+    @Test func designFallbackPreservesAllPhotosAndAvoidsSpine() async throws {
+        let (session, root) = fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        var context = try await DiaryEditorAIBridge(session).capture(.defaults(.relayout))
+        var sample = try #require(context.objects.first)
+        sample.role = "photo"; sample.editable = true
+        context.objects = (0..<5).map { _ in var object = sample; object.id = UUID(); return object }
+        context.spineX = 500
+        for layout in DiaryAILayout.allCases {
+            let regions = DiaryAIDesignSelection(layout: layout).fallbackRegions(context: context, allowsText: true)
+            let checked = try DiaryAIWorkspace.validatedRegions(regions, context: context, allowsText: true)
+            #expect(Set(checked.filter { $0.role == "photo" }.compactMap(\.objectID)).count == 5)
+            #expect(checked.allSatisfy { $0.width > 0 && $0.height > 0 })
+        }
     }
     private func contentEquivalent(_ lhs: DiaryDocument, _ rhs: DiaryDocument) -> Bool {
         var a = lhs, b = rhs

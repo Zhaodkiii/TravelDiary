@@ -29,7 +29,7 @@ import Combine
     }
     func form(_ action: DiaryAIAction) -> DiaryAIRequest { forms[action] ?? .editorDefaults(action) }
     func setForm(_ value: DiaryAIRequest) {
-        forms[value.action] = value
+        forms[value.action] = value.coordinated()
         formSaveTask?.cancel()
         formSaveTask = Task { do { try await Task.sleep(for: .milliseconds(350)); persist() } catch {} }
     }
@@ -133,7 +133,7 @@ import Combine
                             switch call.name {
                             case "get_canvas_context": output = try Self.json(context)
                             case "list_available_fonts": output = try Self.json(context.fonts)
-                            case "get_style_reference": output = DiaryAIStyleLibrary.brief(request.style)
+                            case "get_style_reference": output = request.designBrief
                             case "inspect_assets":
                                 guard inspected < 2 else { throw DiaryAIError.invalid("本轮补图预算已用完，请利用已有信息") }
                                 inspected += 1; images = try await bridge.inspect(arguments); output = "已附上请求的对象图像，见同批图片消息。"
@@ -218,7 +218,7 @@ import Combine
         每种操作不要携带无关字段。文本短而自然，字体按实测宽度换行。文案优先1-3段，标题和旁注有字号差异。
         美化保守限制：中心变化<=画布宽高5%，缩放变化<=10%，角度变化<=3度；明显强度可翻倍。美化不新增文字、不改正文、背景和取景。
         写点文字不能移动照片或装饰；只换样式不能新增或改正文。重新排版默认不添加或改文字，开关开启才允许。
-        风格规则：\(DiaryAIStyleLibrary.brief(request.style))
+        风格规则：\(request.designBrief)
         用户表单（地点开关关闭时禁止把地点写入新增文字；selectedOnly仅editable对象可改；材料仅用户勾选者；所有开关为权限上限）：\(try json(request))
         可用字体、图层和精确几何：\(try json(context))
         """

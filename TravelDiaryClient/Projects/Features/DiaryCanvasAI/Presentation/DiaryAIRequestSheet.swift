@@ -63,7 +63,7 @@ struct DiaryAIRequestSheet: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(uiColor: .systemGroupedBackground))
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(onConfigure == nil ? "AI 创作" : "自定义模板")
+            .navigationTitle(onConfigure == nil ? "AI 创作" : "制作选项")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("退出") { dismiss() } }
@@ -164,38 +164,12 @@ struct DiaryAIRequestSheet: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             if action == .relayout || action == .custom { backgroundSettings }
-            if request.background?.backgroundOnly != true { section("排版风格") {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(["保持当前风格", "自动匹配"], id: \.self) { name in
-                            Button { field(\.style).wrappedValue = name } label: {
-                                Label(name, systemImage: request.style == name ? "checkmark.circle.fill" : "circle")
-                                    .font(.subheadline).padding(.horizontal, 14).padding(.vertical, 10)
-                                    .background(request.style == name ? Color.accentColor.opacity(0.1) : Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
-                            }.buttonStyle(.plain)
-                        }
-                    }
+            if request.background?.backgroundOnly != true {
+                section("排版与风格") {
+                    DiaryAIDesignChooser(selection: Binding(get: { request.design ?? .init() }, set: { selection in
+                        var draft = request; draft.design = selection; controller.setForm(draft.coordinated())
+                    }))
                 }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(DiaryAIStyleLibrary.styles) { style in
-                            Button { field(\.style).wrappedValue = style.name } label: {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Image(style.imageName).resizable().scaledToFill().frame(width: 156, height: 104).clipped().clipShape(RoundedRectangle(cornerRadius: 10))
-                                        .overlay(alignment: .topTrailing) {
-                                            if request.style == style.name { Image(systemName: "checkmark.circle.fill").foregroundStyle(.white, Color.accentColor).padding(6) }
-                                        }
-                                    Text(style.name).font(.subheadline.weight(.semibold))
-                                    Text(style.detail).font(.caption).foregroundStyle(.secondary)
-                                }.padding(10).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
-                                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(request.style == style.name ? Color.accentColor : .clear, lineWidth: 2))
-                            }.buttonStyle(.plain).accessibilityAddTraits(request.style == style.name ? .isSelected : [])
-                        }
-                    }.padding(2)
-                }
-                Text("风格示例，仅参考构图与文字；不会生成或替换你的照片。")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
             }
             section(action == .custom ? "你想怎么改" : "补充要求 · 选填") {
                 TextField("例如：突出跳跃的照片，照片有大小变化，右页留下短句的位置。", text: field(\.instruction), axis: .vertical)
@@ -239,13 +213,14 @@ struct DiaryAIRequestSheet: View {
     }
     private var backgroundSettings: some View {
         section("AI 背景") {
-            Toggle(action == .relayout ? "排版后生成背景" : "生成背景 · 保留当前排版", isOn: Binding(get: { request.background != nil }, set: { enabled in
+            Toggle(action == .relayout ? "自动生成背景" : "生成背景 · 保留当前排版", isOn: Binding(get: { request.background != nil }, set: { enabled in
                 var draft = request
                 draft.background = enabled ? DiaryAIBackgroundOptions(backgroundOnly: action == .custom) : nil
                 if enabled { draft.selectedOnly = false; draft.preservesBackground = true }
                 controller.setForm(draft)
             }))
             if request.background != nil {
+                if request.background?.backgroundOnly == true {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 135))], spacing: 10) {
                     ForEach(DiaryAIBackgroundStyle.all) { style in
                         Button { backgroundField(\.style).wrappedValue = style.id } label: {
@@ -257,6 +232,10 @@ struct DiaryAIRequestSheet: View {
                                 .overlay(alignment: .topTrailing) { if request.background?.style == style.id { Image(systemName: "checkmark.circle.fill").padding(8) } }
                         }.buttonStyle(.plain).accessibilityAddTraits(request.background?.style == style.id ? .isSelected : [])
                     }
+                }
+                } else {
+                    Text("背景跟随整页风格：\((request.design ?? .init()).style.name)")
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
                 if let size = controller.bridge.canvasSize, let target = try? DiaryAIBackgroundImaging.exactSize(size) {
                     Text("画布 \(Int(size.width)) × \(Int(size.height)) · 背景 \(Int(target.width)) × \(Int(target.height)) · 比例锁定")

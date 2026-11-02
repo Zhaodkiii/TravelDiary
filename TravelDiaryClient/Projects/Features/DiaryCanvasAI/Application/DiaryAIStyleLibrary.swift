@@ -26,3 +26,111 @@ enum DiaryAIStyleLibrary {
         return styles.first { $0.name == name }?.rules ?? "延续现有风格"
     }
 }
+
+/// Orthogonal, versioned choices. Legacy requests keep their original style rules.
+nonisolated enum DiaryAILayout: String, Codable, CaseIterable, Identifiable, Sendable {
+    case automatic, hero, story, headline, collage, editorial
+    var id: String { rawValue }
+    var name: String { switch self {
+    case .automatic: "自动推荐"; case .hero: "主照突出"; case .story: "旅行故事"
+    case .headline: "大字主题"; case .collage: "随手拼贴"; case .editorial: "纸刊记录"
+    } }
+    var detail: String { switch self {
+    case .automatic: "按照片数量与内容安排主次"
+    case .hero: "一张主照，其余照片围绕它展开"
+    case .story: "照片分组，旁注串起旅程"
+    case .headline: "醒目短标题，照片围绕主题展开"
+    case .collage: "大小错落、轻微倾斜与叠贴"
+    case .editorial: "清楚分栏，照片与记事相互呼应"
+    } }
+    var rules: String { switch self {
+    case .automatic: "从主照突出、旅行故事、大字主题、随手拼贴、纸刊记录中确定一种构图，在共同构图中写明，后续不得各自改选。"
+    case .hero: "选一张主体清楚的主照，面积约辅助照片的1.6至2.4倍；其余照片成组，保留全部原照片。标题、1至2处旁注和可选结语，不平均铺排。"
+    case .story: "按照片可见内容组织2至3组，形成阅读路径，主标题、引题、与照片绑定的旁注和可选结语；不凭照片编造时间先后。"
+    case .headline: "先分配醒目4至10字标题区域，语义断行，标题字号约正文1.8至2.2倍；照片仍须清晰，正文2至3处，不让背景占据标题区。"
+    case .collage: "一张主照与若干辅助照片形成非对称组，轻微旋转和有限边缘叠贴；避免人脸重叠，标题与2至3条短注穿插，不做等大网格。"
+    case .editorial: "按阅读顺序组织图文分栏，明确主标题、引题、照片旁注和短记事段落；相邻照片有主次，基线有秩序，不把每句话都包成大纸卡。"
+    } }
+}
+
+nonisolated enum DiaryAIPageStyle: String, Codable, CaseIterable, Identifiable, Sendable {
+    case scenic, illustrated, vintage, clean, playful, gentle
+    var id: String { rawValue }
+    var name: String { switch self {
+    case .scenic: "实景融纸"; case .illustrated: "手绘旅行"; case .vintage: "复古剪贴"
+    case .clean: "清新纸刊"; case .playful: "活力涂鸦"; case .gentle: "温柔纪念"
+    } }
+    var detail: String { switch self {
+    case .scenic: "来源场景融入纤维纸，局部手撕边"
+    case .illustrated: "手绘景物、旅行旁注与轻盈纸面"
+    case .vintage: "暖纸、票根与复古墨色"
+    case .clean: "明亮纸面、清楚色块与有序文字"
+    case .playful: "轻快线条、圈画与少量鲜明色"
+    case .gentle: "柔和场景、暖色纸纹与纪念短句"
+    } }
+    var backgroundID: String { switch self {
+    case .scenic: "paper"; case .illustrated, .gentle: "watercolor"
+    case .vintage: "vintage"; case .clean: "clean"; case .playful: "doodle"
+    } }
+    var rules: String { switch self {
+    case .scenic: "照片来源场景自然融入暖白纤维纸，局部撕纸连接；深绿或来源墨色，主标题可用马善政，正文轻；纸卡titleParchment或kraftStrip，旁注可none，不生成孤立风景卡片。"
+    case .illustrated: "以照片内已确认建筑、植物、山水作透明水彩与钢笔手绘；墨色标题、清楚手写正文，botanicalLine或coralUnderline少量承托，来源场景互相连接。"
+    case .vintage: "暖纸和来源场景的复古印刷拼贴，深棕主墨与少量来源强调色；kraftStrip或titleParchment票根式文字，照片浅暖边框，避免蓝色胶带与现代荧光色。"
+    case .clean: "明亮纸面与来源色块，少量场景延展；清楚字号层级、深色墨与单一强调色，coralUnderline或none，照片边框简洁，不做泛黄旧纸。"
+    case .playful: "白纸上来源景物的小型涂鸦、黑色线条与少量明亮色点；标题有力度，短注轻快，pinkHeart或coralUnderline点题，不以重复贴纸填满。"
+    case .gentle: "暖白纸、柔和来源场景、低对比水彩；温暖棕墨与柔和强调色，warmHeart或pinkWish承托短句，主标题与正文有层级，避免每张照片都加装饰。"
+    } }
+}
+
+nonisolated struct DiaryAIDesignSelection: Codable, Equatable, Sendable {
+    var layout: DiaryAILayout = .automatic
+    var style: DiaryAIPageStyle = .scenic
+    var version = 1
+    var brief: String {
+        "统一整页设计v\(version)：排版=\(layout.name)，风格=\(style.name)。\(layout.rules) \(style.rules) 用户明确指定及锁定内容优先于风格，风格优先于通用默认纸卡与字体。标题优先直接写在安静纸面，勿用大纸卡代替字形的视觉力量；正文横排每行约8至16字，旁注绑定sourceIDs，无事实依据只描述可见细节或明确祝愿。背景必须指定连接任务：来源线索从哪组照片延伸、沿哪组边缘连接、如何承托标题；主意象避开主照和标题，不另建竞争的视觉中心。贴纸各有主题/连接/固定/导读用途，不能仅按空白撒放；未授权隐藏时保留素材。规划一次确定主照ID、照片分组、阅读方向、文字角色与对应照片、来源场景、主墨色和强调色，并在共同构图中保持一致。照片数量自适应，不丢弃照片。背景重点在可露出区域丰富细节，文字区低对比，照片下面延续色彩纹理，不把预留区画成矩形空框；照片、文字、背景分支必须服从同一构图。最多两种字体、两种纸卡；文字数量按实际空间和角色确定，不能为了丰富反复写泛泛感想。"
+    }
+}
+
+extension DiaryAIDesignSelection {
+    /// Safe fallback preserves layout intent and never crosses a spread spine.
+    func fallbackRegions(context: DiaryAIContext, allowsText: Bool) -> [DiaryAILayoutRegion] {
+        let photos = context.objects.filter { $0.role == "photo" && $0.editable }
+        let w = Double(context.size.width), h = Double(context.size.height)
+        guard w > 0, h > 0, !photos.isEmpty else { return [] }
+        let ranges: [(Double, Double)] = context.spineX.map { [(0, $0 - 24), ($0 + 24, w)] } ?? [(0, w)]
+        var result: [DiaryAILayoutRegion] = []
+        var offset = 0
+        for (pageIndex, range) in ranges.enumerated() {
+            let count = photos.count / ranges.count + (pageIndex < photos.count % ranges.count ? 1 : 0)
+            let group = Array(photos.dropFirst(offset).prefix(count)); offset += count
+            guard !group.isEmpty else { continue }
+            let x = range.0 + (range.1 - range.0) * 0.06
+            let width = (range.1 - range.0) * 0.88
+            let top = h * (layout == .headline ? 0.33 : 0.24)
+            let height = h * (layout == .headline ? 0.53 : 0.62)
+            if allowsText {
+                result.append(.init(role: "text", x: x, y: h * 0.035, width: width, height: h * (layout == .headline ? 0.26 : 0.17)))
+                result.append(.init(role: "text", x: x, y: h * 0.88, width: width, height: h * 0.10))
+            }
+            let hero = [.hero, .story, .automatic].contains(layout) && group.count > 1
+            let remaining = hero ? Array(group.dropFirst()) : group
+            if hero {
+                result.append(.init(role: "photo", objectID: group[0].id.uuidString, x: x, y: top, width: width * 0.59, height: height))
+            }
+            let columns = hero ? 1 : (layout == .editorial ? 1 : (group.count == 1 ? 1 : 2))
+            let rows = max(1, Int(ceil(Double(remaining.count) / Double(columns))))
+            let areaX = hero ? x + width * 0.64 : x
+            let areaWidth = hero ? width * 0.36 : width
+            let cellW = areaWidth / Double(columns), cellH = height / Double(rows)
+            for (index, photo) in remaining.enumerated() {
+                let col = index % columns, row = index / columns
+                let inset = layout == .collage && index % 2 == 1 ? 0.12 : 0.02
+                result.append(.init(role: "photo", objectID: photo.id.uuidString,
+                    x: areaX + Double(col) * cellW + cellW * inset,
+                    y: top + Double(row) * cellH + cellH * (layout == .collage && col == 1 ? 0.14 : 0.02),
+                    width: cellW * (1 - inset - 0.04), height: cellH * (layout == .collage ? 0.80 : 0.92)))
+            }
+        }
+        return result
+    }
+}

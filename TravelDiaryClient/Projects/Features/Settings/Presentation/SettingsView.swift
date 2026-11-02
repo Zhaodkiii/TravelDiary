@@ -8,6 +8,7 @@ struct SettingsView: View {
 
     @ObservedObject private var help = HelpFeedbackService.shared
     @AppStorage("DiaryCanvasAI.parallelExecution") private var parallelAI = false
+    @State private var showsMakingGuide = false
     @State private var legalDocument: IdentifiableURL?
 
     var body: some View {
@@ -32,6 +33,9 @@ struct SettingsView: View {
                 NavigationLink { FontGalleryScreen() } label: { SupportNavigationRow(title: "字体集市", symbol: "textformat.abc", detail: "发现适合旅途记录的字体") }.buttonStyle(.plain).feedbackPaperCard()
                 NavigationLink { FontStorageScreen() } label: { SupportNavigationRow(title: "字体存储", symbol: "internaldrive", detail: "查看字体下载与占用空间") }.buttonStyle(.plain).feedbackPaperCard()
                 sectionTitle("通用")
+                Button { showsMakingGuide = true } label: {
+                    SupportNavigationRow(title: "重看制作引导", symbol: "book.pages", detail: "看一页旅行手帐如何慢慢成形")
+                }.buttonStyle(.plain).feedbackPaperCard()
                 VStack(alignment: .leading, spacing: 10) {
                     Text("AI 运行方式").font(.headline)
                     Picker("AI 运行方式", selection: $parallelAI) {
@@ -76,6 +80,9 @@ struct SettingsView: View {
             Text("TravelDiary · 把旅途留在手帐里").font(.caption).foregroundStyle(DiaryLibraryStyle.secondary).frame(maxWidth: .infinity).padding(.top, 4)
         }
         .navigationTitle(L10n.text("settings.title", fallback: "设置"))
+        .fullScreenCover(isPresented: $showsMakingGuide) {
+            DiaryOnboardingView { showsMakingGuide = false }
+        }
         .sheet(item: $legalDocument) { SafariWebViewSheet(url: $0.url) }
         .task(id: session.accountID) { await help.refreshUnread(owner: String(session.accountID)) }
     }

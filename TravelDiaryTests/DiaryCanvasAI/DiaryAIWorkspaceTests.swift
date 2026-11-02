@@ -57,8 +57,8 @@ import SwiftUI
             try await Task.sleep(for: .milliseconds(30))
         }
         try await wait(workspace)
-        #expect(workspace.error == nil && workspace.pending.isEmpty && workspace.version == 2)
-        #expect(displayedCounts.contains(5) && displayedCounts.contains(7))
+        #expect(workspace.error == nil && workspace.pending.isEmpty && workspace.version == 1)
+        #expect(displayedCounts.contains(7))
         let details = UIHostingController(rootView: DiaryAIWorkspaceView(workspace: workspace).panel)
         host.present(details, animated: false)
         details.view.layoutIfNeeded()
@@ -83,8 +83,8 @@ import SwiftUI
         var request = DiaryAIRequest.defaults(.relayout); request.background = .init()
         await w.enter(request); w.processAll(); try await wait(w)
         #expect(w.error == nil && w.pending.isEmpty)
-        #expect(model.batchSizes == [5, 2] && provider.generations == 1 && album.saves == 1)
-        #expect(w.version == 3)
+        #expect(model.batchSizes == [7] && provider.generations == 1 && album.saves == 1)
+        #expect(w.version == 2)
         #expect(w.events.contains { $0.kind == "parallel" } == parallel)
         #expect(await w.save())
         #expect(session.scopeLayers.filter { $0.semanticKind == .background }.count == 1)
@@ -97,7 +97,7 @@ import SwiftUI
         await workspace.enter(request); workspace.processAll(); try await wait(workspace)
         #expect(workspace.error == nil)
         #expect(!workspace.needsTextCompletion && workspace.pending.isEmpty)
-        #expect(workspace.version == 3)
+        #expect(workspace.version == 2)
         #expect(await workspace.save())
         #expect(session.document.objects.values.flatMap(\.layers).contains { $0.text == "一起走过的路" })
     }
@@ -182,6 +182,14 @@ import SwiftUI
         #expect(objects.count == 2)
         #expect(!objects[0].bounds.intersects(objects[1].bounds))
     }
+    @Test func ninePhotosSplitIntoEightAndOne() async throws {
+        let (session, root) = try await fixture(count: 9); defer { try? FileManager.default.removeItem(at: root) }
+        let model = WorkspaceModel()
+        let workspace = DiaryAIWorkspace(session: session, model: model, root: root)
+        await workspace.enter(.defaults(.relayout)); workspace.processAll(); try await wait(workspace)
+        #expect(workspace.error == nil && workspace.pending.isEmpty)
+        #expect(model.batchSizes == [8, 1])
+    }
     @Test func batchesPublishAndOneUndoRestoresOriginal() async throws {
         let (session, root) = try await fixture(count: 7); defer { try? FileManager.default.removeItem(at: root) }
         let before = session.document, model = WorkspaceModel()
@@ -192,8 +200,8 @@ import SwiftUI
         workspace.processAll(); try await wait(workspace)
         #expect(workspace.error == nil)
         #expect(workspace.pending.isEmpty)
-        #expect(model.batchSizes == [5, 2])
-        #expect(workspace.version == 2)
+        #expect(model.batchSizes == [7])
+        #expect(workspace.version == 1)
         #expect(session.document == before)
         #expect(workspace.events.contains { $0.kind == "request" && !$0.images.isEmpty })
         #expect(await workspace.save())
@@ -523,7 +531,7 @@ import SwiftUI
             batchSizes.append(targets.count)
             var values: [DiaryAIToolCall] = []
             for (index, item) in targets.enumerated() {
-                values.append(try call("place_layer", ["expectedVersion": version, "objectID": item.id.uuidString, "center": ["x": 200 + (index % 3) * 300, "y": 230 + (index / 3) * 330], "width": 180, "angle": 0]))
+                values.append(try call("place_layer", ["expectedVersion": version, "objectID": item.id.uuidString, "center": ["x": 150 + (index % 4) * 220, "y": 200 + (index / 4) * 300], "width": 180, "angle": 0]))
             }
             if targets.isEmpty {
                 values.append(try call("create_text", ["expectedVersion": version, "clientObjectKey": "title", "text": "一起走过的路", "fontID": "system", "fontSize": 30, "width": 300, "center": ["x": 500, "y": 730]]))

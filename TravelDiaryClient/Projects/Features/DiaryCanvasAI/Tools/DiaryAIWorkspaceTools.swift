@@ -2,12 +2,21 @@ import Foundation
 import CoreGraphics
 
 enum DiaryAIWorkspaceTools {
+    static func normalized(_ call: DiaryAIToolCall) -> DiaryAIToolCall {
+        guard var raw = try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8)) as? [String: Any],
+              let point = raw["center"] as? [NSNumber], point.count == 2,
+              point.allSatisfy({ $0.doubleValue.isFinite }) else { return call }
+        raw["center"] = ["x": point[0], "y": point[1]]
+        guard let bytes = try? JSONSerialization.data(withJSONObject: raw) else { return call }
+        var value = call; value.arguments = String(decoding: bytes, as: UTF8.self); return value
+    }
+
     static let operationNames = ["place_layer": "setPlacement", "set_photo_crop": "setPhotoCrop", "set_photo_frame": "setFrameStyle", "create_text": "createText", "update_text": "updateText", "attach_decoration": "setPlacement", "set_decoration_visibility": "setDecorationVisibility"]
     static let descriptions: [String: String] = [
         "plan_composition": "仅用于整体规划。summary 用80～160字说明主照片、分区和文字留白；重新排版可同时提供regions指定照片与文字预留区域（设计单位）。不输出图层JSON或文件。调用一次即可。",
         "get_workspace": "查询当前工作版本、可处理图层和状态。初始输入已包含上下文，只有信息缺失或版本冲突时调用。只读。",
         "get_canvas_image": "查看最新已提交画布。commit_batch已返回相同预览时无需重复调用。只读。",
-        "inspect_layers": "仅当本批素材细节看不清时补图；objectIDs最多5个，使用本批L编号或UUID。每批最多两次。只读。",
+        "inspect_layers": "仅当本批素材细节看不清时补图；objectIDs最多8个，使用本批L编号或UUID。每批最多两次。只读。",
         "list_fonts": "查询真实可用fontID。上下文已给出字体时直接使用，不要重复查询。只读。",
         "list_frame_styles": "查询可用相框名称。已知名称可直接set_photo_frame，无需先查询。只读。",
         "place_layer": "暂存一个本批图层的位置、等比尺寸和角度。照片与相框整体移动。center为画布设计单位视觉中心，width是目标可见边界宽度，提供maxHeight时等比缩小以同时满足宽高上限，angle为绝对角度。不会裁剪照片；commit_batch后显示。",
@@ -25,7 +34,7 @@ enum DiaryAIWorkspaceTools {
     ]
     static let fieldDescriptions: [String: String] = [
         "objectID": "本批图层的L编号（如L2）或真实UUID，禁止猜测。",
-        "objectIDs": "待补图的本批L编号或UUID数组，最多5个。",
+        "objectIDs": "待补图的本批L编号或UUID数组，最多8个。",
         "expectedVersion": "当前工作版本整数。提交前各操作使用同一版本；提交成功后使用返回的新版本。",
         "center": "画布设计单位的视觉中心{x,y}；不是屏幕像素、左上角或0～1比例。",
         "width": "place_layer/attach_decoration为目标可见边界宽度，指定maxHeight时可能等比缩小；文字工具为本地文本框宽度，单位均为设计单位。",
@@ -66,6 +75,8 @@ enum DiaryAIWorkspaceTools {
                 fields["center"] = ["type": "object", "properties": ["x": number, "y": number], "required": ["x", "y"], "additionalProperties": false]
                 fields["width"] = number; fields["maxHeight"] = number; fields["angle"] = number; required += ["center", "width", "angle"]
             case "create_text", "update_text":
+                fields["textRole"] = ["type": "string", "enum": ["title", "lead", "caption", "body", "closing"]]
+                fields["sourceIDs"] = ["type": "array", "items": string, "maxItems": 8]
                 for key in ["text", "fontID", "color", "paper"] { fields[key] = string }
                 for key in ["fontSize", "width", "angle"] { fields[key] = number }
                 fields["center"] = ["type": "object", "properties": ["x": number, "y": number], "required": ["x", "y"], "additionalProperties": false]
@@ -101,6 +112,7 @@ enum DiaryAIWorkspaceTools {
             guard let object = context.objects.first(where: { $0.shortID == reference || $0.id.uuidString.caseInsensitiveCompare(reference) == .orderedSame }) else { throw DiaryAIError.invalid("本批图层编号不存在") }
             raw["objectID"] = object.id.uuidString
         }
+        raw.removeValue(forKey: "textRole"); raw.removeValue(forKey: "sourceIDs")
         raw["type"] = type; raw["operationID"] = call.id
         if type == "setPlacement" {
             guard let idText = raw["objectID"] as? String, let id = UUID(uuidString: idText),
