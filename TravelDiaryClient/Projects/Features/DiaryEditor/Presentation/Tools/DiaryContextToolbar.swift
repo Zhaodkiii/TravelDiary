@@ -11,6 +11,7 @@ struct DiaryContextToolbar: View {
     let onLayers: () -> Void
     let onStickers: () -> Void
     let onOpenObject: () -> Void
+    var onAI: () -> Void = {}
     var onTransform: () -> Void = {}
     var selectionToolsOnly = false
     @State private var panel: Panel?
@@ -103,7 +104,7 @@ struct DiaryContextToolbar: View {
                     openTool { target = nil; presentTextEditor(.editText) }
                 } label: { toolLabel("文字", symbol: "square.and.pencil") }
                 Button {
-                    withAnimation(.easeInOut(duration: 0.22)) { addExpanded = false; aiExpanded.toggle() }
+                    withAnimation(.easeInOut(duration: 0.22)) { addExpanded = false; onAI() }
                 } label: { toolLabel("AI", symbol: "sparkles") }
                     .accessibilityIdentifier("diary.ai.toggle")
             }
@@ -124,16 +125,19 @@ struct DiaryContextToolbar: View {
         .fullScreenCover(item: $textEditor) { presentation in
             DiaryTextEditorSheet(session: session, draft: presentation.draft, initialTab: presentation.initialTab)
         }
-        .sheet(item: $aiAction, onDismiss: {
+        .fullScreenCover(item: $aiAction, onDismiss: {
             guard let request = pendingAIRequest else { return }
             pendingAIRequest = nil
-            Task { await session.aiWorkspace.enter(request) }
-        }) { action in
-            DiaryAIRequestSheet(controller: session.canvasAI, action: action, onStartWorkspace: { request in
-                pendingAIRequest = request
-            }) {
-                withAnimation { aiExpanded = false }
+            Task {
+                await session.aiWorkspace.enter(request)
+                if session.aiWorkspace.active { session.aiWorkspace.processAll() }
             }
+        }) { action in
+            DiaryAIRequestSheet(controller: session.canvasAI, action: action, session: session, onStartWorkspace: { request in
+                pendingAIRequest = request
+            }, onApplied: {
+                withAnimation { aiExpanded = false }
+            })
         }
         .sheet(item: $panel) { panel in panelContent(panel) }
         .fullScreenCover(item: $cropTarget) { layer in DiaryCropSheet(session: session, layer: layer) }

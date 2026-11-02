@@ -1,4 +1,5 @@
 import Testing
+import Combine
 import UIKit
 import SwiftUI
 @testable import TravelDiary
@@ -25,6 +26,51 @@ import SwiftUI
     private func wait(_ workspace: DiaryAIWorkspace) async throws {
         let deadline = Date().addingTimeInterval(15)
         while workspace.running && Date() < deadline { try await Task.sleep(for: .milliseconds(30)) }
+    }
+    @Test func editorRelayoutDefaultsIncludeBackgroundTextAndFrames() {
+        let request = DiaryAIRequest.editorDefaults(.relayout)
+        #expect(request.background != nil && request.allowsText && request.allowsFrames)
+        #expect(!request.allowsCrop)
+    }
+    @Test func inlineStartDetailsReturnAndSave() async throws {
+        let (session, root) = try await fixture(count: 7)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = DiaryAIWorkspace(session: session, model: WorkspaceModel(), root: root)
+        await workspace.enter(.defaults(.relayout))
+        #expect(workspace.active && workspace.pending.count == 7)
+        #expect(workspace.displaySession?.scopeLayers.isEmpty == true)
+        let scene = try #require(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        let host = UIHostingController(rootView: DiaryAIInlinePanel(workspace: workspace, controller: session.canvasAI))
+        window.rootViewController = host; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.layoutIfNeeded()
+        var displayedCounts: [Int] = []
+        let displaySubscription = workspace.$displaySession.sink { display in
+            displayedCounts.append(display?.scopeLayers.count ?? 0)
+        }
+        defer { displaySubscription.cancel() }
+        workspace.configureAndStart(.defaults(.relayout))
+        let deadline = Date().addingTimeInterval(15)
+        while workspace.version == 0 && workspace.error == nil && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        try await wait(workspace)
+        #expect(workspace.error == nil && workspace.pending.isEmpty && workspace.version == 2)
+        #expect(displayedCounts.contains(5) && displayedCounts.contains(7))
+        let details = UIHostingController(rootView: DiaryAIWorkspaceView(workspace: workspace).panel)
+        host.present(details, animated: false)
+        details.view.layoutIfNeeded()
+        #expect(host.presentedViewController === details)
+        #expect(!workspace.events.isEmpty)
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            host.dismiss(animated: false) { continuation.resume() }
+        }
+        #expect(host.presentedViewController == nil)
+        #expect(workspace.displaySession?.scopeLayers.count == 7)
+        #expect(await workspace.save())
+        #expect(session.scopeLayers.count == 7 && session.undoStack.count == 1)
     }
     @Test(arguments: [false, true]) func backgroundModesFinishSaveAndUndo(_ parallel: Bool) async throws {
         let (session, root) = try await fixture(count: 7); defer { try? FileManager.default.removeItem(at: root) }

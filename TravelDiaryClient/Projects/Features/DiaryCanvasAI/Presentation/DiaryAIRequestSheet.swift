@@ -2,9 +2,24 @@ import SwiftUI
 
 struct DiaryAIRequestSheet: View {
     @ObservedObject var controller: DiaryAIDraftController
-    let action: DiaryAIAction
+    var onConfigure: ((DiaryAIRequest) -> Void)? = nil
+    var initialAction: DiaryAIAction
+    var session: DiaryEditorSession? = nil
+    @State private var chosenAction: DiaryAIAction?
+    private var action: DiaryAIAction { chosenAction ?? initialAction }
+    @State private var canvasImage: UIImage?
+    @State private var detailsExpanded = false
     var onStartWorkspace: ((DiaryAIRequest) -> Void)? = nil
     var onApplied: () -> Void = {}
+    init(controller: DiaryAIDraftController, action: DiaryAIAction, session: DiaryEditorSession? = nil,
+         onStartWorkspace: ((DiaryAIRequest) -> Void)? = nil, onConfigure: ((DiaryAIRequest) -> Void)? = nil, onApplied: @escaping () -> Void = {}) {
+        self.onConfigure = onConfigure
+        self.controller = controller
+        self.initialAction = action
+        self.session = session
+        self.onStartWorkspace = onStartWorkspace
+        self.onApplied = onApplied
+    }
     @Environment(\.dismiss) private var dismiss
     @State private var editingSettings = false
     @State private var showOriginal = false
@@ -21,7 +36,17 @@ struct DiaryAIRequestSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            GeometryReader { geometry in
+                VStack(spacing: 12) {
+                    if let canvasImage = previewData.flatMap({ UIImage(data: $0) }) ?? canvasImage {
+                        Image(uiImage: canvasImage).resizable().scaledToFit()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: geometry.size.height * 0.34)
+                            .padding(.horizontal, 16)
+                            .accessibilityLabel("当前相册画布预览")
+                    }
+                    if onConfigure == nil { materialTray }
+                    ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     if let error = controller.error {
                         Label(error, systemImage: "exclamationmark.circle")
@@ -33,18 +58,28 @@ struct DiaryAIRequestSheet: View {
                     else { settings }
                 }.padding(20)
             }
+                    }
+                }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(uiColor: .systemGroupedBackground))
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(action.rawValue)
+            .navigationTitle(onConfigure == nil ? "AI 创作" : "自定义模板")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("关闭", systemImage: "xmark") { dismiss() }.labelStyle(.iconOnly) }
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItem(placement: .cancellationAction) { Button("退出") { dismiss() } }
+                ToolbarItemGroup(placement: .confirmationAction) {
+                    if onConfigure == nil {
+                    Button { showOriginal.toggle() } label: {
+                        Image(systemName: "rectangle.on.rectangle")
+                    }.accessibilityLabel("对比原版").disabled(candidate == nil)
+                    Button("保存") {
+                        if controller.apply(action) { onApplied(); dismiss() }
+                    }.disabled(candidate == nil || controller.running)
+                    }
                     if candidate != nil {
                         Button(reviewing ? "设置" : "查看草稿") { editingSettings.toggle() }
                     } else {
-                        Button("重置") { controller.setForm(.defaults(action)) }.disabled(controller.running)
+                        Button("重置") { controller.setForm(.editorDefaults(action)) }.disabled(controller.running)
                     }
                 }
             }
@@ -67,7 +102,43 @@ struct DiaryAIRequestSheet: View {
         .presentationContentInteraction(.scrolls)
         .presentationBackgroundInteraction(.disabled)
         .onChange(of: controller.candidates[action]?.revision) { _, _ in editingSettings = false; showOriginal = false }
-        .task { controller.restoreIfNeeded() }
+        .task {
+            controller.restoreIfNeeded()
+            guard let session else { return }
+            let size = session.content.referenceSize
+            let ratio = min(1, 1200 / max(size.width, size.height))
+            let format = UIGraphicsImageRendererFormat(); format.scale = 1
+            canvasImage = UIGraphicsImageRenderer(size: CGSize(width: size.width * ratio, height: size.height * ratio), format: format).image { output in
+                output.cgContext.scaleBy(x: ratio, y: ratio)
+                DiaryPageRenderer.draw(session.document, contentID: session.contentID, images: session.images, in: output.cgContext, cacheObjects: false)
+            }
+        }
+    }
+    private var materialTray: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(controller.bridge.objectChoices.filter { $0.visible }) { object in
+                    VStack(spacing: 5) {
+                        Group {
+                            if let image = object.assetIDs.compactMap({ session?.images[$0] }).first {
+                                Image(uiImage: image).resizable().scaledToFit()
+                            } else {
+                                Image(systemName: object.role == "photo" ? "photo" : "textformat").font(.title3)
+                            }
+                        }.frame(width: 54, height: 48)
+                            .background(.background, in: RoundedRectangle(cornerRadius: 10))
+                        Text(object.shortID).font(.caption2)
+                    }.foregroundStyle(object.locked ? Color.secondary : Color.primary)
+                        .contextMenu {
+                            Button("设为主照片") { field(\.heroID).wrappedValue = object.id }
+                                .disabled(object.role != "photo" || object.locked || action != .relayout)
+                        }
+                        .overlay(alignment: .topTrailing) {
+                            if object.locked { Image(systemName: "lock.fill").font(.caption2) }
+                        }
+                }
+            }.padding(.horizontal, 20)
+        }.frame(height: 66)
     }
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -77,6 +148,9 @@ struct DiaryAIRequestSheet: View {
     }
     private var settings: some View {
         VStack(alignment: .leading, spacing: 22) {
+            Picker("功能", selection: Binding(get: { action }, set: { chosenAction = $0 })) {
+                ForEach(DiaryAIAction.allCases) { Text($0.rawValue).tag($0) }
+            }.pickerStyle(.segmented)
             section("调整范围") {
                 Picker("范围", selection: field(\.selectedOnly)) {
                     Text(controller.bridge.scopeTitle).tag(false)
@@ -123,6 +197,12 @@ struct DiaryAIRequestSheet: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             }
+            section(action == .custom ? "你想怎么改" : "补充要求 · 选填") {
+                TextField("例如：突出跳跃的照片，照片有大小变化，右页留下短句的位置。", text: field(\.instruction), axis: .vertical)
+                    .lineLimit(3...7).focused($focused).padding(14)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+            }
+            DisclosureGroup("自定义 · 心情与场景", isExpanded: $detailsExpanded) {
             section("心情与场景 · 选填") {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 68))], spacing: 8) {
                     ForEach(["开心", "放松", "治愈", "怀念", "感动", "平静", "兴奋"], id: \.self) { mood in
@@ -146,10 +226,6 @@ struct DiaryAIRequestSheet: View {
                 Toggle("把地点写进文字", isOn: field(\.writesLocation)).disabled(request.location.isEmpty)
             }
             if request.background?.backgroundOnly != true { options }
-            section(action == .custom ? "你想怎么改" : "补充要求 · 选填") {
-                TextField("例如：突出跳跃的照片，照片有大小变化，右页留下短句的位置。", text: field(\.instruction), axis: .vertical)
-                    .lineLimit(3...7).focused($focused).padding(14)
-                    .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
             }
             Text("提交后，本页必要的预览、照片缩略图和文字将发送给外部 AI 处理。原作品在你应用前保持不变。")
                 .font(.footnote).foregroundStyle(.secondary)
@@ -271,7 +347,10 @@ struct DiaryAIRequestSheet: View {
     }
     private var bottomBar: some View {
         HStack(spacing: 12) {
-            if controller.runningAction == action {
+            if let onConfigure {
+                Button("完成设置") { onConfigure(request); dismiss() }
+                    .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
+            } else if controller.runningAction == action {
                 Button("停止生成", role: .destructive) { controller.cancel() }.buttonStyle(.bordered).frame(maxWidth: .infinity)
             } else if reviewing {
                 Button("放弃", role: .destructive) { controller.discard(action) }.buttonStyle(.bordered)

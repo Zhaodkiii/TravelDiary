@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import SwiftUI
 import UIKit
 
@@ -22,7 +23,11 @@ struct DiaryEditorScreen: View {
     @State private var showStickers = false
     @State private var selectionViewportRect: CGRect?
 
-    private var toolOpen: Bool { activeTool != nil || showStickers }
+    @State private var aiMode = false
+    @State private var aiCompare = false
+    @State private var aiDisplaySession: DiaryEditorSession?
+    private var canvasSession: DiaryEditorSession { aiMode && !aiCompare ? aiDisplaySession ?? session : session }
+    private var toolOpen: Bool { activeTool != nil || showStickers || aiMode }
 
     var body: some View {
         NavigationStack {
@@ -32,14 +37,17 @@ struct DiaryEditorScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { editorToolbar }
             .toolbarBackground(.hidden, for: .navigationBar)
-            .toolbar(toolOpen ? .hidden : .visible, for: .navigationBar)
+            .toolbar(toolOpen && !aiMode ? .hidden : .visible, for: .navigationBar)
             .overlay {
                 if session.busy || importingCameraPhotos {
                     ProgressView(importingCameraPhotos ? "正在添加拍摄照片…" : "正在处理…")
                         .padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
             }
-            .fullScreenCover(isPresented: $session.aiWorkspacePresented) { DiaryAIWorkspaceView(workspace: session.aiWorkspace) }
+            .onReceive(session.aiWorkspace.$displaySession) { aiDisplaySession = $0 }
+            .onChange(of: session.aiWorkspacePresented) { _, presented in
+                if !presented { withAnimation(.smooth(duration: 0.4)) { aiMode = false } }
+            }
             .fullScreenCover(item: $childEditor) { child in
                 AnyView(DiaryEditorScreen(session: child))
             }
@@ -108,12 +116,19 @@ struct DiaryEditorScreen: View {
     private var editorToolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             HStack {
-                Button("完成") { Task { if await session.commitToParent() { dismiss() } } }
+                if aiMode {
+                    Button("退出") { Task { await session.aiWorkspace.keepForLater(); withAnimation { aiMode = false } } }
+                } else { Button("完成") { Task { if await session.commitToParent() { dismiss() } } }
                 if !session.isRoot { Button("取消") { Task { await session.cancelEditor(); dismiss() } } }
+                }
             }
             .disabled(session.busy || importingCameraPhotos)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
+            if aiMode {
+                Button { aiCompare.toggle() } label: { Image(systemName: "rectangle.on.rectangle") }.accessibilityLabel("对比原版")
+                Button("保存") { Task { if await session.aiWorkspace.save() { withAnimation { aiMode = false } } } }.disabled(session.aiWorkspace.running)
+            } else {
             if supportsSpreadPreview {
                 Button { session.finishInteraction(); showsSpreadShell.toggle() } label: { Image(systemName: showsSpreadShell ? "eye.fill" : "eye") }
                     .accessibilityLabel(showsSpreadShell ? "隐藏画布外壳" : "显示画布外壳")
@@ -124,6 +139,7 @@ struct DiaryEditorScreen: View {
             Button { session.redo() } label: { Image(systemName: "arrow.uturn.forward") }
                 .disabled(session.redoStack.isEmpty || session.busy || importingCameraPhotos).accessibilityLabel("重做")
 
+            }
         }
     }
 
@@ -137,7 +153,7 @@ struct DiaryEditorScreen: View {
                     let verticalPadding: CGFloat = toolOpen ? 0 : 24
                     let scale = max(0.01, min((geometry.size.width - horizontalPadding) / size.width,
                                              (geometry.size.height - margin * 2 - verticalPadding) / size.height))
-                    DiaryZoomableCanvas(contentSize: CGSize(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2), sessionID: session.id, inkMode: session.inkMode, minimumScale: 0.65, toolViewport: toolOpen, contentRevision: (showsSpreadShell ? 1 : 0) + (session.layerMode ? 2 : 0), entranceFocusRect: supportsSpreadPreview ? CGRect(x: margin + (entranceOnRightPage ? size.width * scale / 2 : 0), y: margin, width: size.width * scale / 2, height: size.height * scale) : nil, preservedCanvasRect: supportsSinglePageViewport ? CGRect(x: margin, y: margin, width: size.width * scale, height: size.height * scale) : nil) {
+                    DiaryZoomableCanvas(contentSize: CGSize(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2), sessionID: session.id, inkMode: session.inkMode, minimumScale: 0.65, toolViewport: toolOpen, fitsCanvas: aiMode, refreshContent: aiMode, contentRevision: (showsSpreadShell ? 1 : 0) + (session.layerMode ? 2 : 0), entranceFocusRect: supportsSpreadPreview && !aiMode ? CGRect(x: margin + (entranceOnRightPage ? size.width * scale / 2 : 0), y: margin, width: size.width * scale / 2, height: size.height * scale) : nil, preservedCanvasRect: supportsSinglePageViewport && !aiMode ? CGRect(x: margin, y: margin, width: size.width * scale, height: size.height * scale) : nil) {
                       ZStack(alignment: .topLeading) {
                         if supportsSpreadPreview && showsSpreadShell {
                             DiaryLiveSpreadShell()
@@ -145,7 +161,7 @@ struct DiaryEditorScreen: View {
                                 .offset(x: margin, y: margin)
                                 .allowsHitTesting(false).accessibilityHidden(true)
                         }
-                        DiaryCanvasView(session: session, compactViewport: toolOpen, stagesEntrance: supportsSpreadPreview, onSelectionViewportRect: { rect in
+                        DiaryCanvasView(session: canvasSession, compactViewport: toolOpen, stagesEntrance: supportsSpreadPreview, onSelectionViewportRect: { rect in
                             DispatchQueue.main.async {
                                 if selectionViewportRect != rect { selectionViewportRect = rect }
                             }
@@ -166,7 +182,18 @@ struct DiaryEditorScreen: View {
                       }
                       .frame(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)
                     }
+                    .allowsHitTesting(!aiMode)
                     .clipped()
+                    .overlay(alignment: .top) {
+                        if aiMode {
+                            let materialTop = max(size.height * scale + margin * 2 + 12, geometry.size.height * 0.62)
+                            VStack(spacing: 0) {
+                                Color.clear.frame(height: materialTop)
+                                DiaryAIMaterialRows(workspace: session.aiWorkspace)
+                                    .frame(height: max(0, geometry.size.height - materialTop))
+                            }
+                        }
+                    }
                     .overlay(alignment: .topLeading) {
                         if !toolOpen, session.selected != nil, let rect = selectionViewportRect {
                             let width = min(geometry.size.width - 24, CGFloat(session.contextActions.count) * 56 + 32)
@@ -180,7 +207,10 @@ struct DiaryEditorScreen: View {
                 // 画布可延伸至 Home 指示器区域；外层工具栏仍按安全区定位。
                 .ignoresSafeArea(.container, edges: toolOpen ? [] : .bottom)
                 .background(DiaryLibraryStyle.background)
-                if showStickers {
+                if aiMode {
+                    DiaryAIInlinePanel(workspace: session.aiWorkspace, controller: session.canvasAI)
+                        .frame(height: 200)
+                } else if showStickers {
                     // Reserve the compact native sheet's space so the existing tool
                     // viewport fits the artwork above it and keeps the canvas at the top.
                     Color.clear.frame(height: MaterialLibraryBrowser.compactHeight).accessibilityHidden(true)
@@ -211,6 +241,12 @@ struct DiaryEditorScreen: View {
             onLayers: { session.finishInteraction(); session.layerMode = true; activeTool = .layers },
             onStickers: { session.finishInteraction(); showStickers = true },
             onOpenObject: openSelectedObject,
+            onAI: {
+                session.finishInteraction(); session.select(nil)
+                activeTool = nil
+                withAnimation(.smooth(duration: 0.45)) { aiMode = true }
+                Task { await session.aiWorkspace.enter(session.canvasAI.form(.relayout)) }
+            },
             onTransform: { session.beginFreeTransform(); if session.transformDraft != nil { activeTool = .transform } },
             selectionToolsOnly: selectionToolsOnly)
     }

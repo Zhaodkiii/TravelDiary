@@ -58,7 +58,17 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     @Published var panelVisible = true
     @Published private(set) var selected: Set<UUID> = []
     private weak var source: DiaryEditorSession?
+    @Published private(set) var displaySession: DiaryEditorSession?
     private var working: DiaryEditorSession?
+    func configureAndStart(_ value: DiaryAIRequest) {
+        guard active, !running else { return }
+        request = value
+        if value.action != .relayout { pending = [] }
+        Task {
+            do { try await refresh(); processAll() }
+            catch { self.error = error.localizedDescription }
+        }
+    }
     private var bridge: DiaryEditorAIBridge?
     private var baseline: DiaryAIWorkspaceCheckpoint?
     private var checkpoints: [DiaryAIWorkspaceCheckpoint] = []
@@ -185,17 +195,21 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         objects = adapter.objectChoices
         for object in objects where thumbnails[object.id] == nil {
             if let outer = document.layer(object.id) {
-                func leafAsset(_ layer: DiaryLayer, visited: Set<UUID>) -> UUID? {
-                    if layer.isPhotoFrame { return nil }
-                    if let asset = layer.assetID { return asset }
-                    guard let child = layer.contentID, !visited.contains(child), let content = document.objects[child] else { return nil }
-                    return content.layers.compactMap { leafAsset($0, visited: visited.union([child])) }.first
-                }
-                if let asset = leafAsset(outer, visited: []), let image = images[asset] {
-                    let ratio = min(1, 240 / max(image.size.width, image.size.height))
-                    let size = CGSize(width: image.size.width * ratio, height: image.size.height * ratio)
-                    let format = UIGraphicsImageRendererFormat(); format.scale = 1
-                    thumbnails[object.id] = UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+                let siblings = document.objects[session.contentID]?.layers ?? []
+                let bounds = DiaryPageRenderer.bounds(outer, document: document, siblings: siblings)
+                    .applying(DiaryPageRenderer.matrix(outer, siblings: siblings))
+                if bounds.width > 0 && bounds.height > 0 {
+                    var thumbnailDocument = document
+                    thumbnailDocument.objects[session.contentID]?.layers = siblings.filter { $0.id == outer.id || $0.frameTargetID == outer.id }
+                    thumbnailDocument.objects[session.contentID]?.background = nil
+                    thumbnailDocument.objects[session.contentID]?.drawing = Data()
+                    let ratio = min(1, 240 / max(bounds.width, bounds.height))
+                    let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = false
+                    thumbnails[object.id] = UIGraphicsImageRenderer(size: CGSize(width: bounds.width * ratio, height: bounds.height * ratio), format: format).image { output in
+                        output.cgContext.scaleBy(x: ratio, y: ratio)
+                        output.cgContext.translateBy(x: -bounds.minX, y: -bounds.minY)
+                        DiaryPageRenderer.draw(thumbnailDocument, contentID: session.contentID, images: images, in: output.cgContext, cacheObjects: false)
+                    }
                 }
             }
         }
@@ -206,6 +220,17 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         var contextRequest = request; contextRequest.selectedOnly = false
         _ = try await bridge.capture(contextRequest)
         preview = UIImage(data: try await bridge.originalPreview()); objects = bridge.objectChoices
+        updateDisplaySession()
+    }
+    private func updateDisplaySession() {
+        if let working {
+            var document = working.document
+            let hidden = Set(pending)
+            document.objects[working.contentID]?.layers.removeAll { hidden.contains($0.id) || $0.frameTargetID.map(hidden.contains) == true }
+            let display = DiaryEditorSession(document: document, images: working.images, store: working.store, contentID: working.contentID)
+            display.aiTransientSession = true
+            displaySession = display
+        }
     }
     func toggle(_ id: UUID) { if selected.contains(id) { selected.remove(id) } else if pending.contains(id) { selected.insert(id) } }
     func enqueue(_ ids: [UUID], hint: CGPoint? = nil) {
@@ -948,6 +973,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                                 throw error
                             }
                             committed = true; committedRound = round; preview = UIImage(data: draft.preview); objects = bridge.objectChoices
+                            updateDisplaySession()
                             madeProgress = true; repeatedErrors = 0; missingCallRetries = 0
                             (model as? DiaryArkResponsesClient)?.allowedLayerReferences = objects.filter { confirmationIDs.contains($0.id) }.flatMap { [$0.shortID, $0.id.uuidString] }
                             feedback = [.init(id: "canvas-v\(version)", caption: "本批已提交，检查主体遮挡和文字留白；通过finish_batch，有问题request_batch_revision", data: draft.preview)]

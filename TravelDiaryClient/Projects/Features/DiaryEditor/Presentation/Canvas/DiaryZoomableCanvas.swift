@@ -9,6 +9,7 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
     let inkMode: Bool
     var minimumScale: CGFloat = 1
     var toolViewport = false
+    var fitsCanvas = false
     var refreshContent = false
     var contentRevision = 0
     var initialFocusRect: CGRect? = nil
@@ -62,8 +63,18 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
 
     private func configure(_ scroll: UIScrollView, coordinator: Coordinator) {
         // 工具面板改变可用区域时重新适配，素材选择不会改变尺寸或浏览倍率。
+        coordinator.host.safeAreaRegions = fitsCanvas ? [] : .all
+        let fitChanged = coordinator.fitsCanvas != fitsCanvas
+        coordinator.fitsCanvas = fitsCanvas
+        if fitsCanvas {
+            coordinator.entranceAnimator?.stopAnimation(true)
+            coordinator.entranceAnimator = nil
+            coordinator.entranceCancelled = true
+            coordinator.entranceSettled = true
+            if fitChanged { coordinator.needsInitialCenter = true }
+        }
         let toolChanged = coordinator.toolViewport != toolViewport
-        let preserveSinglePage = preservedCanvasRect != nil && coordinator.hasCenteredInitially && (toolChanged || coordinator.entranceCancelled || coordinator.preservesSingleViewport)
+        let preserveSinglePage = !fitsCanvas && preservedCanvasRect != nil && coordinator.hasCenteredInitially && (toolChanged || coordinator.entranceCancelled || coordinator.preservesSingleViewport)
         if preserveSinglePage { coordinator.preservesSingleViewport = true }
         if coordinator.toolViewport != toolViewport {
             coordinator.toolViewport = toolViewport
@@ -71,7 +82,7 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
         }
         if coordinator.size != contentSize {
             let oldSize = coordinator.size
-            let preserveViewport = (preserveSinglePage || initialFocusRect != nil || (entranceFocusRect != nil && coordinator.entranceSettled)) && oldSize != .zero
+            let preserveViewport = !fitsCanvas && (preserveSinglePage || initialFocusRect != nil || (entranceFocusRect != nil && coordinator.entranceSettled)) && oldSize != .zero
             let oldFocus = preservedCanvasRect != nil ? coordinator.preservedCanvasRect : coordinator.entranceFocusRect
             let newFocusRect = preservedCanvasRect ?? entranceFocusRect
             let zoom = scroll.zoomScale
@@ -105,7 +116,13 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
         coordinator.preservedCanvasRect = preservedCanvasRect
         coordinator.entranceFocusRect = entranceFocusRect
         coordinator.initialFocusRect = initialFocusRect
-        coordinator.center(scroll)
+        if fitsCanvas && fitChanged {
+            UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.45) {
+                scroll.setZoomScale(1, animated: false)
+                coordinator.center(scroll)
+                scroll.setContentOffset(CGPoint(x: (contentSize.width - scroll.bounds.width) / 2, y: 0), animated: false)
+            }
+        } else { coordinator.center(scroll) }
     }
 
     final class Coordinator: NSObject, UIScrollViewDelegate, UIGestureRecognizerDelegate {
@@ -193,6 +210,7 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
         var needsInitialCenter = true
         var sessionID: UUID?
         var inkMode = false
+        var fitsCanvas = false
         var toolViewport = false
         init(content: Content) { host = UIHostingController(rootView: content) }
 
@@ -258,7 +276,7 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
             guard !isConfiguring else { return }
             let oldViewport = lastViewportSize
             lastViewportSize = scroll.bounds.size
-            if (appliedInitialFocus || entranceSettled || preservesSingleViewport), !isConfiguring, oldViewport != .zero, oldViewport != scroll.bounds.size {
+            if !fitsCanvas, (appliedInitialFocus || entranceSettled || preservesSingleViewport), !isConfiguring, oldViewport != .zero, oldViewport != scroll.bounds.size {
                 // Keyboard changes the viewport, not the user's zoom or document-space center.
                 scroll.contentOffset = CGPoint(x: scroll.contentOffset.x + (oldViewport.width - scroll.bounds.width) / 2,
                                                y: scroll.contentOffset.y + (oldViewport.height - scroll.bounds.height) / 2)
@@ -284,6 +302,13 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
                 let y = min(max(-scroll.contentInset.top, rect.midY * zoom - scroll.bounds.height / 2),
                             max(-scroll.contentInset.top, size.height * zoom - scroll.bounds.height + scroll.contentInset.bottom))
                 scroll.setContentOffset(CGPoint(x: x, y: y), animated: false)
+                return
+            }
+            if fitsCanvas {
+                let offset = CGPoint(x: (size.width * scroll.zoomScale - scroll.bounds.width) / 2, y: 0)
+                if scroll.contentOffset != offset { scroll.setContentOffset(offset, animated: false) }
+                needsInitialCenter = false
+                hasCenteredInitially = true
                 return
             }
             if !needsInitialCenter { scheduleEntrance(scroll) }

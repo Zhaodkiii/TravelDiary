@@ -41,6 +41,16 @@ nonisolated struct DiaryAIRequest: Codable, Equatable, Sendable {
     var canCreateText: Bool { (action == .writing && !["润色", "缩短", "只换样式"].contains(writingKind)) || (action != .writing && action != .beautify && allowsText) }
     var canRewrite: Bool { action == .writing ? writingKind != "只换样式" : action != .beautify && allowsRewrite }
     var canMove: Bool { action != .writing && (action != .custom || allowsPlacement) }
+    /// Defaults for a new user-facing task; internal callers can opt into each operation.
+    static func editorDefaults(_ action: DiaryAIAction) -> Self {
+        var request = defaults(action)
+        if action == .relayout {
+            request.background = DiaryAIBackgroundOptions()
+            request.allowsText = true
+            request.allowsFrames = true
+        }
+        return request
+    }
     static func defaults(_ action: DiaryAIAction) -> Self {
         var request = Self(action: action)
         if action == .relayout { request.style = "自动匹配" }

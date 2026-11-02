@@ -27,7 +27,7 @@ import Combine
         self.bridge = bridge; self.model = model
         self.repository = repository ?? DiaryAILocalTaskStore(key: bridge.storageKey)
     }
-    func form(_ action: DiaryAIAction) -> DiaryAIRequest { forms[action] ?? .defaults(action) }
+    func form(_ action: DiaryAIAction) -> DiaryAIRequest { forms[action] ?? .editorDefaults(action) }
     func setForm(_ value: DiaryAIRequest) {
         forms[value.action] = value
         formSaveTask?.cancel()
