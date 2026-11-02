@@ -210,9 +210,9 @@ final class DiaryCanvasSurface: UIView {
         refresh(force: true)
     }
     /// 只改变呈现层；背景先显示，其余按文字、照片、贴纸、其他顺序入场。
-    func animateMaterialEntrance() {
+    func animateMaterialEntrance(completion: (() -> Void)? = nil) {
         guard stagesEntrance, !entranceFinished, !entrancePlaying else { return }
-        guard !UIAccessibility.isReduceMotionEnabled else { finishEntrance(); return }
+        guard !UIAccessibility.isReduceMotionEnabled else { finishEntrance(); completion?(); return }
         entrancePlaying = true
         entranceTextHaptic.prepare(); entrancePhotoHaptic.prepare(); entranceStickerHaptic.prepare()
         let entries = renderCache.ordered.filter { !isEntranceBackground($0.source) && $0.source.visible }
@@ -271,7 +271,11 @@ final class DiaryCanvasSurface: UIView {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
             delay += text ? duration + 0.12 : 0.18
         }
-        let finish = DispatchWorkItem { [weak self] in self?.finishEntrance() }
+        let finish = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.finishEntrance()
+            completion?()
+        }
         entranceWork.append(finish)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.5, execute: finish)
     }

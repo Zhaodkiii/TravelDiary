@@ -8,7 +8,7 @@ struct DiaryEditorScreen: View {
     var entranceOnRightPage = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
-    @State private var showsSpreadShell = false
+    @State private var showsSpreadShell = true
     @State private var childEditor: DiaryEditorSession?
     @State private var showPhotos = false
     @State private var showCamera = false

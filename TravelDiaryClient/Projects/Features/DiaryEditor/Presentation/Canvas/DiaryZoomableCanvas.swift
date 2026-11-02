@@ -145,7 +145,11 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
             entranceScheduled = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self, weak scroll] in
                 guard let self, let scroll, scroll.window != nil, !self.entranceCancelled,
-                      !scroll.isTracking, !scroll.isZooming, let rect = self.entranceFocusRect else { return }
+                      !scroll.isTracking, !scroll.isZooming, self.entranceFocusRect != nil else { return }
+                // 先在完整适屏视口播放素材，结束后才聚焦目标页。
+                let focus = { [weak self, weak scroll] in
+                    guard let self, let scroll, scroll.window != nil, !self.entranceCancelled,
+                          !scroll.isTracking, !scroll.isZooming, let rect = self.entranceFocusRect else { return }
                 let zoom = min(scroll.maximumZoomScale, max(scroll.minimumZoomScale,
                     min(scroll.bounds.width * 0.90 / rect.width, scroll.bounds.height * 0.78 / rect.height)))
                 let apply = {
@@ -165,15 +169,19 @@ struct DiaryZoomableCanvas<Content: View>: UIViewRepresentable {
                 animator.addCompletion { [weak self] position in
                     guard let self else { return }
                     self.entranceAnimator = nil
-                    guard position == .end, !self.entranceCancelled else { return }
-                    self.entranceSettled = true
-                    func reveal(_ view: UIView) {
-                        (view as? DiaryCanvasSurface)?.animateMaterialEntrance()
-                        view.subviews.forEach(reveal)
-                    }
-                    reveal(self.host.view)
+                    if position == .end, !self.entranceCancelled { self.entranceSettled = true }
                 }
                 animator.startAnimation()
+                }
+                let canvases = self.canvases()
+                guard !canvases.isEmpty else { focus(); return }
+                var remaining = canvases.count
+                for canvas in canvases {
+                    canvas.animateMaterialEntrance {
+                        remaining -= 1
+                        if remaining == 0 { focus() }
+                    }
+                }
             }
         }
         var contentRevision = 0
