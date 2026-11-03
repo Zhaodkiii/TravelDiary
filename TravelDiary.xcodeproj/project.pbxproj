@@ -566,6 +566,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "寻寻仔";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access to take photos and videos.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "仅在你选择使用当前位置时，用于填写故事地点。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow microphone access to record videos with sound and capture your speech for voice input.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving captured photos, edited media, and exported diary images and videos to your photo library.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow photo library access to choose photos and videos for preview and editing.";
@@ -632,6 +633,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "寻寻仔";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access to take photos and videos.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "仅在你选择使用当前位置时，用于填写故事地点。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow microphone access to record videos with sound and capture your speech for voice input.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving captured photos, edited media, and exported diary images and videos to your photo library.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow photo library access to choose photos and videos for preview and editing.";

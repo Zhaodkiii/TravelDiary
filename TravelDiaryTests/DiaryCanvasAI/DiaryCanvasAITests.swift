@@ -23,6 +23,75 @@ import SwiftUI
         #expect(legacy.coordinated().design == nil)
         #expect(legacy.designBrief.contains("暖棕"))
     }
+    @Test func compactPermissionsPreserveUserScopeAndConsent() throws {
+        var request = DiaryAIRequest.editorDefaults(.relayout)
+        request.selectedOnly = true; request.allowsCrop = false; request.writesLocation = false
+        request.instruction = "保留我的标题"; request.location = "测试地点"
+        let data = Data(try DiaryAIWorkspace.executionPermissions(request).utf8)
+        let raw = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(raw["selectedOnly"] as? Bool == true)
+        #expect(raw["allowsCrop"] as? Bool == false && raw["writesLocation"] as? Bool == false)
+        #expect(raw["instruction"] as? String == request.instruction)
+        #expect(raw["location"] as? String == request.location)
+        #expect(raw["background"] != nil)
+    }
+    @Test func textEvidenceRejectsInventedRelationsButAllowsConfirmedFacts() throws {
+        var request = DiaryAIRequest.editorDefaults(.relayout)
+        #expect(throws: (any Error).self) { try DiaryAIWorkspaceTools.validateTextEvidence(["text": "姐姐带着弟弟"], request: request) }
+        request.instruction = "这是姐姐和弟弟"
+        try DiaryAIWorkspaceTools.validateTextEvidence(["text": "姐姐带着弟弟"], request: request)
+        try DiaryAIWorkspaceTools.validateTextEvidence(["text": "愿这一页留住温暖"], request: .editorDefaults(.relayout))
+    }
+    @Test func coordinateNormalizationOnlyChangesUnambiguousPairs() throws {
+        let pair = DiaryAIToolCall(id: "pair", name: "place_layer", arguments: "{\"center\":[-100,900],\"width\":200}")
+        let normalized = DiaryAIWorkspaceTools.normalized(pair)
+        let raw = try #require(JSONSerialization.jsonObject(with: Data(normalized.arguments.utf8)) as? [String: Any])
+        let center = try #require(raw["center"] as? [String: Double])
+        #expect(center["x"] == -100 && center["y"] == 900) // Bounds checks still see the actual coordinates.
+        let ambiguous = DiaryAIToolCall(id: "bad", name: "place_layer", arguments: "{\"center\":[1,2,3]}")
+        #expect(DiaryAIWorkspaceTools.normalized(ambiguous).arguments == ambiguous.arguments)
+    }
+    @Test func planningSpineFitKeepsRegionSizeAndIdentity() async throws {
+        let (session, root) = fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        var context = try await DiaryEditorAIBridge(session).capture(.defaults(.relayout)); context.spineX = 500
+        let region = DiaryAILayoutRegion(role: "text", x: 420, y: 100, width: 200, height: 100)
+        let fitted = DiaryAIWorkspace.fitPlanningRegions([region], context: context)
+        #expect(fitted[0].width == 200 && fitted[0].height == 100 && fitted[0].role == "text")
+        _ = try DiaryAIWorkspace.validatedRegions(fitted, context: context, allowsText: true)
+        let impossible = DiaryAILayoutRegion(role: "text", x: 100, y: 100, width: 800, height: 100)
+        #expect(DiaryAIWorkspace.fitPlanningRegions([impossible], context: context)[0].x == impossible.x)
+    }
+    @Test func orphanFittingPreservesTextFontAndExplicitBreaks() {
+        var changed = false
+        for width in stride(from: 240.0, through: 480.0, by: 20) {
+            var layer = DiaryLayer(name: "旁注", kind: .text, transform: .init(position: .zero, pivot: .zero), size: CGSize(width: width, height: 80), text: "愿往后的路上都有好天气", fontSize: 32)
+            let before = layer
+            DiaryEditorAIBridge.avoidOrphanLine(&layer, maximumWidth: 600)
+            #expect(layer.text == before.text && layer.fontSize == before.fontSize)
+            #expect(layer.size.width >= before.size.width && layer.size.width <= 600)
+            changed = changed || layer.size.width > before.size.width
+            layer.text = "愿往后的路上\n都有好天气"; let explicitWidth = layer.size.width
+            DiaryEditorAIBridge.avoidOrphanLine(&layer, maximumWidth: 800)
+            #expect(layer.size.width == explicitWidth)
+        }
+        #expect(changed)
+    }
+    @Test func titleRoleSurvivesNativeCreationAndNarrowWidthRevision() async throws {
+        let (session, root) = fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let request = DiaryAIRequest.editorDefaults(.relayout)
+        let bridge = DiaryEditorAIBridge(session)
+        let context = try await bridge.capture(request)
+        let op = DiaryAIOperation(operationID: "title", type: "createText", clientObjectKey: "title", textRole: "title", center: CGPoint(x: 750, y: 300), text: "把日子收藏", fontID: "system", fontSize: 48, width: 240, paper: "none")
+        _ = try await bridge.propose(plan(context, [op])); try bridge.apply()
+        let title = try #require(bridge.objectChoices.first { $0.text == "把日子收藏" })
+        let next = try await bridge.capture(request)
+        let edit = DiaryAIOperation(operationID: "revise", type: "updateText", objectID: title.id, width: 80)
+        _ = try await bridge.propose(plan(next, [edit])); try bridge.apply()
+        let leaf = try #require(session.document.objects.values.flatMap(\.layers).first { $0.kind == .text && $0.text == "把日子收藏" })
+        #expect(leaf.name == "AI 标题")
+        #expect(leaf.size.width >= 240 && leaf.fontSize == 48)
+        #expect(leaf.textAppearance?.titleLayout == .headline && leaf.textAppearance?.vertical == false)
+    }
     private func fixture() -> (DiaryEditorSession, URL) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         var document = DiaryDocument()

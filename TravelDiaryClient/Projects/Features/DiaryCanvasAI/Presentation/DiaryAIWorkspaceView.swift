@@ -4,11 +4,8 @@ import UniformTypeIdentifiers
 struct DiaryAIWorkspaceView: View {
     var onCloseDetails: (() -> Void)? = nil
     @ObservedObject var workspace: DiaryAIWorkspace
-    @State private var logURL: URL?
-    @State private var exportingLog = false
     @State private var exitConfirmation = false
     @State private var saveConfirmation = false
-    @State private var regenerateBackground = false
     @State private var showOriginal = false
     @State private var zoom: CGFloat = 1
     @GestureState private var gestureZoom: CGFloat = 1
@@ -122,7 +119,24 @@ struct DiaryAIWorkspaceView: View {
             if workspace.pending.isEmpty { Text("素材已放入画布，可对比原版并保存。 ").font(.caption).foregroundStyle(.secondary) }
         }
     }
-    var panel: some View {
+    private var panel: some View {
+        DiaryAIProgressPanel(workspace: workspace, onCloseDetails: onCloseDetails, onExit: {
+            workspace.panelVisible = false
+            exitConfirmation = true
+        })
+    }
+}
+
+/// Owns presentation state in both the editor sheet and the full workspace.
+private struct DiaryAIProgressPanel: View {
+    @ObservedObject var workspace: DiaryAIWorkspace
+    var onCloseDetails: (() -> Void)? = nil
+    var onExit: (() -> Void)? = nil
+    @State private var logURL: URL?
+    @State private var exportingLog = false
+    @State private var regenerateBackground = false
+
+    var body: some View {
         NavigationStack {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -183,8 +197,8 @@ struct DiaryAIWorkspaceView: View {
                         do { logURL = try await workspace.exportProductionLog() } catch { workspace.error = error.localizedDescription }
                         exportingLog = false
                     } } label: { if exportingLog { ProgressView() } else { Label("导出", systemImage: "square.and.arrow.up") } }.disabled(exportingLog)
-                    if onCloseDetails == nil {
-                        Button("退出") { workspace.panelVisible = false; exitConfirmation = true }
+                    if let onExit {
+                        Button("退出", action: onExit)
                     }
                 }
             }
@@ -304,7 +318,7 @@ struct DiaryAIInlinePanel: View {
                 }.presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $showingDetails) {
-                DiaryAIWorkspaceView(onCloseDetails: { showingDetails = false }, workspace: workspace).panel
+                DiaryAIProgressPanel(workspace: workspace, onCloseDetails: { showingDetails = false })
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }

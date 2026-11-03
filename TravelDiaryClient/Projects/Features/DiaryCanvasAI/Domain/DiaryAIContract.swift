@@ -52,6 +52,7 @@ nonisolated struct DiaryAIOperation: Codable, Sendable {
     var type: String
     var objectID: UUID?
     var clientObjectKey: String?
+    var textRole: String? = nil
     var center: CGPoint?
     var scale: Double?
     var angle: Double?

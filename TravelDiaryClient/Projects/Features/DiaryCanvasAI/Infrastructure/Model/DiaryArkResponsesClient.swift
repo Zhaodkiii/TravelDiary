@@ -174,7 +174,8 @@ import Foundation
         let reply = try Self.decode(data, maximumCalls: workspaceMode ? 30 : 12)
         let calls = try reply.calls.map { call in
             guard workspaceMode, let version = expectedWorkspaceVersion else { return call }
-            return try Self.bindVersion(call, version: version)
+            // Invalid arguments are reported by the tool runtime per call, so one bad call cannot discard valid siblings.
+            return (try? Self.bindVersion(call, version: version)) ?? call
         }
         let body = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         history += body["output"] as? [[String: Any]] ?? []

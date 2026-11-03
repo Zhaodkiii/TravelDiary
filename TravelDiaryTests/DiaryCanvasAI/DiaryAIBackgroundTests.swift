@@ -123,12 +123,14 @@ import SwiftUI
         guard !FileManager.default.fileExists(atPath: "/tmp/traveldiary-design-flow-enabled") else { return }
         try await runFullFlow(parallel)
     }
-    @Test(arguments: Array(0..<8)) func liveDesignFlow(_ index: Int) async throws {
+    @Test(arguments: Array(0..<14)) func liveDesignFlow(_ index: Int) async throws {
         guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-design-flow-enabled") else { return }
         let selectedCase = try String(contentsOfFile: "/tmp/traveldiary-design-flow-enabled", encoding: .utf8)
         guard selectedCase == "all" || selectedCase == String(index) else { return }
         let layouts: [DiaryAILayout] = [.hero, .story, .headline, .collage, .editorial, .automatic]
-        try await runFullFlow(true, design: .init(layout: layouts[index % 6], style: DiaryAIPageStyle.allCases[index % 6]), dataset: index >= 6 ? (index == 6 ? "wedding" : "coast") : nil)
+        let datasets = ["archive-city", "archive-family", "archive-food", "archive-nature", "archive-portrait", "archive-mixed"]
+        let designIndex = index >= 8 ? index - 8 : index % 6
+        try await runFullFlow(true, design: .init(layout: layouts[designIndex], style: DiaryAIPageStyle.allCases[designIndex]), dataset: index >= 8 ? datasets[index - 8] : index >= 6 ? (index == 6 ? "wedding" : "coast") : nil)
     }
     private func runFullFlow(_ parallel: Bool, design: DiaryAIDesignSelection? = nil, dataset: String? = nil) async throws {
         guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-fullflow-benchmark-enabled") else { return }
@@ -143,8 +145,13 @@ import SwiftUI
         let store = DiaryDocumentStore(ownerID: owner, baseDirectory: root, bookID: book.id)
         let loaded = try await store.load(page.id)
         var sourceDocument = loaded.document
-        if dataset != nil { sourceDocument.objects[sourceDocument.rootContentID]?.layers = [] }
-        let session = DiaryEditorSession(document: sourceDocument, images: loaded.images, store: store)
+        if dataset != nil {
+            var content = sourceDocument.objects[sourceDocument.rootContentID]!
+            content.layers = []; content.background = nil; content.drawing = Data()
+            sourceDocument.objects = [sourceDocument.rootContentID: content]
+            sourceDocument.assets = [:]
+        }
+        let session = DiaryEditorSession(document: sourceDocument, images: dataset == nil ? loaded.images : [:], store: store)
         if let dataset {
             let input = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("DesignFixtures/" + dataset)
             let photos = try FileManager.default.contentsOfDirectory(at: input.appendingPathComponent("photos"), includingPropertiesForKeys: nil).sorted { $0.path < $1.path }
@@ -159,6 +166,7 @@ import SwiftUI
         var r = DiaryAIRequest.defaults(.relayout); r.allowsText = true; r.background = .init(saveToAlbum: false); r.scene = "山野徒步"; r.location = "雨崩"
         if dataset != nil { r.scene = "不指定"; r.location = "" }
         r.design = design; r = r.coordinated()
+        print("DESIGN_DATASET \(dataset ?? "book8")")
         print("DESIGN_CASE \(design?.layout.rawValue ?? "legacy") \(design?.style.rawValue ?? "legacy")")
         await w.enter(r); w.processAll()
         let deadline = Date().addingTimeInterval(1200)
@@ -185,9 +193,13 @@ import SwiftUI
         if let png = w.backgroundPreview?.pngData() { try png.write(to: output.appendingPathComponent("background.png")) }
         if let jpg = w.preview?.jpegData(compressionQuality: 0.9) { try jpg.write(to: output.appendingPathComponent("composed.jpg")) }
         print("BENCHMARK mode=\(parallel ? "parallel" : "serial") seconds=\(Date().timeIntervalSince(measuredStart)) result=\(w.error ?? w.stage)")
-        let runFolder = output.appendingPathComponent((design.map { "design-" + $0.layout.rawValue + "-" + $0.style.rawValue + "-" } ?? (parallel ? "parallel-" : "serial-")) + UUID().uuidString)
+        let runFolder = output.appendingPathComponent((design.map { "design-" + (dataset.map { $0 + "-" } ?? "") + $0.layout.rawValue + "-" + $0.style.rawValue + "-" } ?? (parallel ? "parallel-" : "serial-")) + UUID().uuidString)
         try FileManager.default.createDirectory(at: runFolder, withIntermediateDirectories: true)
         for name in ["events.json", "background.png", "composed.jpg"] { if FileManager.default.fileExists(atPath: output.appendingPathComponent(name).path) { try FileManager.default.copyItem(at: output.appendingPathComponent(name), to: runFolder.appendingPathComponent(name)) } }
+        if let diagnostics = try? await w.exportProductionLog() {
+            try FileManager.default.copyItem(at: diagnostics, to: runFolder.appendingPathComponent("production-log.zip"))
+        }
+        try JSONSerialization.data(withJSONObject: ["dataset": dataset ?? "book8", "layout": design?.layout.rawValue ?? "legacy", "style": design?.style.rawValue ?? "legacy", "elapsed": Date().timeIntervalSince(measuredStart), "error": w.error ?? "", "backgroundRetries": backgroundRetries], options: [.prettyPrinted, .sortedKeys]).write(to: runFolder.appendingPathComponent("metrics.json"))
         #expect(!w.running && w.backgroundRecord?.layerID != nil)
         #expect(w.error == nil)
         guard w.backgroundRecord?.layerID != nil else { return }
@@ -203,6 +215,12 @@ import SwiftUI
         }
         session.undo()
         #expect(session.scopeLayers == before.root.layers)
+    }
+    @Test func backgroundPromptKeepsSourceFurnitureAndRejectsBookMockups() throws {
+        #expect(try DiarySeedreamBackgroundProvider.preparePrompt("左侧旧书架与木书桌，右侧暖白安静区") == "左侧旧书架与木书桌，右侧暖白安静区")
+        #expect(throws: (any Error).self) { try DiarySeedreamBackgroundProvider.preparePrompt("立体书页与中央书脊") }
+        #expect(try DiarySeedreamBackgroundProvider.preparePrompt("照片组下缘与文字周围保留暖白") == "预留区域组下缘与安静区周围保留暖白")
+        #expect(try DiarySeedreamBackgroundProvider.preparePrompt("右侧两列照片之间的空隙保留暖白，不与任何照片内部地平线对齐。文字与旁注区域保持素净。") == "右侧两列预留区域之间的空隙保留暖白，不与任何局部水平线对齐。安静区域保持素净。")
     }
     @Test func liveBook8Background() async throws {
         guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-background-live-enabled") else { return }

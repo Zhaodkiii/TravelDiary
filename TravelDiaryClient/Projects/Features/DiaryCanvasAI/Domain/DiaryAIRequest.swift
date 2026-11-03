@@ -12,6 +12,8 @@ nonisolated enum DiaryAIAction: String, CaseIterable, Identifiable, Codable, Sen
 }
 
 nonisolated struct DiaryAIRequest: Codable, Equatable, Sendable {
+    var creationBrief: CreationBrief? = nil
+    var creationNotes: [String: String]? = nil
     var design: DiaryAIDesignSelection? = nil
     var background: DiaryAIBackgroundOptions? = nil
     var action: DiaryAIAction
@@ -69,5 +71,13 @@ extension DiaryAIRequest {
         var value = self
         if let design, value.background != nil { value.background?.style = design.style.backgroundID }
         return value
+    }
+}
+
+
+extension DiaryAIRequest {
+    var executionDesignBrief: String {
+        guard let design else { return designBrief }
+        return "整页排版：\(design.layout.name)，\(design.layout.rules) 整页风格：\(design.style.name)，\(design.style.rules) 共同构图已确认，遵守它的主照、分组、色彩和文字角色；用户显式要求与锁定内容优先。"
     }
 }

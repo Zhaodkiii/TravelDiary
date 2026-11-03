@@ -7,6 +7,7 @@ struct DiaryEditorHomeView: View {
     @Binding var creating: Bool
     var bookTransition: Namespace.ID? = nil
     var onBrowseTemplates: (() -> Void)? = nil
+    var onInitialLoad: (() -> Void)? = nil
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var books: [DiaryBook] = []
     @State private var createdBookID: UUID?
@@ -63,6 +64,9 @@ struct DiaryEditorHomeView: View {
             sort = DiaryShelfSort(rawValue: UserDefaults.standard.string(forKey: sortKey) ?? "") ?? .updated
         }
         .onAppear { Task { await reload() } }
+        .onChange(of: loaded, initial: true) { _, value in
+            if value { onInitialLoad?() }
+        }
         .onChange(of: sort) { _, value in UserDefaults.standard.set(value.rawValue, forKey: sortKey) }
         .overlay { if loadingEditor { ProgressView("正在打开页面…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) } }
         .disabled(loadingEditor)

@@ -54,11 +54,24 @@ enum DiaryAIWorkspaceTools {
         "visible": "装饰是否显示，false仅用于授权隐藏。",
         "frameStyle": "真实目录中的相框名称。"
     ]
+    static func validateTextEvidence(_ raw: [String: Any], request: DiaryAIRequest) throws {
+        guard request.design != nil, let text = raw["text"] as? String else { return }
+        let supplied = request.instruction + " " + request.customScene + " " + (request.creationBrief?.confirmedFacts ?? "")
+        if let brief = request.creationBrief {
+            if !brief.displaysLocation, !brief.location.isEmpty, text.contains(brief.location) { throw DiaryAIError.invalid("地点仅供理解，不得写入成品。请只修改这段文字。") }
+            let forbidden = brief.forbidden.components(separatedBy: CharacterSet(charactersIn: "，,；;\n")).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            if forbidden.contains(where: text.contains) { throw DiaryAIError.invalid("文字包含用户禁止的内容，请修改此段。") }
+        }
+        let claims = ["姐姐", "妹妹", "弟弟", "哥哥", "爸爸", "妈妈", "父亲", "母亲", "外婆", "奶奶", "爷爷", "满月", "百日", "周岁", "敬茶", "迎亲", "换装", "结婚周年", "先上山", "再环山", "最后看海"]
+        if let claim = claims.first(where: { text.contains($0) && !supplied.contains($0) }) {
+            throw DiaryAIError.invalid("文案包含用户未确认的事实“\(claim)”。保留位置和样式，只把此段改成照片可见细节或明确祝愿，不推断亲属、年龄或事件先后。")
+        }
+    }
     static var schemas: [[String: Any]] {
         let string: [String: Any] = ["type": "string"]
         let number: [String: Any] = ["type": "number"]
         var definitions: [(String, [String: Any], [String])] = [
-            ("plan_composition", ["summary": string, "regions": ["type": "array", "maxItems": 20, "items": ["type": "object", "additionalProperties": false, "properties": ["role": ["type": "string", "enum": ["photo", "text"]], "objectID": string, "x": number, "y": number, "width": number, "height": number], "required": ["role", "x", "y", "width", "height"]]]], ["summary"]),
+            ("plan_composition", ["heroID": string, "summary": string, "regions": ["type": "array", "maxItems": 20, "items": ["type": "object", "additionalProperties": false, "properties": ["role": ["type": "string", "enum": ["photo", "text"]], "objectID": string, "x": number, "y": number, "width": number, "height": number], "required": ["role", "x", "y", "width", "height"]]]], ["summary"]),
             ("request_batch_revision", ["objectIDs": ["type": "array", "items": string, "minItems": 1, "maxItems": DiaryAIWorkspace.maximumBatchLayers], "reason": string], ["objectIDs", "reason"]),
             ("get_workspace", [:], []), ("get_canvas_image", [:], []), ("list_fonts", [:], []),
             ("list_frame_styles", [:], []),
@@ -112,7 +125,7 @@ enum DiaryAIWorkspaceTools {
             guard let object = context.objects.first(where: { $0.shortID == reference || $0.id.uuidString.caseInsensitiveCompare(reference) == .orderedSame }) else { throw DiaryAIError.invalid("本批图层编号不存在") }
             raw["objectID"] = object.id.uuidString
         }
-        raw.removeValue(forKey: "textRole"); raw.removeValue(forKey: "sourceIDs")
+        raw.removeValue(forKey: "sourceIDs")
         raw["type"] = type; raw["operationID"] = call.id
         if type == "setPlacement" {
             guard let idText = raw["objectID"] as? String, let id = UUID(uuidString: idText),
@@ -121,8 +134,11 @@ enum DiaryAIWorkspaceTools {
             guard let center = raw["center"] as? [String: Any], let x = center["x"] as? Double, let y = center["y"] as? Double, x.isFinite, y.isFinite else { throw DiaryAIError.invalid("center必须包含有限数字x、y，本项未暂存") }
             let angle = raw["angle"] as? Double ?? object.angle
             guard angle.isFinite, abs(angle) <= 180 else { throw DiaryAIError.invalid("angle必须在-180至180度之间，本项未暂存") }
+            guard x >= 0, y >= 0, x <= context.size.width, y <= context.size.height else { throw DiaryAIError.invalid("center在画布外。保留原素材；不允许通过移出画布隐藏贴纸，应贴近照片组边缘。") }
+            let scale = object.scale * width / object.bounds.width
+            guard (0.05...20).contains(scale) else { throw DiaryAIError.invalid("宽度导致无效缩放。不能把素材缩成零来隐藏；保持可见大小并摆放到照片组边缘。") }
             raw["angle"] = angle
-            raw["scale"] = object.scale * width / object.bounds.width
+            raw["scale"] = scale
         }
         let envelope: [String: Any] = ["contextID": context.id.uuidString, "plan": ["schemaVersion": 1, "contextID": context.id.uuidString, "baseDigest": context.digest, "summary": "工具操作", "operations": [raw]]]
         return try DiaryAIDraftController.decodeArguments(String(decoding: JSONSerialization.data(withJSONObject: envelope), as: UTF8.self)).plan?.operations.first

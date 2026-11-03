@@ -97,6 +97,7 @@ struct StorageManagementScreen: View {
                 }
             } footer: { Text("作品、离线下载、未保存媒体、印制任务和其他账号私有资料不会参加安全清理。") }
             Section("内容管理") {
+                NavigationLink { CreationDraftListView(owner: model.owner) } label: { row(.creationDrafts) }
                 NavigationLink { StorageBooksScreen(owner: model.owner, service: model.service) } label: {
                     row(.diaries)
                 }

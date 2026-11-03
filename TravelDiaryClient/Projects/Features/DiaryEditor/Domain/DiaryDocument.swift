@@ -5,6 +5,7 @@ import CoreGraphics
 nonisolated struct DiaryDocument: Codable, Equatable, Sendable {
     var id: UUID
     var title: String
+    var creation: CreationProvenance? = nil
     var bookID: UUID? = nil
     var rootContentID: UUID
     var assets: [UUID: DiaryAsset]

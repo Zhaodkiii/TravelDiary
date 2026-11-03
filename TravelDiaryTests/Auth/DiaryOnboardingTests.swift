@@ -40,4 +40,44 @@ struct DiaryOnboardingTests {
         #expect(artwork.pieces.filter { $0.stage == 4 }.count == 10)
         #expect(artwork.pieces.allSatisfy { $0.image.size.width > 0 && $0.image.size.height > 0 })
     }
+    @Test func interruptedGuideRemainsEligibleAfterBackgroundGuestLoginStarts() {
+        let name = "DiaryOnboardingTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let policy = DiaryOnboardingPolicy(defaults: defaults)
+        policy.begin()
+        #expect(InitialGuestEntryPolicy(defaults: defaults).consumeAutomaticEntryIfNeeded())
+        #expect(DiaryOnboardingPolicy(defaults: defaults).shouldPresent)
+        policy.finish()
+        #expect(!DiaryOnboardingPolicy(defaults: defaults).shouldPresent)
+    }
+
+    @Test func preparedHomeWaitsForUserToFinishGuide() {
+        var handoff = DiaryOnboardingHandoff()
+        handoff.updateReadiness(true)
+        #expect(!handoff.canDismiss)
+        handoff.requestFinish()
+        #expect(handoff.canDismiss)
+    }
+
+    @Test func earlyFinishKeepsGuideUntilPreparationCompletes() {
+        var handoff = DiaryOnboardingHandoff()
+        handoff.requestFinish()
+        #expect(!handoff.canDismiss)
+        handoff.updateReadiness(true)
+        #expect(handoff.canDismiss)
+    }
+
+    @Test func ReadinessCanBeRevokedBeforeFinish() {
+        var handoff = DiaryOnboardingHandoff()
+        handoff.updateReadiness(true)
+        handoff.updateReadiness(false)
+        handoff.requestFinish()
+        #expect(!handoff.canDismiss)
+        // Offline / sign-in / preparation-error routes also report readiness,
+        // giving the user their existing retry controls instead of hanging.
+        handoff.updateReadiness(true)
+        #expect(handoff.canDismiss)
+    }
+
 }

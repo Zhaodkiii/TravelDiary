@@ -63,7 +63,7 @@ struct DiaryExportSpreadPage: View {
                     } else { leaves.append(nil) }
                 }
                 spreads.append(try DiaryBookImageExporter.renderSpread(left: leaves[0], right: leaves[1],
-                    lining: index == 0, book: book, width: 800, scale: 0.5))
+                    lining: index == 0, book: book, page: pair.compactMap { $0 }.first, width: 800, scale: 0.5))
                 await Task.yield()
             }
             try Task.checkCancellation()

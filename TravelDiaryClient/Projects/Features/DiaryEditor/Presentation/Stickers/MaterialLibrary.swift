@@ -170,6 +170,7 @@ struct MaterialLibraryBrowser: View {
     @Environment(\.dismiss) private var dismiss
     /// The editor keeps its native sheet open for consecutive additions.
     var keepsOpenAfterAdding = false
+    var onSelectForCreation: ((Data, String, DiaryMaterialSource?) async -> Void)? = nil
     static let compactHeight: CGFloat = 260
     static let compactDetent: PresentationDetent = .height(compactHeight)
     @State private var sheetDetent: PresentationDetent = compactDetent
@@ -212,8 +213,10 @@ struct MaterialLibraryBrowser: View {
 
     init(session: DiaryEditorSession? = nil, replacingID: UUID? = nil,
          templateID: String? = nil, templateVersion: Int? = nil,
-         type: String = "sticker", keepsOpenAfterAdding: Bool = false, initialLibrary: CloudMaterialLibrary? = nil) {
+         type: String = "sticker", keepsOpenAfterAdding: Bool = false, initialLibrary: CloudMaterialLibrary? = nil,
+         onSelectForCreation: ((Data, String, DiaryMaterialSource?) async -> Void)? = nil) {
         self.session = session
+        self.onSelectForCreation = onSelectForCreation
         self.replacingID = replacingID
         self.templateID = templateID
         self.templateVersion = templateVersion
@@ -235,7 +238,7 @@ struct MaterialLibraryBrowser: View {
     }
     private var filterKey: String { query + "|" + kind + "|" + subcategory + "|" + source + "|" + (selectedLibrary?.id ?? "") + "|" + searchScope }
 
-    private var isStickerPicker: Bool { session != nil && type == "sticker" }
+    private var isStickerPicker: Bool { (session != nil || onSelectForCreation != nil) && type == "sticker" }
     private var isCompact: Bool { isStickerPicker && sheetDetent == Self.compactDetent }
     private var contextTitle: String {
         if kind == "personal" { return "我制作的" }
@@ -496,6 +499,7 @@ struct MaterialLibraryBrowser: View {
     }
 
     private func insertPersonal(_ sticker: PersonalSticker, data: Data) async {
+        if let onSelectForCreation { await onSelectForCreation(data, "我制作的贴纸", nil); finishAdding(id: sticker.id, name: "我制作的贴纸"); return }
         guard let session else { return }
         let owner = catalog.owner
         let documentID = session.document.id
@@ -531,7 +535,7 @@ struct MaterialLibraryBrowser: View {
     private func materialCell(_ item: CloudMaterial) -> some View {
         VStack(spacing: 6) {
             Button {
-                if session == nil { preview = item }
+                if session == nil && onSelectForCreation == nil { preview = item }
                 else if item.revision == 0, let local = DiaryStickerCatalog.items.first(where: { "local."+$0.id == item.id }) { addition = Task { await addLocal(local) } }
                 else { addition = Task { await add(item) } }
             } label: {
@@ -609,7 +613,7 @@ struct MaterialLibraryBrowser: View {
         else { paginationFilter = filterKey }
         if !more { cursor = nil; nextCursor = nil }
         guard !isLocal && kind != "personal" && kind != "frames" else { items = []; cursor = nil; loading = false; return }
-        if type == "sticker", session != nil || selectedLibrary != nil {
+        if type == "sticker", session != nil || onSelectForCreation != nil || selectedLibrary != nil {
             await loadStickerItems(more: more); return
         }
         let activeFilter = filterKey
@@ -699,6 +703,10 @@ struct MaterialLibraryBrowser: View {
         addition = Task { await add(item) }
     }
     private func addLocal(_ item: DiaryStickerItem) async {
+        if let onSelectForCreation, let bytes = item.image()?.pngData(), !adding {
+            adding = true; defer { adding = false }
+            await onSelectForCreation(bytes, item.title, nil); finishAdding(id: item.id, name: item.title); return
+        }
         guard !adding, let session, session.store.ownerID == catalog.owner, let data = item.image()?.pngData() else { return }
         adding = true; error = nil
         let intent = UUID(); generation = intent
@@ -714,6 +722,19 @@ struct MaterialLibraryBrowser: View {
         } else { error = session.errorMessage }
     }
     private func add(_ item: CloudMaterial) async {
+        if let onSelectForCreation, !adding {
+            adding = true; error = nil
+            let owner = catalog.owner
+            defer { adding = false }
+            do {
+                let bytes = try await PresetDownloadManager.shared.materialData(item) { progress = $0 }
+                try Task.checkCancellation()
+                guard owner == catalog.owner else { throw CancellationError() }
+                await onSelectForCreation(bytes, item.name, .init(materialID: item.id, revision: item.revision, libraryID: item.library_id, libraryVersion: item.library_version))
+                finishAdding(id: item.id, name: item.name)
+            } catch { self.error = error.localizedDescription }
+            return
+        }
         guard !adding, let session, session.store.ownerID == catalog.owner else { return }
         adding = true; progress = 0; pausedItem = item; error = nil
         let intent = UUID(); generation = intent

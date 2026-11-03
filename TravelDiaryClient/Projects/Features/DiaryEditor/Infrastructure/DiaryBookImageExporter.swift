@@ -61,7 +61,7 @@ enum DiaryBookImageExporter {
                     let pair = spreads[index]
                     let left = try await pair[0].asyncMap(render)
                     let right = try await pair[1].asyncMap(render)
-                    images.append(try renderSpread(left: left, right: right, lining: index == 0, book: book))
+                    images.append(try renderSpread(left: left, right: right, lining: index == 0, book: book, page: pair.compactMap { $0 }.first))
                     progress(index + 1, spreads.count); await Task.yield()
                 }
                 try write(collage(images))
@@ -84,10 +84,13 @@ enum DiaryBookImageExporter {
     }
 
     static func renderSpread(left: UIImage?, right: UIImage?, lining: Bool, book: DiaryBook,
-                             width: CGFloat = 800, scale: CGFloat = 3) throws -> UIImage {
-        let ratio = book.contentPages.first?.size ?? book.defaultPageSize
+                             page: DiaryPageEntry? = nil, width: CGFloat = 800, scale: CGFloat = 3) throws -> UIImage {
+        let source = page ?? book.contentPages.first
+        let size = source?.size ?? book.defaultPageSize
+        let fullSpread = (source?.canvasLayout ?? DiaryCanvasLayout.infer(from: size)) == .spread
+        let ratio = CGSize(width: fullSpread ? size.width / 2 : size.width, height: size.height)
         let height = width / 2 * (0.955 * (1 - DiaryBookSpine.halfGapFraction) * ratio.height / ratio.width + 0.09)
-        let renderer = ImageRenderer(content: DiaryExportSpread(left: left, right: right, lining: lining)
+        let renderer = ImageRenderer(content: DiaryExportSpread(left: left, right: right, lining: lining, fullSpread: fullSpread)
             .frame(width: width, height: height))
         renderer.scale = scale
         guard let image = renderer.uiImage else { throw DiaryEditorError.exportFailed }
@@ -144,17 +147,26 @@ struct DiaryExportSpread: View {
     let left: UIImage?
     let right: UIImage?
     let lining: Bool
+    var fullSpread = false
     var body: some View {
         DiaryBoundSpread {
-            leaf(left, lining: lining)
+            leaf(left, lining: lining, half: fullSpread ? true : nil)
         } right: {
-            leaf(right, lining: false)
+            leaf(fullSpread ? left : right, lining: false, half: fullSpread ? false : nil)
         }
     }
-    @ViewBuilder private func leaf(_ image: UIImage?, lining: Bool) -> some View {
+    @ViewBuilder private func leaf(_ image: UIImage?, lining: Bool, half: Bool?) -> some View {
         ZStack {
             Color(red: 0.96, green: 0.92, blue: 0.82)
-            if let image { Image(uiImage: image).resizable().scaledToFit() }
+            if let image {
+                if let half {
+                    GeometryReader { geometry in
+                        Image(uiImage: image).resizable()
+                            .frame(width: geometry.size.width * 2, height: geometry.size.height)
+                            .offset(x: half ? 0 : -geometry.size.width)
+                    }.clipped()
+                } else { Image(uiImage: image).resizable().scaledToFit() }
+            }
             else if lining { DiaryBookLining() }
         }.frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
     }

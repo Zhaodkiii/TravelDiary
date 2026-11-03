@@ -43,6 +43,7 @@ import Foundation
     func design(reference: Data, context: String) async throws -> DiaryAIBackgroundDesign {
         let instructions = """
         你是旅行手帐背景设计师。先看这张去掉旧背景的真实排版参考图，再设计照片背后的底纸。照片内容和实际布局是依据，不要只套风格名或通用风景。
+        若只有人像或无法确认环境，采用照片实际配色、衣物/室内材质和抽象纸纹构图，不凭空添加山林、海岸、地标或通用旅行场景。
         1. 提炼照片共同主题和情绪，区分画面确实出现的景物与用户提供的地点。照片无法证明具体地名、季节或日期时不推断。多种场景以主照片和共同色彩统一，不把全部景点堆进一页。
         2. 提取2至4个来源线索（只从本页可见内容提取，不套用通用旅行景物），明确从哪一个图层及其可见内容得出；选1至2个作为主要场景骨架，保留能辨认来源的结构与环境关系，不只输出泛用装饰。优先保留主场景的关键轮廓及其相邻环境，不用几个零碎小物取代主题。风景类必须写清主环境的两个相邻结构、方向与主要来源色，环境作为主意象，彩色小物只作为次要呼应，不允许只剩横穿整页的小物串。人物作为主体但不能生成其副本时，转而保留其真实所处环境，不能直接把主体区域变成空白；中、浓强度的主意象要在最大可用空隙中形成足够尺度，不能只剩页角小图标。不要复制人物、整张照片、矩形相框或已有贴纸。来源线索只取真实照片，不从蘑菇、佛塔、邮戳等已有贴纸推断背景景物；正文区域只写成安静区，不描述文字横带、印刷痕迹、文字或数字。
         3. 按实际坐标辨认主照片、照片组合、文字区和空隙，具体说明背景意象落在哪里、向哪里延展，如何顺着照片中的轮廓或视线形成呼应。不能把照片内部的地平线当成整页同一条线。
@@ -77,6 +78,8 @@ import Foundation
     static func preparePrompt(_ original: String) throws -> String {
         var text = original
         for (source, target) in [
+            ("照片之间", "预留区域之间"), ("照片内部地平线", "局部水平线"), ("文字与旁注区域", "安静区域"),
+            ("照片密集区", "预留密集区"), ("照片组", "预留区域组"), ("照片下缘", "预留区域下缘"), ("照片上缘", "预留区域上缘"), ("文字周围", "安静区周围"),
             ("文字横带", "安静区域"), ("文字区", "安静区"), ("照片衬托", "柔和衬托"), ("照片位置", "预留位置"), ("照片区域", "预留区域"), ("手账底图", "平面底图"), ("书写", "记录"),
             ("照片群下方", "预留区域下方"), ("照片群上方", "预留区域上方"), ("照片群", "预留区域"), ("照片群之后", "空白区"), ("照片群后方", "空白区"),
             ("在照片后方", "的空白处"), ("照片后方", "空白区域"),
@@ -87,7 +90,8 @@ import Foundation
         // A model may append a negative list despite the positive-only contract.
         // Remove that prohibition sentence, never a positive subject description.
         text = text.replacingOccurrences(of: "(?:不出现|不包含|不得出现|禁止出现)[^。；\\n]*[。；]?", with: "", options: .regularExpression)
-        let banned = ["照片", "拍立得", "人物", "相框", "贴纸", "书", "手帐", "跨页"].filter(text.contains)
+        text = text.replacingOccurrences(of: "无(?:任何)?(?:人物|人形)[^。；\\n]*[。；]?", with: "", options: .regularExpression)
+        let banned = ["照片", "拍立得", "人物", "相框", "贴纸", "书页", "书脊", "立体书", "相册", "本册", "手帐", "跨页"].filter(text.contains)
         guard banned.isEmpty else {
             throw DiaryAIError.invalid("主题分析已完成，生图提示词校验未通过：包含\(banned.joined(separator: "、"))。分析结果已保留，尚未调用生图；可重新生成以重做分析。")
         }
@@ -97,7 +101,7 @@ import Foundation
     func repairPrompt(_ text: String) async throws -> String {
         let result = try await post([
             "model": DiaryAITestConfig.model, "stream": false, "store": false,
-            "input": [["role": "user", "content": [["type": "input_text", "text": "仅修正文案，不重新分析图片。把以下背景描述中的素材相对位置改为绝对画面分区（左上、中部、右下等），保留已确认场景、色彩和风格，不增加任何新景物；不需要思考过程，直接填写工具参数。删除照片、拍立得、人物、相框、贴纸、书、手帐、跨页等词及其实体描绘，只描述纯背景景物。不要否定词清单。只调用repair_background_prompt，text不超过800字。原描述：" + text]]]],
+            "input": [["role": "user", "content": [["type": "input_text", "text": "仅修正文案，不重新分析图片。把以下背景描述中的素材相对位置改为绝对画面分区（左上、中部、右下等），保留已确认场景、色彩和风格，不增加任何新景物；不需要思考过程，直接填写工具参数。删除照片、拍立得、人物、相框、贴纸、书页、书脊、立体本册、手帐、跨页等词及其实体描绘；保留实际来源中的书架、书桌等环境物体，只描述纯背景景物。不要否定词清单。只调用repair_background_prompt，text不超过800字。原描述：" + text]]]],
             "tools": [["type": "function", "name": "repair_background_prompt", "description": "仅修复生图文案", "parameters": ["type": "object", "properties": ["text": ["type": "string"]], "required": ["text"], "additionalProperties": false]]], "tool_choice": "required", "thinking": ["type": "disabled"], "max_output_tokens": 2048
         ], to: DiaryAITestConfig.endpoint)
         try Self.requireComplete(result)

@@ -4,6 +4,67 @@ import UIKit
 
 @MainActor
 struct DiaryBookImageExportTests {
+    @Test func canvasLayoutSupportsLegacySizesAndExplicitOverrides() throws {
+        var page = DiaryPageEntry(id: UUID(), title: "", revisionID: UUID(), size: CGSize(width: 1311, height: 939))
+        #expect(page.canvasLayout == .spread)
+        page.layout = .single
+        #expect(page.canvasLayout == .single)
+        #expect(try JSONDecoder().decode(DiaryPageEntry.self, from: JSONEncoder().encode(page)).canvasLayout == .single)
+        #expect(DiaryCanvasLayout.infer(from: CGSize(width: 1000, height: 1400)) == .single)
+        #expect(DiaryCanvasLayout.infer(from: .zero) == .single)
+    }
+
+    @Test func completeCanvasesUsePageSizeInsteadOfBookDefault() {
+        var book = DiaryBook(title: "mixed")
+        let spread = DiaryPageEntry(id: UUID(), title: "", revisionID: UUID(), size: CGSize(width: 1311, height: 939))
+        let single = DiaryPageEntry(id: UUID(), title: "", revisionID: UUID(), size: CGSize(width: 1000, height: 1400))
+        book.pages = [spread, single, spread]
+        let pairs = book.readingSpreads
+        #expect(pairs.count == 3)
+        #expect(pairs[0][0]?.id == spread.id && pairs[0][1] == nil)
+        #expect(pairs[1][0] == nil && pairs[1][1]?.id == single.id)
+        #expect(pairs[2][0]?.id == spread.id && pairs[2][1] == nil)
+        book.defaultPageSize = DiaryPagePreset.spread.size
+        book.pages = [single]
+        #expect(book.readingSpreads[0][0] == nil)
+        #expect(book.readingSpreads[0][1]?.id == single.id)
+    }
+
+    @Test func fullSpreadRendersBothHalvesWithoutAnEmptyRightLeaf() throws {
+        let size = CGSize(width: 437, height: 313)
+        let source = UIGraphicsImageRenderer(size: size).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: size.width / 2, height: size.height))
+            UIColor.blue.setFill()
+            context.fill(CGRect(x: size.width / 2, y: 0, width: size.width / 2, height: size.height))
+        }
+        var book = DiaryBook(title: "spread")
+        let page = DiaryPageEntry(id: UUID(), title: "", revisionID: UUID(), size: size)
+        book.pages = [page]
+        let image = try DiaryBookImageExporter.renderSpread(left: source, right: nil, lining: false,
+            book: book, page: page, width: 800, scale: 1)
+        #expect(image.size.height > 550 && image.size.height < 620)
+        let cgImage = try #require(image.cgImage)
+        func pixel(_ x: Int, _ y: Int) throws -> [UInt8] {
+            let crop = try #require(cgImage.cropping(to: CGRect(x: x, y: y, width: 1, height: 1)))
+            var bytes = [UInt8](repeating: 0, count: 4)
+            let success = bytes.withUnsafeMutableBytes { buffer -> Bool in
+                guard let context = CGContext(data: buffer.baseAddress, width: 1, height: 1,
+                    bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+                context.draw(crop, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+                return true
+            }
+            #expect(success)
+            return bytes
+        }
+        let left = try pixel(200, Int(image.size.height / 2))
+        let right = try pixel(600, Int(image.size.height / 2))
+        #expect(left[0] > 240 && left[2] < 15)
+        #expect(right[2] > 240 && right[0] < 15)
+        Attachment.record(Array(try #require(image.pngData())), named: "complete-spread.png")
+    }
+
     @Test func photoChangesCanExecuteOnPhotosBackgroundQueue() async {
         let changes = DiaryBookImageExporter.photoChanges(for: [])
         await withCheckedContinuation { continuation in

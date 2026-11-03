@@ -23,7 +23,29 @@ nonisolated struct DiaryBook: Codable, Identifiable, Equatable, Sendable {
     var effectiveCover: DiaryPageEntry? { pages.first { $0.id == coverPageID } ?? pages.first }
     /// Explicit template pairs take precedence over legacy physical page parity.
     var readingSpreads: [[DiaryPageEntry?]] {
-        if defaultPageSize == CGSize(width: 4370, height: 3130) { return contentPages.map { [$0, nil] } }
+        // Complete canvases occupy a spread by themselves, regardless of the book default.
+        // The legacy pair representation stores that canvas in slot 0; renderers must
+        // consult canvasLayout before treating it as a left-hand leaf.
+        if contentPages.contains(where: { $0.canvasLayout == .spread }) {
+            var result: [[DiaryPageEntry?]] = []
+            var singles: [DiaryPageEntry] = []
+            func flush() {
+                guard !singles.isEmpty else { return }
+                var section = self
+                section.pages = singles
+                section.shellPageID = nil
+                result.append(contentsOf: section.readingSpreads)
+                singles.removeAll()
+            }
+            for page in contentPages {
+                if page.canvasLayout == .spread {
+                    flush()
+                    result.append([page, nil])
+                } else { singles.append(page) }
+            }
+            flush()
+            return result
+        }
         let content = contentPages
         guard content.contains(where: { $0.presetSpreadID != nil }) else {
             return (0..<((content.count + 2) / 2)).map { spread in
@@ -58,6 +80,18 @@ nonisolated struct DiaryPageEntry: Codable, Identifiable, Equatable, Sendable {
     /// Explicit imported spread membership survives reopening and user edits.
     var presetSpreadID: UUID? = nil
     var presetSpreadSide: String? = nil
+    /// Optional for backward compatibility. Older documents infer their layout from size.
+    var layout: DiaryCanvasLayout? = nil
+    var canvasLayout: DiaryCanvasLayout { layout ?? DiaryCanvasLayout.infer(from: size) }
+}
+
+nonisolated enum DiaryCanvasLayout: String, Codable, Sendable {
+    case single, spread
+
+    static func infer(from size: CGSize) -> Self {
+        guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else { return .single }
+        return abs(size.width / size.height - 4370.0 / 3130.0) < 0.000001 ? .spread : .single
+    }
 }
 
 nonisolated struct DiaryTrashedPage: Codable, Identifiable, Equatable, Sendable {

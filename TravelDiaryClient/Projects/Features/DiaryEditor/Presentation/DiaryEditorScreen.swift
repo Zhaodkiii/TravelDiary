@@ -7,6 +7,9 @@ import UIKit
 struct DiaryEditorScreen: View {
     @ObservedObject var session: DiaryEditorSession
     var entranceOnRightPage = false
+    var creationRequest: DiaryAIRequest? = nil
+    var creationAutoStart = false
+    @State private var creationEntered = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var showsSpreadShell = true
@@ -84,6 +87,12 @@ struct DiaryEditorScreen: View {
                 Button("重新保存") { Task { try? await session.save() } }
             } message: { Text(session.errorMessage ?? "") }
             .task(id: session.id) {
+                if let creationRequest, !creationEntered {
+                    creationEntered = true
+                    aiMode = true
+                    await session.aiWorkspace.enter(creationRequest)
+                    if creationAutoStart && session.aiWorkspace.active { session.aiWorkspace.processAll() }
+                }
                 if MaterialCatalogRepository.shared.pendingLibrary != nil { showStickers = true }
                 if session.isRoot, let bookID = session.document.bookID {
                     DiaryBookAccessStore(ownerID: session.store.ownerID)
@@ -104,7 +113,7 @@ struct DiaryEditorScreen: View {
         let size = session.document.root.referenceSize
         guard session.isRoot, size.width.isFinite, size.height.isFinite,
               size.width > 0, size.height > 0 else { return false }
-        return abs(size.width / size.height - 4370.0 / 3130.0) < 0.000001
+        return DiaryCanvasLayout.infer(from: size) == .spread
     }
 
     private var supportsSinglePageViewport: Bool {
@@ -161,7 +170,7 @@ struct DiaryEditorScreen: View {
                                 .offset(x: margin, y: margin)
                                 .allowsHitTesting(false).accessibilityHidden(true)
                         }
-                        DiaryCanvasView(session: canvasSession, compactViewport: toolOpen, stagesEntrance: supportsSpreadPreview, onSelectionViewportRect: { rect in
+                        DiaryCanvasView(session: canvasSession, compactViewport: toolOpen, stagesEntrance: supportsSpreadPreview && !aiMode && creationRequest == nil, onSelectionViewportRect: { rect in
                             DispatchQueue.main.async {
                                 if selectionViewportRect != rect { selectionViewportRect = rect }
                             }
@@ -288,7 +297,7 @@ struct DiaryEditorScreen: View {
 }
 
 /// 直接复用 SecondCamera 的拍摄、预览和编辑流程，确认后交给当前画布导入。
-private struct DiaryCaptureCamera: View {
+struct DiaryCaptureCamera: View {
     let onPhotos: ([UIImage]) -> Void
     let onClose: () -> Void
 

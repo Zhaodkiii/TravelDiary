@@ -27,6 +27,14 @@ import SwiftUI
         let deadline = Date().addingTimeInterval(15)
         while workspace.running && Date() < deadline { try await Task.sleep(for: .milliseconds(30)) }
     }
+    @Test func emptyCanvasDoesNotStartPaidModelWork() async throws {
+        let (session, root) = try await fixture(count: 0); defer { try? FileManager.default.removeItem(at: root) }
+        let model = WorkspaceModel()
+        let workspace = DiaryAIWorkspace(session: session, model: model, root: root)
+        await workspace.enter(.editorDefaults(.relayout)); workspace.processAll(); try await wait(workspace)
+        #expect(!workspace.running && model.batchSizes.isEmpty && workspace.version == 0)
+        #expect(workspace.error?.contains("没有") == true || workspace.error?.contains("添加") == true)
+    }
     @Test func editorRelayoutDefaultsIncludeBackgroundTextAndFrames() {
         let request = DiaryAIRequest.editorDefaults(.relayout)
         #expect(request.background != nil && request.allowsText && request.allowsFrames)
@@ -59,7 +67,7 @@ import SwiftUI
         try await wait(workspace)
         #expect(workspace.error == nil && workspace.pending.isEmpty && workspace.version == 1)
         #expect(displayedCounts.contains(7))
-        let details = UIHostingController(rootView: DiaryAIWorkspaceView(workspace: workspace).panel)
+        let details = UIHostingController(rootView: DiaryAIWorkspaceView(workspace: workspace))
         host.present(details, animated: false)
         details.view.layoutIfNeeded()
         #expect(host.presentedViewController === details)

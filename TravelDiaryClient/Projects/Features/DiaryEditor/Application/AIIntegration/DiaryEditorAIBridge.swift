@@ -1,5 +1,6 @@
 import UIKit
 import CryptoKit
+import CoreText
 
 /// All knowledge of the native document, renderer, fonts and transactions stays on this side.
 @MainActor final class DiaryEditorAIBridge: DiaryAIEditorBridge {
@@ -111,13 +112,16 @@ import CryptoKit
     }
     private func jpeg(size: CGSize, draw: (CGContext) -> Void) throws -> Data {
         guard size.width > 0, size.height > 0 else { throw DiaryAIError.invalid("预览尺寸无效") }
-        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
-        let image = UIGraphicsImageRenderer(size: size, format: format).image { output in
-            UIColor.systemBackground.setFill(); output.fill(CGRect(origin: .zero, size: size)); draw(output.cgContext)
+        return try autoreleasepool {
+            let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
+            let image = UIGraphicsImageRenderer(size: size, format: format).image { output in
+                UIColor.systemBackground.setFill(); output.fill(CGRect(origin: .zero, size: size)); draw(output.cgContext)
+            }
+            guard let bytes = image.jpegData(compressionQuality: 0.82) else { throw DiaryAIError.invalid("预览编码失败") }
+            return bytes
         }
-        guard let bytes = image.jpegData(compressionQuality: 0.82) else { throw DiaryAIError.invalid("预览编码失败") }
-        return bytes
     }
+
     private func pageImage(_ document: DiaryDocument) async throws -> Data {
         guard let context else { throw DiaryAIError.invalid("页面快照缺失") }
         await Task.yield(); try await waitForViewport()
@@ -196,6 +200,36 @@ import CryptoKit
         guard clean.count == 6, let value = UInt32(clean, radix: 16) else { throw DiaryAIError.invalid("颜色必须是六位十六进制") }
         return DiaryColor(red: Double((value >> 16) & 255) / 255, green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255)
     }
+    /// Widen a naturally wrapped text card only; preserve content, explicit breaks and font size.
+    static func avoidOrphanLine(_ layer: inout DiaryLayer, maximumWidth: CGFloat) {
+        if layer.text.contains("\n") {
+            // Explicit semantic lines must fit inside the paper insets; avoid an extra 1–2 character visual line.
+            let insets = DiaryPageRenderer.textInsets(layer)
+            let style = DiaryPageRenderer.textStyle(layer)
+            let needed = layer.text.components(separatedBy: "\n").map { ( $0 as NSString).size(withAttributes: style).width }.max() ?? 0
+            if needed > layer.size.width - insets.left - insets.right {
+                layer.size.width = min(maximumWidth, max(layer.size.width, ceil(needed + insets.left + insets.right + layer.fontSize * 0.15)))
+            }
+            return
+        }
+        guard layer.text.count > 6, layer.size.width < maximumWidth else { return }
+        let attributed = NSAttributedString(string: layer.text, attributes: DiaryPageRenderer.textStyle(layer))
+        let typesetter = CTTypesetterCreateWithAttributedString(attributed)
+        let text = layer.text as NSString
+        for _ in 0..<12 {
+            let insets = DiaryPageRenderer.textInsets(layer)
+            let width = max(1, layer.size.width - insets.left - insets.right)
+            var offset = 0, last = NSRange(location: 0, length: 0), lines = 0
+            while offset < text.length {
+                let length = CTTypesetterSuggestLineBreak(typesetter, offset, Double(width))
+                guard length > 0 else { return }
+                last = NSRange(location: offset, length: length); offset += length; lines += 1
+            }
+            let tail = text.substring(with: last).trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            guard lines > 1, tail.count < 4, layer.size.width < maximumWidth else { break }
+            layer.size.width = min(maximumWidth, layer.size.width + layer.fontSize * 0.5)
+        }
+    }
     private func configureText(_ operation: DiaryAIOperation, layer: inout DiaryLayer, context: DiaryAIContext) throws {
         if let text = operation.text { try require(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && text.count <= 1000, "文字为空或过长"); layer.text = text }
         if let fontID = operation.fontID {
@@ -209,7 +243,30 @@ import CryptoKit
             guard let kind = DiaryTextPaper.Kind(rawValue: paper) else { throw DiaryAIError.invalid("文字纸张样式无效") }
             var appearance = layer.textAppearance ?? DiaryTextAppearance(); appearance.paper = DiaryTextPaper(kind: kind); layer.textAppearance = appearance
         }
+        if operation.type == "createText", operation.textRole == "title" { layer.name = "AI 标题" }
+        if request?.design != nil, request?.instruction.isEmpty == true, operation.textRole == "title" || layer.name == "AI 标题" {
+            var style = layer.textAppearance ?? DiaryTextAppearance()
+            style.vertical = false; style.titleLayout = .headline; layer.textAppearance = style
+            let longest = layer.text.split(separator: "\n").map(\.count).max() ?? 4
+            let insets = DiaryPageRenderer.textInsets(layer)
+            layer.size.width = min(context.size.width * 0.44, max(layer.size.width, layer.fontSize * CGFloat(min(longest, 9)) + insets.left + insets.right))
+        }
         try require(DiaryFontCatalog.shared.warning(layer.font, text: layer.text) == nil, "所选字体不可用或缺少字符，请选择另一字体")
+        if request?.design != nil, request?.background != nil, request?.instruction.isEmpty == true,
+           layer.textAppearance?.paper?.kind == DiaryTextPaper.Kind.none,
+           operation.textRole == "title" || layer.name == "AI 标题" {
+            var style = layer.textAppearance ?? DiaryTextAppearance()
+            if style.strokeWidth == 0 {
+                let ink = layer.textColor ?? DiaryColor(red: 0.1, green: 0.1, blue: 0.1)
+                let luminance = ink.red * 0.2126 + ink.green * 0.7152 + ink.blue * 0.0722
+                style.strokeColor = luminance < 0.5 ? .white : DiaryColor(red: 0.12, green: 0.12, blue: 0.12)
+                style.strokeWidth = 2.0
+                layer.textAppearance = style
+            }
+        }
+        if request?.design != nil, request?.instruction.isEmpty == true {
+            Self.avoidOrphanLine(&layer, maximumWidth: context.size.width * 0.44)
+        }
         layer.size.height = DiaryPageRenderer.textBounds(layer).height
     }
     private func place(_ operation: DiaryAIOperation, id: UUID, document: inout DiaryDocument, context: DiaryAIContext) throws {
@@ -495,8 +552,8 @@ import CryptoKit
         let common: Set<String> = ["operationID", "type", "objectID"]
         let fields: [String: Set<String>] = [
             "setPlacement": ["center", "scale", "angle", "width", "maxHeight"], "setZOrder": ["order"],
-            "createText": ["clientObjectKey", "text", "fontID", "fontSize", "width", "color", "paper", "center", "scale", "angle"],
-            "updateText": ["text", "fontID", "fontSize", "width", "color", "paper", "center", "scale", "angle"],
+            "createText": ["clientObjectKey", "textRole", "text", "fontID", "fontSize", "width", "color", "paper", "center", "scale", "angle"],
+            "updateText": ["textRole", "text", "fontID", "fontSize", "width", "color", "paper", "center", "scale", "angle"],
             "setPhotoCrop": ["cropZoom", "cropX", "cropY"], "setFrameStyle": ["frameStyle"],
             "setDecorationVisibility": ["visible"], "placeExistingMaterial": ["clientObjectKey", "materialID", "center", "scale", "angle"]]
         guard let allowed = fields[operation.type] else { throw DiaryAIError.invalid("未知操作") }

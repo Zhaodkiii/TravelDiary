@@ -2,11 +2,15 @@ import SwiftUI
 
 struct AppCoordinatorView: View {
     let dependencies: AppCoordinatorDependencies
+    private let onEntryReady: (Bool) -> Void
+    @State private var authEntryReady = false
+    @State private var homeReadyAccountID: Int64?
     @StateObject private var networkMonitor = NetworkPathMonitor()
     @StateObject private var lifecycle: AppLifecycleCoordinator
 
-    init(dependencies: AppCoordinatorDependencies) {
+    init(dependencies: AppCoordinatorDependencies, onEntryReady: @escaping (Bool) -> Void = { _ in }) {
         self.dependencies = dependencies
+        self.onEntryReady = onEntryReady
         _lifecycle = StateObject(wrappedValue: dependencies.lifecycle)
     }
 
@@ -20,11 +24,23 @@ struct AppCoordinatorView: View {
         .task {
             networkMonitor.start()
         }
+        .onChange(of: entryReady, initial: true) { _, ready in onEntryReady(ready) }
         .onChange(of: lifecycle.sessionState, initial: true) { _, state in
             if case .signedIn = state {
                 // 恢复已有账号也算已进入过应用，退出登录后不再自动创建游客会话。
                 InitialGuestEntryPolicy().markExistingSession()
             }
+        }
+    }
+
+    private var entryReady: Bool {
+        if networkMonitor.hasEvaluatedPath, !networkMonitor.isSatisfied { return true }
+        switch lifecycle.sessionState {
+        case .loading: return false
+        case .signedOut: return authEntryReady
+        case .signedIn(let session):
+            return lifecycle.preparationFailed || (lifecycle.preparedAccountID == session.accountID
+                && homeReadyAccountID == session.accountID)
         }
     }
 
@@ -50,12 +66,13 @@ struct AppCoordinatorView: View {
                     )
                 }
         case .signedOut:
-            SignedOutAuthCoordinatorView(dependencies: dependencies)
+            SignedOutAuthCoordinatorView(dependencies: dependencies, onEntryReady: { authEntryReady = $0 })
         case .signedIn(let session):
             AppPreparationTransition(isReady: lifecycle.preparedAccountID == session.accountID,
                 failed: lifecycle.preparationFailed,
                 onRetry: { Task { await lifecycle.retrySignedInPreparation() } }) {
-                    SupportMainCoordinatorView(session: session, dependencies: dependencies)
+                    SupportMainCoordinatorView(session: session, dependencies: dependencies,
+                                               onHomeReady: { homeReadyAccountID = session.accountID })
                 }.id(session.accountID)
         }
     }
@@ -63,11 +80,13 @@ struct AppCoordinatorView: View {
 
 private struct SignedOutAuthCoordinatorView: View {
     let dependencies: AppCoordinatorDependencies
+    let onEntryReady: (Bool) -> Void
     @StateObject private var viewModel: LoginViewModel
     @State private var showsLogin: Bool
 
-    init(dependencies: AppCoordinatorDependencies) {
+    init(dependencies: AppCoordinatorDependencies, onEntryReady: @escaping (Bool) -> Void) {
         self.dependencies = dependencies
+        self.onEntryReady = onEntryReady
         _viewModel = StateObject(wrappedValue: dependencies.makeLoginViewModel())
         // 在构造登录页之前确定入口；后续退出登录直接展示登录页。
         _showsLogin = State(initialValue: !InitialGuestEntryPolicy().canAttemptAutomaticEntry)
@@ -81,6 +100,7 @@ private struct SignedOutAuthCoordinatorView: View {
                 AppLaunchScreenView()
             }
         }
+        .onChange(of: showsLogin, initial: true) { _, visible in onEntryReady(visible) }
         .task {
             await dependencies.lifecycle.handleSignedOutTask()
             guard !Task.isCancelled else { return }
@@ -95,6 +115,7 @@ private struct SignedOutAuthCoordinatorView: View {
 struct SupportMainCoordinatorView: View {
     let session: UserSession
     let dependencies: AppCoordinatorDependencies
+    var onHomeReady: () -> Void
 
     @StateObject private var accountViewModel: AccountManagementViewModel
     @StateObject private var upgradeLoginViewModel: LoginViewModel
@@ -110,9 +131,10 @@ struct SupportMainCoordinatorView: View {
     @Namespace private var bookshelfTransition
     @State private var path = NavigationPath()
 
-    init(session: UserSession, dependencies: AppCoordinatorDependencies) {
+    init(session: UserSession, dependencies: AppCoordinatorDependencies, onHomeReady: @escaping () -> Void = {}) {
         self.session = session
         self.dependencies = dependencies
+        self.onHomeReady = onHomeReady
         _accountViewModel = StateObject(wrappedValue: dependencies.makeAccountManagementViewModel())
         _upgradeLoginViewModel = StateObject(wrappedValue: dependencies.makeLoginViewModel())
     }
@@ -176,7 +198,7 @@ struct SupportMainCoordinatorView: View {
             Tab("手帐", systemImage: "book.pages", value: SupportRootTab.diaryEditor) {
                 DiaryEditorHomeView(ownerID: String(session.accountID), path: $path,
                     creating: $showsCreateDiaryBookForm, bookTransition: bookshelfTransition,
-                    onBrowseTemplates: { selectedTab = .diaryPresets })
+                    onBrowseTemplates: { selectedTab = .diaryPresets }, onInitialLoad: onHomeReady)
                     .id(session.accountID)
             }
             Tab("随记", systemImage: "camera", value: SupportRootTab.travelCapture) {

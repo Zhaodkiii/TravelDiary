@@ -23,7 +23,9 @@ struct DiaryCanvasView: UIViewRepresentable {
 
 /// 每个对象使用独立设计坐标；视口可包含负坐标，装饰伸出照片时仍保留原位置。
 final class DiaryCanvasSurface: UIView {
-    var stagesEntrance = false
+    var stagesEntrance = false {
+        didSet { if oldValue && !stagesEntrance { finishEntrance() } }
+    }
     private var entranceFinished = false
     private var entrancePlaying = false
     private let entranceTextHaptic = UIImpactFeedbackGenerator(style: .light)

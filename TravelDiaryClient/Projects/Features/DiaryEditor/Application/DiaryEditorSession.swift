@@ -12,6 +12,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         !closing && !childOpen && document.id == documentID && self.contentID == contentID && document.objects[contentID] != nil && (replacingID == nil || document.layer(replacingID!) != nil)
     }
     var aiViewportInteracting = false
+    var creationPublish: (() async throws -> Void)?
     var aiTransientSession = false
     @Published var aiWorkspacePresented = false
     lazy var aiWorkspace = DiaryAIWorkspace(session: self)
@@ -418,7 +419,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         defer { busy = false }
         finishInteraction()
         saveTask?.cancel()
-        do { try await save(); closing = true; return true }
+        do { try await save(); try await creationPublish?(); closing = true; return true }
         catch { errorMessage = error.localizedDescription; return false }
     }
 

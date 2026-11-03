@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--design-case', type=int, choices=range(8), help='Rerun a single design case, requires --design-flow')
+parser.add_argument('--design-case', type=int, choices=range(14), help='Rerun a single design case, requires --design-flow')
 parser.add_argument('--design-flow', action='store_true', help='Run six real coordinated layout/style flows (paid calls)')
 parser.add_argument('--regression', action='store_true', help='Run all eight retained AI/editor regression suites without paid API calls')
 parser.add_argument('--full-flow', action='store_true', help='Run real relayout, text and background benchmark (paid calls)')

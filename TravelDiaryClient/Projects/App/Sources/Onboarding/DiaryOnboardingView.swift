@@ -2,6 +2,7 @@ import SwiftUI
 
 /// A guided demonstration only; never creates or modifies a user's books.
 struct DiaryOnboardingView: View {
+    var isPreparingHome = false
     let onFinish: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -83,7 +84,7 @@ struct DiaryOnboardingView: View {
             Spacer()
             Text("\(stage + 1) / 5").font(.caption.monospacedDigit()).foregroundStyle(accent)
             Spacer()
-            Button("跳过") { onFinish() }.font(.system(size: 14)).frame(minWidth: 44, minHeight: 44)
+            Button(isPreparingHome ? "准备中" : "跳过") { onFinish() }.disabled(isPreparingHome).font(.system(size: 14)).frame(minWidth: 44, minHeight: 44)
         }.foregroundStyle(ink).padding(.horizontal, 16)
     }
 
@@ -165,13 +166,13 @@ struct DiaryOnboardingView: View {
             }.accessibilityElement(children: .ignore).accessibilityLabel("步骤 \(stage + 1)，共五步，\(steps[stage])")
             Button(action: advance) {
                 HStack(spacing: 12) {
-                    if !ready && !failed { ProgressView().tint(.white) }
-                    Text(failed ? "进入我的手帐" : ready ? buttons[stage] : stage == 1 ? "正在铺开底色…" : "正在制作…")
-                    if ready || failed { Image(systemName: "arrow.right") }
+                    if isPreparingHome || (!ready && !failed) { ProgressView().tint(.white) }
+                    Text(isPreparingHome ? "正在准备主页…" : failed ? "进入我的手帐" : ready ? buttons[stage] : stage == 1 ? "正在铺开底色…" : "正在制作…")
+                    if !isPreparingHome && (ready || failed) { Image(systemName: "arrow.right") }
                 }.font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
                     .frame(maxWidth: .infinity).frame(height: 56)
                     .background(ink.opacity(ready || failed ? 1 : 0.45), in: Capsule())
-            }.disabled(!ready && !failed).accessibilityIdentifier("onboarding.next")
+            }.disabled(isPreparingHome || (!ready && !failed)).accessibilityIdentifier("onboarding.next")
             HStack {
                 Button("重播本步", systemImage: "arrow.counterclockwise") { generation += 1 }
                     .disabled(artwork == nil)
@@ -187,7 +188,7 @@ struct DiaryOnboardingView: View {
     }
 
     private func advance() {
-        guard ready || failed else { return }
+        guard !isPreparingHome, ready || failed else { return }
         if failed || stage == 4 { onFinish() }
         else {
             ready = false

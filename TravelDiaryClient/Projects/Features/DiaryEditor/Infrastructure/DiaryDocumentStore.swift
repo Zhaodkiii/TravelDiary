@@ -61,6 +61,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
         let assets: [String: DiaryAsset]
         let objects: [ObjectReference]
         var bookID: UUID? = nil
+        var creation: CreationProvenance? = nil
     }
     /// 收藏与最近使用按账号保存，跨本共享。
     let stickerPreferenceKey: String
@@ -190,6 +191,25 @@ nonisolated final class DiaryDocumentStore: Sendable {
         }
     }
 
+
+    /// Copies validated native assets before publishing the page pointer. No re-encoding or ID changes.
+    func publishCreation(_ document: DiaryDocument, from source: DiaryDocumentStore) async throws {
+        var published = document
+        published.bookID = bookID
+        _ = try Self.validate(published)
+        try await run {
+            for asset in document.assets.values {
+                let sourceURL = try source.resolve(asset.path, in: source.assetDirectory(document.id))
+                let targetURL = try self.resolve(asset.path, in: self.assetDirectory(document.id))
+                let bytes = try Data(contentsOf: sourceURL)
+                try FileManager.default.createDirectory(at: targetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if FileManager.default.fileExists(atPath: targetURL.path) {
+                    guard try Data(contentsOf: targetURL) == bytes else { throw DiaryEditorError.pageConflict }
+                } else { try bytes.write(to: targetURL, options: .atomic) }
+            }
+        }
+        try await save(published)
+    }
 
     func save(_ document: DiaryDocument) async throws {
         try await run {
@@ -348,7 +368,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
         }
         let assets = Dictionary(uniqueKeysWithValues: document.assets.map { ($0.key.uuidString, $0.value) })
         let manifest = Manifest(format: "TravelDiary.SmartCanvas", schemaVersion: 1, documentID: document.id,
-                                title: document.title, rootContentID: document.rootContentID, assets: assets, objects: refs, bookID: bookID)
+                                title: document.title, rootContentID: document.rootContentID, assets: assets, objects: refs, bookID: bookID, creation: document.creation)
         let path = relative + "/manifest.json"
         try encoder.encode(manifest).write(to: directory.appendingPathComponent(path), options: .atomic)
         return path
@@ -373,7 +393,8 @@ nonisolated final class DiaryDocumentStore: Sendable {
             guard UUID(uuidString: key) == asset.id else { throw DiaryEditorError.invalidDocument.logged() }
             assets[asset.id] = asset
         }
-        let document = DiaryDocument(id: documentID, title: manifest.title, rootContentID: manifest.rootContentID, assets: assets, objects: contents, bookID: bookID)
+        var document = DiaryDocument(id: documentID, title: manifest.title, rootContentID: manifest.rootContentID, assets: assets, objects: contents, bookID: bookID)
+        document.creation = manifest.creation
         _ = try Self.validate(document)
         return document
     }

@@ -124,11 +124,13 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private func log(_ kind: String, _ title: String, _ detail: String = "", images: [DiaryAIImage] = []) {
         let descriptions = images.map { "\($0.id) · \($0.caption) · \($0.data.count / 1024) KB" }.joined(separator: "\n")
         let smallImages = images.compactMap { item -> Data? in
+            autoreleasepool { () -> Data? in
             guard let image = UIImage(data: item.data) else { return nil }
             let ratio = min(1, 480 / max(image.size.width, image.size.height))
             let size = CGSize(width: image.size.width * ratio, height: image.size.height * ratio)
             let format = UIGraphicsImageRendererFormat(); format.scale = 1
             return UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }.jpegData(compressionQuality: 0.65)
+            }
         }
         productionLog.record("event", ["kind": kind, "title": title, "detail": detail, "images": images.map { ["id": $0.id, "caption": $0.caption, "file": productionLog.attachment($0.data, ext: "jpg")] }])
         events.append(.init(kind: kind, title: title, detail: detail + (descriptions.isEmpty ? "" : "\n" + descriptions), images: smallImages))
@@ -281,6 +283,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             self.baseline = .init(source.document, pending: pending)
             try await persist()
             try await source.save()
+            try await source.creationPublish?()
             let needsBackgroundRecovery = request.background != nil && (backgroundRecord?.layerID == nil || (request.background?.saveToAlbum == true && backgroundRecord?.albumState != "saved"))
             if pending.isEmpty && !needsTextCompletion && !needsBackgroundRecovery && visualRevision == nil && !awaitingConfirmation { try await removeArchive() }
             active = false; source.aiWorkspacePresented = false; return true
@@ -308,6 +311,11 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         if hasBackgroundRequest && objects.contains(where: { $0.role == "background" && $0.locked }) {
             error = "背景已锁定：请退出后解除背景锁定，或关闭生成背景再开始。尚未发起模型请求。"
             log("error", "开始前检查未通过", error!); return
+        }
+        if request.action == .relayout, !isBackgroundOnly, request.instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !objects.contains(where: { $0.editable && $0.role != "background" }) {
+            error = "请先添加照片、文字或贴纸，或在制作选项中补充创作要求。尚未发起模型请求。"
+            log("error", "画布没有可排版内容", error!); return
         }
         if model is DiaryArkResponsesClient && !isBackgroundOnly {
             do { _ = try DiaryAITestConfig.requireAPIKey() }
@@ -430,7 +438,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         }
         let guide = try DiaryAIBackgroundImaging.occupancyGuide(canvas: size, objects: plannedObjects)
         let style = DiaryAIBackgroundStyle.resolve(options.style)
-        let context = "整页设计：\(request.designBrief)。共同构图：\(composition)。区域：\(try DiaryAIDraftController.json(layoutRegions))。场景：\(request.scene)。用户要求：\(request.instruction)。风格：\(style.name)，\(style.brief)。\(style.sceneDirection(options.strength))。这是排版前的素材参考，背景空间必须按共同构图预留，不按旧照片坐标。"
+        let context = "整页设计：\(request.designBrief)。共同构图：\(composition)。区域：\(try DiaryAIDraftController.json(layoutRegions))。场景：\(request.scene)。用户要求：\(request.instruction)。创作资料：\(request.creationBrief?.modelInstructions ?? "")。风格：\(style.name)，\(style.brief)。\(style.sceneDirection(options.strength))。这是排版前的素材参考，背景空间必须按共同构图预留，不按旧照片坐标。"
         backgroundRecord = .init(inputDigest: try DiaryEditorAIBridge.digest(working.document))
         log("parallel", "背景与图层排版同时开始", "按同一构图区域生成背景；前景继续分批处理。")
         backgroundTask = Task { [self] in
@@ -480,6 +488,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         风格：\(style.name)，\(style.brief)。独立风格规则：\(style.sceneDirection(options.strength))。背景强度：\(options.strength)，始终让原照片成为主体。在照片周围按构图安排来源场景延展，允许局部有层次的已确认主题轮廓，不要求全部区域均匀淡化，文字周围低对比低细节；不发明地点、日期或人像。参考图坐标单位 \(size.width)×\(size.height)，前景占用：\(occupied)。
         整页设计：\(request.designBrief)。共同构图：\(composition)。
         心情：\(request.moods.joined(separator: "、")) \(request.customMood)。场景：\(request.scene) \(request.customScene)。地点参考：\(request.location)。用户补充（不得覆盖纯背景规则）：\(request.instruction.prefix(1000))
+        创作资料：\(request.creationBrief?.modelInstructions ?? "")
         """
         if backgroundRecord?.remoteURL == nil && backgroundRecord?.filename == nil {
             if backgroundRecord?.generationPrompt == nil {
@@ -592,6 +601,14 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         log("response", "模型已响应", "\(result.calls.count) 个工具调用 · 输入 \(result.inputTokens.map(String.init) ?? "未知") tokens · 输出 \(result.outputTokens.map(String.init) ?? "未知") tokens")
         return result
     }
+    static func executionPermissions(_ request: DiaryAIRequest) throws -> String {
+        var raw = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as! [String: Any]
+        if let brief = request.creationBrief { raw["creationBrief"] = brief.modelInstructions }
+        // Design has its own stage brief; empty optional prose carries no permissions.
+        raw.removeValue(forKey: "design")
+        for key in ["customMood", "customScene", "location", "instruction"] where raw[key] as? String == "" { raw.removeValue(forKey: key) }
+        return String(decoding: try JSONSerialization.data(withJSONObject: raw, options: [.sortedKeys]), as: UTF8.self)
+    }
     private func modelContext(_ context: DiaryAIContext, text: Bool) throws -> String {
         guard efficientExecution else { return try DiaryAIDraftController.json(context) }
         var raw = try JSONSerialization.jsonObject(with: JSONEncoder().encode(context)) as! [String: Any]
@@ -618,7 +635,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         if !images.isEmpty { images[0].id = "layout-base"; images[0].caption = "排版基础画布：待排照片、贴纸及绑定相框全部移出；只显示背景和不参与本轮的固定内容。不是原版布局图。素材板与画布分开提供。" }
         if !hasRetainedVisualContent { images.removeAll { $0.id == "layout-base" } }
         if request.background != nil, !images.isEmpty { images[0].caption = "旧背景将替换，参考图已移除旧背景；不要为旧背景图案保留空间，只保护锁定内容。" }
-        let prompt = (request.background != nil ? "本轮将在排版后生成新背景，旧背景不参与构图，不保护它的文字/人物。" : "") + "若没有 layout-base，则画布为空白；按尺寸和素材规划。若有，第一张 layout-base 是清理待排素材后的排版基础，不是原来的布局。素材板只用于识别素材，不代表素材已放在页面上。先看清背景的图案、主体和留白，再规划构图。先规划整体构图，不执行图层修改。只调用 plan_composition，\(versionInstruction) summary 用80～160字说明左右页分区、主照片、照片大小比例、文字预留区和贴纸依附关系；只调用此工具一次。重新排版时同时提供regions：每张真实照片恰好一个带objectID的photo区域，不能重复照片或给贴纸分配photo区域，授权文字时按文字密度预留区域：简短补充1至2个text区域，丰富记录3至5个有主次的text区域（标题、引题、照片旁注、结语），优先保留照片主体，空间不足减少文字角色；文字区域需容纳真实文字和纸卡内边距，标题区高度建议400至550、旁注区320至450，不能仅按裸文字高度预留。区域用设计单位x/y/width/height，必须在单页内避开书脊24单位，照片区域不占文字区域。已有图层只规划可编辑对象。禁止输出JSON排版文件、操作数组和长篇正文。避免所有对象缩小聚在中央。背景不可遮挡的主体也需预留。全部图层：\(try modelContext(context, text: false))。用户要求：\(try DiaryAIDraftController.json(request))。风格：\(request.designBrief)。后续每批最多8个图层，同类素材优先一起处理。"
+        let prompt = (request.background != nil ? "本轮将在排版后生成新背景，旧背景不参与构图，不保护它的文字/人物。" : "") + "若没有 layout-base，则画布为空白；按尺寸和素材规划。若有，第一张 layout-base 是清理待排素材后的排版基础，不是原来的布局。素材板只用于识别素材，不代表素材已放在页面上。先看清背景的图案、主体和留白，再规划构图。先规划整体构图，不执行图层修改。只调用 plan_composition，\(versionInstruction) 有照片时用heroID明确主照UUID；用户指定主照优先，主照区域要按原图比例实际容纳，实际面积大于辅助照片。summary 用80～160字说明左右页分区、主照片、照片大小比例、文字预留区和贴纸依附关系；只调用此工具一次。重新排版时同时提供regions：每张真实照片恰好一个带objectID的photo区域，不能重复照片或给贴纸分配photo区域，授权文字时按文字密度预留区域：简短补充1至2个text区域，丰富记录3至5个有主次的text区域（标题、引题、照片旁注、结语），优先保留照片主体，空间不足减少文字角色；文字区域需容纳真实文字和纸卡内边距，标题区高度建议400至550、旁注区320至450，不能仅按裸文字高度预留。区域用设计单位x/y/width/height，必须在单页内避开书脊24单位，照片区域不占文字区域。已有图层只规划可编辑对象。禁止输出JSON排版文件、操作数组和长篇正文。避免所有对象缩小聚在中央。背景不可遮挡的主体也需预留。全部图层：\(try modelContext(context, text: false))。用户要求：\(try DiaryAIDraftController.json(request))。风格：\(request.designBrief)。后续每批最多8个图层，同类素材优先一起处理。"
         var planningFeedback = ""
         let planningAttempts = efficientExecution ? 2 : 3
         for attempt in 0..<planningAttempts {
@@ -627,6 +644,8 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 guard response.calls.count == 1, let call = response.calls.first, call.name == "plan_composition",
                       let raw = try JSONSerialization.jsonObject(with: Data(call.arguments.utf8)) as? [String: Any], raw["expectedVersion"] as? Int == version,
                       let summary = raw["summary"] as? String, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw DiaryAIError.invalid("请仅调用一次plan_composition，提供构图说明") }
+                let plannedHero = (raw["heroID"] as? String).flatMap { reference in context.objects.first { $0.role == "photo" && $0.editable && ($0.shortID == reference || $0.id.uuidString.caseInsensitiveCompare(reference) == .orderedSame) }?.id.uuidString }
+                var adoptedSummary = summary
                 var regions: [DiaryAILayoutRegion] = []
                 if request.action == .relayout, let value = raw["regions"] {
                     var decoded = try JSONDecoder().decode([DiaryAILayoutRegion].self, from: JSONSerialization.data(withJSONObject: value))
@@ -641,7 +660,11 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                             return seen.insert(id).inserted
                         }
                     }
-                    regions = try Self.validatedRegions(decoded, context: context, allowsText: request.canCreateText)
+                    let fitted = Self.fitPlanningRegions(decoded, context: context)
+                    if zip(decoded, fitted).contains(where: { $0.x != $1.x }) {
+                        adoptedSummary += "区域已由客户端小幅避开书脊，具体位置以regions为准。"
+                    }
+                    regions = try Self.validatedRegions(fitted, context: context, allowsText: request.canCreateText)
                 }
                 if efficientExecution, request.action == .relayout {
                     let photos = context.objects.filter { $0.role == "photo" && $0.editable }
@@ -652,7 +675,11 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                         return total + width * width * ratio
                     }
                     if let design = request.design, !photos.isEmpty, occupied < context.size.width * context.size.height * 0.25 {
-                        regions = try Self.validatedRegions(design.fallbackRegions(context: context, allowsText: request.canCreateText), context: context, allowsText: request.canCreateText)
+                        var fallbackContext = context
+                        let hero = request.heroID?.uuidString ?? plannedHero ?? regions.filter { $0.role == "photo" }.max { $0.width * $0.height < $1.width * $1.height }?.objectID
+                        fallbackContext.objects.sort { ($0.id.uuidString == hero ? 0 : 1) < ($1.id.uuidString == hero ? 0 : 1) }
+                        regions = try Self.validatedRegions(design.fallbackRegions(context: fallbackContext, allowsText: request.canCreateText), context: context, allowsText: request.canCreateText)
+                        adoptedSummary = "客户端已按\(design.layout.name)修正原规划。以结构化regions为唯一位置依据；原模型说明中的位置和照片尺寸已失效，不按旧位置修复。主照优先保留\(hero ?? "首张照片")，标题在顶部安静文字区，旁注依附对应照片，背景围绕实际照片组连接。整页风格\(design.style.name)。"
                         log("quality", "按所选排版扩大照片区域", "原规划照片过小，使用对应安全构图，保留全部照片与文字区。")
                     }
                     if request.design == nil, (1...4).contains(photos.count), occupied < context.size.width * context.size.height * 0.2 {
@@ -668,7 +695,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                         log("quality", "照片占比过小，采用本地可读布局", "保留原照片比例与文字区，不发起额外模型请求。")
                     }
                 }
-                layoutRegions = regions; composition = summary
+                layoutRegions = regions; composition = adoptedSummary
             } catch {
                 if attempt == planningAttempts - 1, efficientExecution, request.action == .relayout {
                     let photos = context.objects.filter { $0.role == "photo" && $0.editable }
@@ -742,7 +769,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             client.allowedLayerReferences = objects.filter { scope?.ids.contains($0.id) == true }.flatMap { [$0.shortID, $0.id.uuidString] }
         }
         let appliedBackgroundRule = backgroundRecord?.layerID != nil ? "背景已生成并加入，不再提出背景设计；检查实际合成结果的背景与前景呼应，不替换真实照片。" : ""
-        let qualityRules = efficientExecution ? "这是最终整页验收。只修复主体遮挡、文字不可读、严重碰撞或越界；照片区域是最大容纳范围，不要求铺满，禁止把原始竖照拉成横照。保留所有用户原照片，不因场景不统一要求替换原照片；没有替换、删除或拉伸工具。生成新背景时旧背景的图案与文字将被替换，不为旧背景重新移动照片。有限装饰压边允许，不因主观偏好反复修复。通过时只finish_batch。如开启生成背景，同时在finish_batch给出backgroundBrief（真实照片的共同主题与来源线索）及backgroundPrompt（150至250字纯正向场景底图，绝对位置，按指定视觉语言组织一处主题意象、少量来源呼应与主动留白，不强制写实景深或撕纸，不写照片、人物、贴纸、书页，不复制旧背景）。不合格时只request_batch_revision。" : ""
+        let qualityRules = efficientExecution ? "这是最终整页验收。检查每张照片是否横倒/倒置，发现时只请求该图层以place_layer旋转纠正，不能保留侧倒的人物、动物或地平线。检查所选排版是否落实：主照是否有尺寸反差、大字主题的标题是否成为重心、旁注是否靠近对应照片、纸刊是否有阅读顺序。文字若猜测未提供的日期/地点/亲属/仪式/行程顺序则修订对应文字，不整页重做。只在具体可见问题时修复，说明对象与证据。只修复主体遮挡、文字不可读、严重碰撞或越界；照片区域是最大容纳范围，不要求铺满，禁止把原始竖照拉成横照。allowsDecorations=false表示不能隐藏已有贴纸，并非禁止摆放已有贴纸；不能要求移除、缩成零或移出画布。贴纸不协调时只要求依附照片组摆放，禁止无法由开放工具实现的修复。保留所有用户原照片，不因场景不统一要求替换原照片；没有替换、删除或拉伸工具。生成新背景时旧背景的图案与文字将被替换，不为旧背景重新移动照片。有限装饰压边允许，不因主观偏好反复修复。标题纸卡、下划线是否使用是视觉选择：只要主题层级、可读性和空间合格，不能仅因与规划中“直接写在纸上”的建议不同而反复要求去纸卡；用户明确要求无纸卡时仍必须遵从。结构化regions是最终位置依据，若文字构图描述与regions冲突，以regions为准，不要求对象回到已失效的文字坐标。通过时只finish_batch。如开启生成背景且尚未生成、也未并行设计，同时在finish_batch给出backgroundBrief（真实照片的共同主题与来源线索）及backgroundPrompt（150至250字纯正向场景底图，绝对位置，按指定视觉语言组织一处主题意象、少量来源呼应与主动留白，不强制写实景深或撕纸，不写照片、人物、贴纸、书页，不复制旧背景）。不合格时只request_batch_revision。" : ""
         let backgroundStyleRules = request.background.map { options in let style = DiaryAIBackgroundStyle.resolve(options.style); return "背景视觉语言：\(style.name)，\(style.brief)。\(style.sceneDirection(options.strength))。这些规则同时约束backgroundBrief与backgroundPrompt。" } ?? ""
         let prompt = request.designBrief + appliedBackgroundRule + qualityRules + backgroundStyleRules + "上一批已提交，当前版本\(version)。\(versionInstruction) 检查图片，有问题且允许时调用request_batch_revision，无问题finish_batch；不直接修改图层。允许工具：\(tools.sorted())。用户要求：\(try DiaryAIDraftController.json(request))。构图：\(composition)。结构化区域：\(try DiaryAIDraftController.json(layoutRegions))。确认范围：\(try DiaryAIDraftController.json(scope))。当前图层：\(try DiaryAIDraftController.json(objects))。"
         var reviewImages = preview.flatMap { $0.jpegData(compressionQuality: 0.8) }.map { [DiaryAIImage(id: "confirmed-canvas", caption: "已提交结果", data: $0)] } ?? []
@@ -768,6 +795,21 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     }
     private var versionInstruction: String {
         model is DiaryArkResponsesClient ? "版本由客户端注入，不输出expectedVersion。" : "expectedVersion必须为整数\(version)。"
+    }
+    /// Translate an otherwise valid region out of the spine without resizing or losing identities.
+    static func fitPlanningRegions(_ regions: [DiaryAILayoutRegion], context: DiaryAIContext) -> [DiaryAILayoutRegion] {
+        guard let spine = context.spineX else { return regions }
+        let pages = [(24.0, spine - 24), (spine + 24, Double(context.size.width) - 24)]
+        return regions.map { region in
+            guard region.x.isFinite, region.width.isFinite, region.width > 0,
+                  region.x < spine + 24, region.x + region.width > spine - 24 else { return region }
+            let candidates = pages.compactMap { lo, hi -> Double? in
+                guard region.width <= hi - lo else { return nil }
+                return min(max(region.x, lo), hi - region.width)
+            }
+            guard let x = candidates.min(by: { abs($0 - region.x) < abs($1 - region.x) }), abs(x - region.x) <= region.width * 0.55 else { return region }
+            var fitted = region; fitted.x = x; return fitted
+        }
     }
     static func validatedRegions(_ regions: [DiaryAILayoutRegion], context: DiaryAIContext, allowsText: Bool) throws -> [DiaryAILayoutRegion] {
         guard regions.count <= 20 else { throw DiaryAIError.invalid("构图区域过多") }
@@ -877,7 +919,10 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             let state = "当前版本\(version)，已提交=\(committed)；允许工具：\(offeredTools.sorted())。暂存操作（修订时复用clientObjectKey）：\(try DiaryAIDraftController.json(operations))。待确认对象：\(confirmationIDs)。"
             var prompt: String? = rebuilding ? initialPrompt + "\n" + state : recoveryPrompt
             if efficientExecution {
-                prompt = req.designBrief + "每个create_text附textRole与sourceIDs，标题短而醒目优先paper=none；正文横排每行至少约8字，按语义换行。不根据静态照片推断行程顺序、风速、声音、季节及人物关系。婚礼照片只能描述衣服、花树、合影等可见元素，禁止猜测迎亲、敬茶、换装、亲属关系等仪式事件。一次返回本批全部必要操作，客户端自动校验并提交；不要调用commit/finish，不输出文件。照片按对应region设计主次，客户端会按真实尺寸容纳区域。\(req.action == .writing ? "按文字形式与用户指定篇幅创建，不擅自增加段落；" : req.textDensity == "简短补充" ? "只创建1个主标题和1个旁注；" : "默认按主标题、引题、照片旁注、结语组织3至5个文字对象（空间不足可减为2至3个，用户指定数量优先），不要五句同等大的感想。主标题4至10字醒目，副标题8至16字，1至2处照片旁注各10至22字，结语15至30字；总字数约50至100字，不重复抒情。标题与正文形成约1.6至2.2倍字号对比；标题主动语义断行，按语义与真实测量选择一至两行，不强制四字2+2或竖排，禁止末尾单字孤行。没有整页设计时默认马善政与blueTape纸卡；有整页设计时按其字体与纸卡规则，同页最多两种纸卡和两种字体，基础墨色加一种强调色，旁注靠近对应照片；")字号不得小于画布宽度的1.4%（4370宽时至少62），文字放不下优先精简句子，不缩小字号或取消纸卡；文字按语义换行，按整页设计选择纸卡，只有旧模式默认马善政与blueTape，不编造地点、声音、时长；writesLocation=false时绝对不能把location字段写进正文，location只作背景参考；标题与旁注分层。装饰依附照片外缘，不遮人脸和正文。\(versionInstruction) 构图：\(composition)。区域：\(try DiaryAIDraftController.json(layoutRegions))。本批：\(ids)。修复：\(revision?.reason ?? "无")。权限：\(try DiaryAIDraftController.json(req))。上下文：\(try modelContext(context, text: ids.isEmpty || ids.contains { id in objects.first { $0.id == id }?.role == "text" }))。已暂存：\(try DiaryAIDraftController.json(operations))。最近错误：\(recoveryPrompt ?? results.map(\.text).joined(separator: "\n"))"
+                let writing = ids.isEmpty || ids.contains { id in objects.first { $0.id == id }?.role == "text" }
+                let stageRules = writing ? "文字用textRole和sourceIDs绑定角色与照片。主标题4至10字，1至2行，不强制换行，优先paper=none；正文横排每行约8至16字，标题字号约正文2倍。同页最多两种字体、两种纸卡，墨色对比清楚。禁止依据照片推断日期地点、先后行程、季节、风速、声音、仪式和亲属关系；不能将不同照片中的人编成同一家，姐姐弟弟爸爸妈妈等称谓须用户明确提供；可描述可见物或明确祝愿。writesLocation=false不写地点。用户提供creationBrief时：围绕用户主题，至少一处旁注结合对应照片的可见细节或用户逐图说明，不把故事原文逐条变成标签，不重复风、脚步、收藏此刻等通用句。原话必须完整原样使用；仅供理解的资料禁止直接印出。适量记录使用1标题、2处有区分的照片旁注，空间允许再加1句结语。用户指定数量、文字形式与篇幅优先；否则简短补充1标题1旁注，丰富记录按空间3至5项（总照片不超过2张时2至3项，角色为标题、引题、对应照片旁注、结语），不重复抒情；空间不足减角色，不缩成细字。" : "本批只摆放已有素材，不创建文字。先检查原照片内容方向，明显横倒或倒置时以place_layer的angle=90/-90/180纠正；正常竖照不能因版面而横倒。照片等比容纳所属region，保持主照与辅助组的尺寸反差；允许在范围内错落，不拉伸。不移动本批以外对象。贴纸承担强调、连接或固定作用，依附照片组边缘，不遮人脸和正文，不把贴纸独立排成清单。"
+                prompt = req.executionDesignBrief + stageRules + "只调用开放的工具，一次返回本批必要操作；客户端自动测量、校验和提交，不调用commit/finish，不返回文件或操作JSON数组。width是旋转换框后的可见宽度，center={x,y}为设计单位中心。create_text以稳定clientObjectKey修订；文字和纸卡必须避开中缝。保留全部照片、锁定内容和用户指定样式。" +
+                    "构图：\(composition)。区域：\(try DiaryAIDraftController.json(layoutRegions))。本批：\(ids)。修复：\(revision?.reason ?? "无")。权限与用户要求：\(try Self.executionPermissions(req))。上下文：\(try modelContext(context, text: writing))。已暂存：\(try DiaryAIDraftController.json(operations))。最近错误：\(recoveryPrompt ?? results.map(\.text).joined(separator: "\n"))"
                 continuation = nil; results = []
             }
             if rebuilding, let recoveryPrompt { prompt! += "\n最近反馈：" + recoveryPrompt }
@@ -925,9 +970,16 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                     for key in ["width", "maxHeight", "angle", "fontSize"] where raw[key] != nil { guard raw[key] is NSNumber else { throw DiaryAIError.invalid("\(key)必须是数字，不能是字符串") } }
                     if let center = raw["center"] { guard let point = center as? [String: Any], point["x"] is NSNumber, point["y"] is NSNumber else { throw DiaryAIError.invalid("center必须是包含数字x、y的对象，不能是JSON字符串") } }
                     var text = "", feedback: [DiaryAIImage] = []
+                    if ["create_text", "update_text"].contains(call.name) { try DiaryAIWorkspaceTools.validateTextEvidence(raw, request: req) }
                     if var operation = try DiaryAIWorkspaceTools.parse(call, version: version, context: context) {
                         guard !committed, operations.count < 30 else { throw DiaryAIError.invalid("本批已提交或操作数过多") }
                         if operation.type != "createText" { guard let id = operation.objectID, ids.contains(id) else { throw DiaryAIError.invalid("只能处理本批对象") } }
+                        if req.design != nil, req.instruction.isEmpty, operation.type == "updateText",
+                           let reason = revision?.reason, ["对比不足", "对比度", "不可读", "几乎同明度"].contains(where: reason.contains),
+                           operation.paper == nil || operation.paper == "none" {
+                            operation.paper = "note"
+                            log("quality", "为低对比文字增加浅色承托", "仅修复本批文字，保持字号、内容与位置意图；原生测量会重新避让照片。")
+                        }
                         if efficientExecution && operation.type == "createText" && req.instruction.isEmpty {
                             if req.design != nil {
                                 let role = raw["textRole"] as? String ?? ((operation.clientObjectKey ?? "").lowercased().contains("title") ? "title" : "caption")

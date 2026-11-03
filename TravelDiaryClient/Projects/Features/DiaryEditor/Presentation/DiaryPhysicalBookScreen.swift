@@ -30,7 +30,7 @@ struct DiaryPhysicalBookScreen: View {
     @State private var photo: PhotosPickerItem?
     @State private var choosingPreset = false
     @State private var showingExport = false
-    private var continuousSpread: Bool { abs(book.defaultPageSize.width / max(1, book.defaultPageSize.height) - 4370.0 / 3130.0) < 0.000001 }
+    private var continuousSpread: Bool { DiaryCanvasLayout.infer(from: book.defaultPageSize) == .spread }
     private var readingLeaves: [DiaryReadingLeaf] { DiaryReadingLeaf.project(book.contentPages) }
     private var innerPages: [DiaryPageEntry] { book.contentPages }
     private var contentSpreadCount: Int { continuousSpread ? readingLeaves.count / 2 : (innerPages.count + 2) / 2 }
@@ -902,7 +902,7 @@ private struct DiaryReadingLeaf {
     static func project(_ pages: [DiaryPageEntry]) -> [Self] {
         var result: [Self] = []
         for page in pages {
-            let spread = page.size.height > 0 && abs(page.size.width / page.size.height - 4370.0 / 3130.0) < 0.000001
+            let spread = page.canvasLayout == .spread
             if spread {
                 if !result.count.isMultiple(of: 2) { result.append(Self(page: nil, left: nil)) }
                 result.append(Self(page: page, left: true)); result.append(Self(page: page, left: false))

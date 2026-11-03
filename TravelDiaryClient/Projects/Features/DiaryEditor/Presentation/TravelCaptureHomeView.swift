@@ -18,6 +18,14 @@ struct TravelCaptureHomeView: View {
     @State private var photo: PhotosPickerItem?
     @State private var busy = false
     @State private var error: String?
+    @State private var creationDrafts: [CreationDraft] = []
+    private struct CreationRoute: Identifiable {
+        let id = UUID()
+        var draft: CreationDraft?
+        var source: String?
+    }
+    @State private var creationRoute: CreationRoute?
+    @State private var showDrafts = false
     @State private var preview: UIImage?
     @State private var subjects: [StickerSubject] = []
     private let size = CGSize(width: 4370, height: 3130)
@@ -81,6 +89,13 @@ struct TravelCaptureHomeView: View {
             if loadingPhoto { ProgressView("正在读取照片…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) }
         }
 
+        .fullScreenCover(item: $creationRoute, onDismiss: { Task { await reload(); await loadCreationDrafts() } }) { route in
+            CreationFlowView(owner: ownerID, draft: route.draft, bookID: book?.id, initialSource: route.source)
+        }
+        .sheet(isPresented: $showDrafts, onDismiss: { Task { await loadCreationDrafts() } }) {
+            NavigationStack { CreationDraftListView(owner: ownerID).toolbar { Button("完成") { showDrafts = false } } }
+        }
+        .task { await loadCreationDrafts() }
         .fullScreenCover(item: $editor, onDismiss: { Task { await reload(); await refreshPreview() } }) { DiaryEditorScreen(session: $0) }
         .alert("旅行随记", isPresented: Binding(get: { error != nil && reviewPhoto == nil }, set: { if !$0 { error = nil } })) { Button("好") { error = nil } } message: { Text(error ?? "") }
     }
@@ -118,14 +133,19 @@ struct TravelCaptureHomeView: View {
                 }
                 Spacer(minLength: 30)
                 HStack(spacing: 20) {
-                    PhotosPicker(selection: $photo, matching: .images) { Label("相册", systemImage: "photo") }
-                    Button { if UIImagePickerController.isSourceTypeAvailable(.camera) { camera = true } else { error = "当前设备无法使用相机，请从相册选择。" } } label: { Label("拍照", systemImage: "camera") }
-                    Button { Task { await open() } } label: { Text(book == nil ? "开始记录" : "继续制作").padding(.vertical, 16).frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent).tint(.primary)
+                    Button("相册", systemImage: "photo") { creationRoute = .init(source: "相册") }
+                    Button("拍照", systemImage: "camera") { creationRoute = .init(source: "拍照") }
+                    Button { creationRoute = .init() } label: { Text("制作新的一页").padding(.vertical, 16).frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent).tint(.primary)
                 }.font(.subheadline)
+                if !creationDrafts.isEmpty { Button("继续草稿 · \(creationDrafts.count)", systemImage: "tray.full") { showDrafts = true } }
+                Button("手动编辑这一页", systemImage: "square.and.pencil") { Task { await open() } }
             }.padding(20)
         }
     }
 
+    private func loadCreationDrafts() async {
+        creationDrafts = ((try? await CreationDraftStore(owner: ownerID).list()) ?? []).filter { !$0.published }
+    }
     private func reload() async {
         do {
             books = try await DiaryDocumentStore(ownerID: ownerID).listBooks().filter { $0.defaultPageSize == size }
