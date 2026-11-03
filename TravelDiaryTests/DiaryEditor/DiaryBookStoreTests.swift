@@ -162,6 +162,34 @@ struct DiaryBookStoreTests {
     }
 
     @Test
+    func permanentPageDeletionRemovesSnapshotAndRejectsStaleDrag() async throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let book = try await store().createBook(title: "拖动删除", preset: .portrait)
+        let repository = store(book.id)
+        let a = page(book), b = page(book)
+        try await repository.save(a)
+        try await repository.save(b)
+        let stale = try await repository.loadBook()
+        try await repository.setCover(b.id)
+        do {
+            try await repository.permanentlyDeletePage(a.id, expectedRevision: stale.catalogRevision)
+            Issue.record("过期拖动不能删除页面")
+        } catch DiaryEditorError.pageConflict { }
+        let current = try await repository.loadBook()
+        try await repository.permanentlyDeletePage(a.id, expectedRevision: current.catalogRevision)
+        let saved = try await store(book.id).loadBook()
+        #expect(saved.pages.map(\.id) == [b.id])
+        #expect(saved.trashedPages.isEmpty)
+        #expect(saved.coverPageID == b.id)
+        let paths = StoragePaths(support: folder, caches: folder.appendingPathComponent("Caches"),
+                                 temporary: folder.appendingPathComponent("Temporary"))
+        let deleted = paths.books("owner").appendingPathComponent("\(book.id)/pages/\(a.id)")
+        #expect(!FileManager.default.fileExists(atPath: deleted.path))
+        let retained = try await repository.load(b.id)
+        #expect(retained.document == b)
+    }
+
+    @Test
     func testDragOrderPersistsAndRejectsStaleOrInvalidLists() async throws {
         defer { try? FileManager.default.removeItem(at: folder) }
         let book = try await store().createBook(title: "拖动排序", preset: .portrait)

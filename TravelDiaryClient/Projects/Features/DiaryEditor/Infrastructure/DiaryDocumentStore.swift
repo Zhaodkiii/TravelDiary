@@ -847,6 +847,30 @@ extension DiaryDocumentStore {
             if book.shellPageID == id { book.shellPageID = nil }
         }
     }
+    /// 拖入垃圾桶后直接移除目录引用和页面快照，不进入最近删除。
+    nonisolated func permanentlyDeletePage(_ id: UUID, expectedRevision: UUID) async throws {
+        try await run {
+            guard let bookID = self.bookID else { throw DiaryEditorError.invalidDocument }
+            var book = try self.readBook(bookID)
+            guard book.catalogRevision == expectedRevision else { throw DiaryEditorError.pageConflict }
+            guard let index = book.pages.firstIndex(where: { $0.id == id }) else {
+                throw DiaryEditorError.invalidDocument
+            }
+            book.pages.remove(at: index)
+            if book.coverPageID == id { book.coverPageID = nil }
+            if book.shellPageID == id { book.shellPageID = nil }
+            try self.publish(book)
+            let directory = self.directory(id)
+            if FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.removeItem(at: directory)
+            }
+            let preview = self.storagePaths.previews(self.ownerID)
+                .appendingPathComponent("\(bookID)/\(id)")
+            if FileManager.default.fileExists(atPath: preview.path) {
+                try FileManager.default.removeItem(at: preview)
+            }
+        }
+    }
     nonisolated func restorePage(_ id: UUID) async throws {
         try await mutateBook { book in
             guard let index = book.trashedPages.firstIndex(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument.logged() }

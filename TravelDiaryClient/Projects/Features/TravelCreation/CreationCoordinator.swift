@@ -47,13 +47,13 @@ final class CreationCoordinator: ObservableObject {
         }
     }
     /// A stable page ID plus persisted per-object mapping makes interrupted import resumable.
-    func prepare() async -> DiaryEditorSession? {
+    func prepare(allowEmpty: Bool = false) async -> DiaryEditorSession? {
         guard !busy else { return nil }
         busy = true; defer { busy = false }
         do {
-            if let error = draft.preflightError { throw DiaryAIError.invalid(error) }
-            try await addAutomaticStickers()
-            if let error = draft.preflightError { throw DiaryAIError.invalid(error) }
+            if !allowEmpty, let error = draft.preflightError { throw DiaryAIError.invalid(error) }
+            if !allowEmpty { try await addAutomaticStickers() }
+            if !allowEmpty, let error = draft.preflightError { throw DiaryAIError.invalid(error) }
             for asset in draft.photos + draft.stickers { _ = try await store.data(asset, draftID: draft.id) }
             status = "正在建立制作工作台…"
             if draft.handoffID == nil { draft.handoffID = UUID(); try await store.save(draft) }
@@ -112,6 +112,7 @@ final class CreationCoordinator: ObservableObject {
         .init(draftID: draft.id, brief: draft.brief, design: draft.design, assetObjects: draft.mapping, photoNotes: draft.request().creationNotes ?? [:])
     }
     private func publish(_ session: DiaryEditorSession) async throws {
+        guard !session.document.root.layers.isEmpty else { return }
         if destination == nil {
             if draft.targetBookID == nil {
                 let book = try await DiaryDocumentStore(ownerID: draft.owner).createBook(title: "旅行随记", preset: .spread)

@@ -10,6 +10,23 @@ import SwiftUI
             UIColor.systemBlue.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 90 + index, height: 120))
         }.pngData())
     }
+    @Test func emptyStyleEntryReusesDocumentWithoutPublishingBlankPage() async throws {
+        let owner = "style-empty-" + UUID().uuidString
+        let coordinator = CreationCoordinator(owner: owner)
+        coordinator.draft.styleEntry = true
+        coordinator.draft.stickerMode = "不使用"
+        let first = try #require(await coordinator.prepare(allowEmpty: true))
+        let id = first.document.id
+        try await first.creationPublish?()
+        #expect(try await DiaryDocumentStore(ownerID: owner).listBooks().isEmpty)
+        let drafts = try await CreationDraftStore(owner: owner).list()
+        let saved = try #require(drafts.first { $0.styleEntry == true })
+        let next = CreationCoordinator(owner: owner, draft: saved)
+        let second = try #require(await next.prepare(allowEmpty: true))
+        #expect(second.document.id == id)
+        #expect(second.document.root.layers.isEmpty)
+        #expect(try await DiaryDocumentStore(ownerID: owner).listBooks().isEmpty)
+    }
     @Test func durableDraftRetainsOriginalNotesAndAccountScope() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

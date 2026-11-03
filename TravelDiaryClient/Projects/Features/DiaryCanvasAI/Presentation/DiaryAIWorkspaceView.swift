@@ -262,13 +262,37 @@ struct DiaryAIInlinePanel: View {
                 }.padding(20)
             } else {
                 HStack(spacing: 12) {
-                    Button { designTab = 0; choosingDesign = true } label: {
+                    Button { choosingDesign = !choosingDesign || designTab != 0; designTab = 0 } label: {
                         Label("排版 · \(design.layout.name)", systemImage: "rectangle.3.group")
                     }
-                    Button { designTab = 1; choosingDesign = true } label: {
+                    Button { choosingDesign = !choosingDesign || designTab != 1; designTab = 1 } label: {
                         Label("风格 · \(design.style.name)", systemImage: "paintpalette")
                     }
                 }.buttonStyle(.bordered).font(.subheadline).padding(.horizontal, 16)
+                if choosingDesign {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 10) {
+                            if designTab == 0 {
+                                ForEach(DiaryAILayout.allCases) { item in
+                                    Button { design.layout = item } label: {
+                                        Text(item.name).font(.subheadline.weight(design.layout == item ? .semibold : .regular))
+                                            .padding(.horizontal, 16).padding(.vertical, 12)
+                                            .background(design.layout == item ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08), in: Capsule())
+                                    }.accessibilityAddTraits(design.layout == item ? [.isSelected] : [])
+                                }
+                            } else {
+                                ForEach(DiaryAIPageStyle.allCases) { item in
+                                    Button { design.style = item } label: {
+                                        VStack(spacing: 5) {
+                                            TravelStyleArtwork(style: item).frame(width: 92, height: 100).clipShape(RoundedRectangle(cornerRadius: 12))
+                                            Text(item.name).font(.caption)
+                                        }.padding(5).background(design.style == item ? Color.accentColor.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 16))
+                                    }.accessibilityAddTraits(design.style == item ? [.isSelected] : [])
+                                }
+                            }
+                        }.padding(.horizontal, 20)
+                    }
+                }
                 Text(controller.form(action).background == nil ? "保留现有背景 · 按所选排版与风格制作" : "自动生成背景 · 按所选排版与风格制作标题及旁注")
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {
@@ -301,21 +325,9 @@ struct DiaryAIInlinePanel: View {
             .tint(Color(red: 0.24, green: 0.39, blue: 0.34))
             .onAppear { design = controller.form(action).design ?? .init() }
             .onChange(of: action) { _, value in design = controller.form(value).design ?? .init() }
-            .sheet(isPresented: $choosingDesign) {
-                NavigationStack {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 20) {
-                            DiaryAIDesignPreview(design: design, photos: workspace.objects.filter { $0.role == "photo" }.compactMap { workspace.thumbnails[$0.id] })
-                            DiaryAIDesignChooser(selection: $design, photos: workspace.objects.filter { $0.role == "photo" }.compactMap { workspace.thumbnails[$0.id] }, initialTab: designTab)
-                            Text("示意仅展示前三张照片的位置关系；制作时使用全部已选照片，背景按照片主题生成。")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }.padding(20)
-                    }.navigationTitle("排版与风格").navigationBarTitleDisplayMode(.inline)
-                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") {
-                            var request = controller.form(action); request.design = design
-                            controller.setForm(request.coordinated()); choosingDesign = false
-                        } } }
-                }.presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+            .onChange(of: design) { _, value in
+                var request = controller.form(action); request.design = value
+                controller.setForm(request.coordinated())
             }
             .sheet(isPresented: $showingDetails) {
                 DiaryAIProgressPanel(workspace: workspace, onCloseDetails: { showingDetails = false })
@@ -334,6 +346,9 @@ struct DiaryAIInlinePanel: View {
 /// Pending materials sit below the artwork, independently of the bottom controls.
 struct DiaryAIMaterialRows: View {
     @ObservedObject var workspace: DiaryAIWorkspace
+    var onPhotos: (() -> Void)? = nil
+    var onCamera: (() -> Void)? = nil
+    var onStickers: (() -> Void)? = nil
     private func items(photos: Bool) -> [UUID] {
         workspace.pending.filter { id in
             guard let object = workspace.objects.first(where: { $0.id == id }) else { return false }
@@ -349,7 +364,14 @@ struct DiaryAIMaterialRows: View {
     private func row(_ title: String, photos: Bool) -> some View {
         let ids = items(photos: photos)
         return VStack(alignment: .leading, spacing: 8) {
-            Text("\(title) · \(ids.count)").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            HStack {
+                Text("\(title) · \(ids.count)").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                Spacer()
+                if photos {
+                    if let onPhotos { Button("添加照片", systemImage: "photo.badge.plus", action: onPhotos) }
+                    if let onCamera { Button("拍摄", systemImage: "camera", action: onCamera) }
+                } else if let onStickers { Button("贴纸库", systemImage: "plus.circle", action: onStickers) }
+            }.font(.caption).disabled(workspace.running || workspace.addingMaterials)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
                     ForEach(ids, id: \.self) { id in

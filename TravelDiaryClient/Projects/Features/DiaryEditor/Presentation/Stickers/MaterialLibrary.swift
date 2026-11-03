@@ -183,6 +183,7 @@ struct MaterialLibraryBrowser: View {
     @State private var paginationFilter = ""
     @State private var selectedGalleryItem: CloudMaterial?
     @State private var showGallery = false
+    @State private var galleryLanding = false
     @State private var showMaker = false
     @State private var showFilters = false
     @State private var showAllPacks = false
@@ -213,8 +214,9 @@ struct MaterialLibraryBrowser: View {
 
     init(session: DiaryEditorSession? = nil, replacingID: UUID? = nil,
          templateID: String? = nil, templateVersion: Int? = nil,
-         type: String = "sticker", keepsOpenAfterAdding: Bool = false, initialLibrary: CloudMaterialLibrary? = nil,
+         type: String = "sticker", keepsOpenAfterAdding: Bool = false, startsInGallery: Bool = false, initialLibrary: CloudMaterialLibrary? = nil,
          onSelectForCreation: ((Data, String, DiaryMaterialSource?) async -> Void)? = nil) {
+        _galleryLanding = State(initialValue: startsInGallery)
         self.session = session
         self.onSelectForCreation = onSelectForCreation
         self.replacingID = replacingID
@@ -251,6 +253,21 @@ struct MaterialLibraryBrowser: View {
     }
 
     var body: some View {
+        Group {
+            if galleryLanding {
+                NavigationStack {
+                    StickerGalleryScreen(onUse: { lib in
+                        selectedLibrary = lib; source = "我的"; kind = ""; galleryLanding = false
+                    }, onUseItem: { item in
+                        selectedGalleryItem = item; galleryLanding = false
+                    })
+                    .toolbar { ToolbarItem(placement: .topBarLeading) { Button("返回编辑器") { dismiss() } } }
+                }
+            } else { browserContent }
+        }
+        .onChange(of: galleryLanding) { _, value in if !value { useSelectedGalleryItem() } }
+    }
+    private var browserContent: some View {
         VStack(spacing: 8) {
             if isStickerPicker {
                 HStack {

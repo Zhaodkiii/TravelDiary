@@ -37,6 +37,7 @@ nonisolated struct CreationAsset: Codable, Equatable, Identifiable, Sendable {
 }
 
 nonisolated struct CreationDraft: Codable, Equatable, Identifiable, Sendable {
+    var styleEntry: Bool? = nil
     var schemaVersion = 1
     var id = UUID()
     var owner: String

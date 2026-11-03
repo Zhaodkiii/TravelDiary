@@ -60,8 +60,9 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private weak var source: DiaryEditorSession?
     @Published private(set) var displaySession: DiaryEditorSession?
     private var working: DiaryEditorSession?
+    @Published private(set) var addingMaterials = false
     func configureAndStart(_ value: DiaryAIRequest) {
-        guard active, !running else { return }
+        guard active, !running, !addingMaterials else { return }
         request = value.coordinated()
         log("settings", "整页制作设置", request.designBrief)
         if value.action != .relayout { pending = [] }
@@ -107,7 +108,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private let archiveURL: URL
     private let storage: DiaryAIWorkspaceStore
     private var storageSequence = 0
-    var canRollback: Bool { checkpoints.count > 1 && !running }
+    var canRollback: Bool { checkpoints.count > 1 && !running && !addingMaterials }
     init(session: DiaryEditorSession, model: (any DiaryAIModelClient)? = nil, root: URL? = nil, backgroundProvider: (any DiaryAIBackgroundProvider)? = nil, albumSaver: (any DiaryAIBackgroundAlbumSaving)? = nil, efficientExecution: Bool? = nil, parallelExecution: Bool? = nil) {
         self.parallelExecution = parallelExecution ?? UserDefaults.standard.bool(forKey: "DiaryCanvasAI.parallelExecution")
         self.backgroundProvider = backgroundProvider ?? DiarySeedreamBackgroundProvider()
@@ -235,6 +236,51 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             displaySession = display
         }
     }
+    /// Add to the working version so save/restore and pending masks stay coherent.
+    @discardableResult
+    func addMaterials(_ data: [Data], sticker: Bool = false, name: String = "贴纸", material: DiaryMaterialSource? = nil) async -> Bool {
+        guard active, !running, !addingMaterials, let working else { return false }
+        addingMaterials = true
+        defer { addingMaterials = false }
+        let candidate = DiaryEditorSession(document: working.document, images: working.images, store: working.store, contentID: working.contentID)
+        candidate.aiTransientSession = true
+        let before = Set(DiaryEditorAIBridge(candidate).objectChoices.map(\.id))
+        let success: Bool
+        if sticker {
+            guard let bytes = data.first else { return false }
+            success = await candidate.importPhoto(bytes, asSticker: true, stickerName: name, materialSource: material)
+        } else { success = await candidate.importPhotos(data) }
+        guard success else { error = candidate.errorMessage ?? "素材添加失败，请重试"; return false }
+        let previousPending = pending
+        let previousCheckpoints = checkpoints
+        let previousComposition = composition
+        let previousRegions = layoutRegions
+        let previousVersion = version
+        let previousAwaiting = awaitingConfirmation
+        let previousRevision = visualRevision
+        let previousConfirmation = confirmationScope
+        do {
+            let added = DiaryEditorAIBridge(candidate).objectChoices.filter { !before.contains($0.id) && $0.role != "background" }.map(\.id)
+            pending += added
+            checkpoints.append(.init(candidate.document, pending: pending))
+            composition = ""; layoutRegions = []; awaitingConfirmation = false; visualRevision = nil; confirmationScope = nil
+            version += 1
+            try await persist()
+            try await setup(candidate.document)
+            try await refresh()
+            log("import", sticker ? "已添加贴纸" : "已添加照片", "新增 \(added.count) 项到待排区；点击开始排版后制作。")
+            try await persist()
+            return true
+        } catch {
+            pending = previousPending; checkpoints = previousCheckpoints
+            composition = previousComposition; layoutRegions = previousRegions; version = previousVersion
+            awaitingConfirmation = previousAwaiting; visualRevision = previousRevision; confirmationScope = previousConfirmation
+            try? await setup(working.document); try? await refresh(); try? await persist()
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+
     func toggle(_ id: UUID) { if selected.contains(id) { selected.remove(id) } else if pending.contains(id) { selected.insert(id) } }
     func enqueue(_ ids: [UUID], hint: CGPoint? = nil) {
         let added = ids.filter { pending.contains($0) && !queue.contains($0) && !processing.contains($0) }
@@ -267,12 +313,13 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         } catch { self.error = error.localizedDescription }
     }
     func exitRestoringOriginal() async {
+        guard !addingMaterials else { return }
         pause()
         do { try await removeArchive(); active = false; source?.aiWorkspacePresented = false; working = nil; bridge = nil }
         catch { self.error = error.localizedDescription }
     }
     func save() async -> Bool {
-        guard !running, let source, let baseline, let working else { return false }
+        guard !running, !addingMaterials, let source, let baseline, let working else { return false }
         do {
             guard source.document == baseline.restoredDocument else { throw DiaryAIError.invalid("原作品已变化，不能覆盖。请退出后重新进入。") }
             var published = working.document
@@ -290,6 +337,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         } catch { self.error = error.localizedDescription; return false }
     }
     func keepForLater() async {
+        guard !addingMaterials else { return }
         pause()
         do { try await persist(); active = false; source?.aiWorkspacePresented = false }
         catch { self.error = error.localizedDescription }
@@ -306,7 +354,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         try await storage.remove(sequence: storageSequence)
     }
     private func run(all: Bool) {
-        guard active, !running else { return }
+        guard active, !running, !addingMaterials else { return }
         if isBackgroundOnly || (hasBackgroundRequest && pending.isEmpty && !composition.isEmpty && !needsTextCompletion && visualRevision == nil && !awaitingConfirmation) { generateBackground(); return }
         if hasBackgroundRequest && objects.contains(where: { $0.role == "background" && $0.locked }) {
             error = "背景已锁定：请退出后解除背景锁定，或关闭生成背景再开始。尚未发起模型请求。"

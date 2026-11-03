@@ -7,7 +7,7 @@ struct DiaryPageTouchSurface: UIViewRepresentable {
     var onTap: () -> Void
     var onBegin: (CGPoint) -> Void
     var onMove: (CGSize) -> Void
-    var onEnd: () -> Void
+    var onEnd: (_ cancelled: Bool) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -46,8 +46,11 @@ struct DiaryPageTouchSurface: UIViewRepresentable {
                 parent.onBegin(gesture.location(in: view))
             case .changed:
                 parent.onMove(CGSize(width: point.x - start.x, height: point.y - start.y))
-            case .ended, .cancelled:
-                parent.onEnd()
+            case .ended:
+                parent.onMove(CGSize(width: point.x - start.x, height: point.y - start.y))
+                parent.onEnd(false)
+            case .cancelled, .failed:
+                parent.onEnd(true)
             default: break
             }
         }

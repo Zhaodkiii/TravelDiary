@@ -26,6 +26,10 @@ struct TravelCaptureHomeView: View {
     }
     @State private var creationRoute: CreationRoute?
     @State private var showDrafts = false
+    @State private var selectedStyle: DiaryAIPageStyle = .scenic
+    @State private var styleEditor: DiaryEditorSession?
+    @State private var styleCoordinator: CreationCoordinator?
+    @State private var styleRequest: DiaryAIRequest?
     @State private var preview: UIImage?
     @State private var subjects: [StickerSubject] = []
     private let size = CGSize(width: 4370, height: 3130)
@@ -47,6 +51,7 @@ struct TravelCaptureHomeView: View {
 
     var body: some View {
         homeContent
+        .toolbar(.hidden, for: .navigationBar)
         .background {
             Color(uiColor: .systemGroupedBackground)
             Canvas { context, size in
@@ -96,51 +101,39 @@ struct TravelCaptureHomeView: View {
             NavigationStack { CreationDraftListView(owner: ownerID).toolbar { Button("完成") { showDrafts = false } } }
         }
         .task { await loadCreationDrafts() }
+        .fullScreenCover(item: $styleEditor, onDismiss: { Task { await reload() } }) { value in
+            DiaryEditorScreen(session: value, creationRequest: styleRequest)
+        }
         .fullScreenCover(item: $editor, onDismiss: { Task { await reload(); await refreshPreview() } }) { DiaryEditorScreen(session: $0) }
         .alert("旅行随记", isPresented: Binding(get: { error != nil && reviewPhoto == nil }, set: { if !$0 { error = nil } })) { Button("好") { error = nil } } message: { Text(error ?? "") }
     }
 
     private var homeContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                Menu {
-                    ForEach(books) { item in Button(item.title) { book = item; pageID = item.contentPages.last?.id; Task { await refreshPreview() } } }
-                    Button("开始新的旅行") { Task { await createBook() } }
-                } label: { Label(book?.title ?? "选择旅行手帐", systemImage: "book.closed").font(.headline) }
-                HStack(alignment: .firstTextBaseline) {
-                    Text(Date.now, format: .dateTime.month().day()).font(.system(size: 44, weight: .medium, design: .serif))
-                    Text(Date.now, format: .dateTime.weekday()).foregroundStyle(.secondary)
-                }
-                Text("今天的旅途，正在这一页继续。").foregroundStyle(.secondary)
-                Spacer(minLength: 30)
-                Button { Task { await open() } } label: {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8).fill(Color(red: 0.95, green: 0.95, blue: 0.90))
-                        if let preview { Image(uiImage: preview).resizable().scaledToFit() }
-                        else { Text("把眼前的风景，收进这一页。").foregroundStyle(.secondary) }
-                    }.aspectRatio(4370.0 / 3130, contentMode: .fit)
-                }.buttonStyle(.plain).shadow(color: .black.opacity(0.08), radius: 12, y: 6)
-                HStack {
-                    Menu("查看全部跨页") {
-                        if let book {
-                            ForEach(Array(book.contentPages.enumerated()), id: \.element.id) { index, page in
-                                Button("第 \(index + 1) 跨页") { pageID = page.id; Task { await refreshPreview() } }
-                            }
-                        }
-                    }
-                    Spacer()
-                    Button("新跨页", systemImage: "plus") { Task { await newPage() } }
-                }
-                Spacer(minLength: 30)
-                HStack(spacing: 20) {
-                    Button("相册", systemImage: "photo") { creationRoute = .init(source: "相册") }
-                    Button("拍照", systemImage: "camera") { creationRoute = .init(source: "拍照") }
-                    Button { creationRoute = .init() } label: { Text("制作新的一页").padding(.vertical, 16).frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent).tint(.primary)
-                }.font(.subheadline)
-                if !creationDrafts.isEmpty { Button("继续草稿 · \(creationDrafts.count)", systemImage: "tray.full") { showDrafts = true } }
-                Button("手动编辑这一页", systemImage: "square.and.pencil") { Task { await open() } }
-            }.padding(20)
-        }
+        VStack {
+            Spacer(minLength: 0)
+            TravelStyleDeck(selection: $selectedStyle) { Task { await openStyleCanvas() } }
+            Spacer(minLength: 0)
+        }.padding(.horizontal, 20).frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func openStyleCanvas() async {
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let drafts = try await CreationDraftStore(owner: ownerID).list()
+            let existing = drafts.first { $0.styleEntry == true && !$0.published && $0.targetBookID == book?.id }
+            var draft = existing ?? CreationDraft(owner: ownerID, targetBookID: book?.id)
+            draft.styleEntry = true
+            draft.design.style = selectedStyle
+            let coordinator = CreationCoordinator(owner: ownerID, draft: draft, bookID: book?.id)
+            guard let session = await coordinator.prepare(allowEmpty: true) else {
+                throw DiaryAIError.invalid(coordinator.error ?? "无法打开制作草稿")
+            }
+            styleCoordinator = coordinator
+            styleRequest = coordinator.draft.request()
+            styleEditor = session
+        } catch { self.error = error.localizedDescription }
     }
 
     private func loadCreationDrafts() async {
@@ -227,5 +220,142 @@ enum TravelCaptureSessionLoader {
     static func open(pageID: UUID, store: DiaryDocumentStore) async throws -> DiaryEditorSession {
         let loaded = try await store.load(pageID)
         return DiaryEditorSession(document: loaded.document, images: loaded.images, store: store)
+    }
+}
+
+/// Three-card deck. Selection is local; only the center action opens a new canvas.
+struct TravelStyleDeck: View {
+    @Binding var selection: DiaryAIPageStyle
+    var open: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        TravelStylePager(selection: $selection, reduceMotion: reduceMotion, open: open)
+            .frame(height: 330)
+    }
+}
+
+/// Native paging owns velocity, cancellation and horizontal/vertical arbitration.
+private struct TravelStylePager: UIViewRepresentable {
+    @Binding var selection: DiaryAIPageStyle
+    var reduceMotion: Bool
+    var open: () -> Void
+    func makeUIView(context: Context) -> TravelStylePagerView { TravelStylePagerView() }
+    func updateUIView(_ view: TravelStylePagerView, context: Context) {
+        view.onSelect = { selection = $0 }
+        view.onOpen = open
+        view.reducedMotion = reduceMotion
+        view.select(selection)
+    }
+}
+
+private final class TravelStylePagerView: UIScrollView, UIScrollViewDelegate {
+    private let styles = DiaryAIPageStyle.allCases
+    private var cards: [UIImageView] = []
+    private var titles: [UILabel] = []
+    private var settled = 0
+    private var previousWidth: CGFloat = 0
+    var onSelect: ((DiaryAIPageStyle) -> Void)?
+    var onOpen: (() -> Void)?
+    var reducedMotion = false
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        delegate = self; isPagingEnabled = true; showsHorizontalScrollIndicator = false
+        alwaysBounceVertical = false; alwaysBounceHorizontal = true; isDirectionalLockEnabled = true
+        clipsToBounds = false; decelerationRate = .fast
+        for style in styles {
+            let image = UIImageView(image: UIImage(named: "TravelStyle-" + style.rawValue))
+            image.contentMode = .scaleAspectFill; image.clipsToBounds = true
+            image.layer.cornerRadius = 22; image.layer.borderColor = UIColor.white.cgColor; image.layer.borderWidth = 2
+            image.isUserInteractionEnabled = true
+            image.tag = cards.count
+            image.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped(_:))))
+            image.isAccessibilityElement = true; image.accessibilityTraits = .button
+            let title = UILabel()
+            title.text = style.name + "  ›"
+            title.font = .preferredFont(forTextStyle: .headline)
+            title.textColor = .white; title.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+            title.textAlignment = .center; title.layer.cornerRadius = 12; title.clipsToBounds = true
+            image.addSubview(title); titles.append(title)
+            addSubview(image); cards.append(image)
+        }
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func select(_ style: DiaryAIPageStyle) {
+        guard !isDragging, !isDecelerating, let index = styles.firstIndex(of: style), index != settled else { return }
+        settled = index
+        setContentOffset(CGPoint(x: CGFloat(index) * bounds.width, y: 0), animated: !reducedMotion && window != nil)
+    }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width > 0 else { return }
+        contentSize = CGSize(width: bounds.width * CGFloat(styles.count), height: bounds.height)
+        if previousWidth != bounds.width {
+            previousWidth = bounds.width
+            contentOffset = CGPoint(x: CGFloat(settled) * bounds.width, y: 0)
+        }
+        arrange()
+    }
+    private func arrange() {
+        guard bounds.width > 0 else { return }
+        let progress = contentOffset.x / bounds.width
+        let width = min(bounds.width * 0.67, 280)
+        for (index, card) in cards.enumerated() {
+            let distance = CGFloat(index) - progress
+            let amount = min(abs(distance), 1)
+            card.bounds = CGRect(x: 0, y: 0, width: width, height: 300)
+            card.center = CGPoint(x: contentOffset.x + bounds.width / 2 + distance * width * 0.44, y: bounds.height / 2 + amount * 8)
+            card.transform = CGAffineTransform(rotationAngle: reducedMotion ? 0 : max(-1, min(1, distance)) * 0.06).scaledBy(x: 1 - amount * 0.1, y: 1 - amount * 0.1)
+            card.layer.zPosition = 10 - abs(distance)
+            card.isHidden = abs(distance) > 1.7
+            titles[index].frame = CGRect(x: 12, y: 246, width: width - 24, height: 42)
+            titles[index].alpha = max(0, 1 - abs(distance) * 2)
+            card.accessibilityLabel = styles[index].name + (index == settled ? "，使用此风格" : "，选择风格")
+        }
+    }
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard bounds.contains(point) else { return nil }
+        for card in cards.sorted(by: { $0.layer.zPosition > $1.layer.zPosition }) where !card.isHidden {
+            if let hit = card.hitTest(card.convert(point, from: self), with: event) { return hit }
+        }
+        return super.hitTest(point, with: event)
+    }
+    func scrollViewDidScroll(_ scrollView: UIScrollView) { arrange() }
+    func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
+        guard bounds.width > 0 else { return }
+        let proposed = Int((targetContentOffset.pointee.x / bounds.width).rounded())
+        let next = max(0, min(styles.count - 1, max(settled - 1, min(settled + 1, proposed))))
+        targetContentOffset.pointee.x = CGFloat(next) * bounds.width
+    }
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { finish() }
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { finish() }
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) { if !decelerate { finish() } }
+    private func finish() {
+        guard bounds.width > 0 else { return }
+        let next = max(0, min(styles.count - 1, Int((contentOffset.x / bounds.width).rounded())))
+        if next != settled { UISelectionFeedbackGenerator().selectionChanged() }
+        settled = next; onSelect?(styles[next]); arrange()
+    }
+    @objc private func tapped(_ gesture: UITapGestureRecognizer) {
+        guard !isDragging, !isDecelerating, let index = gesture.view?.tag else { return }
+        if index == settled { onOpen?() }
+        else { setContentOffset(CGPoint(x: CGFloat(index) * bounds.width, y: 0), animated: !reducedMotion); if reducedMotion { finish() } }
+    }
+}
+
+struct TravelStyleArtwork: View {
+    let style: DiaryAIPageStyle
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            GeometryReader { geo in
+                if let image = UIImage(named: "TravelStyle-" + style.rawValue) {
+                    Image(uiImage: image).resizable().scaledToFill().frame(width: geo.size.width, height: geo.size.height).clipped()
+                } else { DiaryAIDesignPreview(design: .init(style: style)) }
+            }
+            LinearGradient(colors: [.clear, .black.opacity(0.68)], startPoint: .center, endPoint: .bottom)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(style.name).font(.title3.bold())
+                Text("风格示例 · 点击制作").font(.caption)
+            }.foregroundStyle(.white).padding(18)
+        }
     }
 }

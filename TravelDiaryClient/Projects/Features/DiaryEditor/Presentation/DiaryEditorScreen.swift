@@ -1,3 +1,4 @@
+import PhotosUI
 import AVFoundation
 import Combine
 import SwiftUI
@@ -15,6 +16,9 @@ struct DiaryEditorScreen: View {
     @State private var showsSpreadShell = true
     @State private var childEditor: DiaryEditorSession?
     @State private var showPhotos = false
+    @State private var aiPhotos: [PhotosPickerItem] = []
+    @State private var showAIPhotos = false
+    @State private var showAIStickers = false
     @State private var showCamera = false
     @State private var capturedPhotos: [UIImage] = []
     @State private var importingCameraPhotos = false
@@ -35,7 +39,7 @@ struct DiaryEditorScreen: View {
     var body: some View {
         NavigationStack {
             editorContent
-            .disabled(session.busy || importingCameraPhotos)
+            .disabled(session.busy || importingCameraPhotos || session.aiWorkspace.addingMaterials)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { editorToolbar }
@@ -53,6 +57,27 @@ struct DiaryEditorScreen: View {
             }
             .fullScreenCover(item: $childEditor) { child in
                 AnyView(DiaryEditorScreen(session: child))
+            }
+            .photosPicker(isPresented: $showAIPhotos, selection: $aiPhotos, maxSelectionCount: 30, selectionBehavior: .ordered, matching: .images)
+            .onChange(of: aiPhotos) { _, items in
+                guard !items.isEmpty else { return }
+                Task {
+                    importingCameraPhotos = true
+                    defer { importingCameraPhotos = false; aiPhotos = [] }
+                    do {
+                        var bytes: [Data] = []
+                        for item in items {
+                            guard let data = try await item.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage }
+                            bytes.append(data)
+                        }
+                        _ = await session.aiWorkspace.addMaterials(bytes)
+                    } catch { session.errorMessage = "照片读取失败，请重新选择。" }
+                }
+            }
+            .sheet(isPresented: $showAIStickers) {
+                MaterialLibraryBrowser(keepsOpenAfterAdding: true, startsInGallery: true, onSelectForCreation: { bytes, name, material in
+                    _ = await session.aiWorkspace.addMaterials([bytes], sticker: true, name: name, material: material)
+                })
             }
             .sheet(isPresented: $showPhotos) { DiaryPhotoManagerSheet(session: session) }
             .fullScreenCover(isPresented: $showCamera, onDismiss: importCapturedPhotos) {
@@ -131,17 +156,17 @@ struct DiaryEditorScreen: View {
                 if !session.isRoot { Button("取消") { Task { await session.cancelEditor(); dismiss() } } }
                 }
             }
-            .disabled(session.busy || importingCameraPhotos)
+            .disabled(session.busy || importingCameraPhotos || session.aiWorkspace.addingMaterials)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
             if aiMode {
                 Button { aiCompare.toggle() } label: { Image(systemName: "rectangle.on.rectangle") }.accessibilityLabel("对比原版")
-                Button("保存") { Task { if await session.aiWorkspace.save() { withAnimation { aiMode = false } } } }.disabled(session.aiWorkspace.running)
+                Button("保存") { Task { if await session.aiWorkspace.save() { withAnimation { aiMode = false } } } }.disabled(session.aiWorkspace.running || session.aiWorkspace.addingMaterials)
             } else {
             if supportsSpreadPreview {
                 Button { session.finishInteraction(); showsSpreadShell.toggle() } label: { Image(systemName: showsSpreadShell ? "eye.fill" : "eye") }
                     .accessibilityLabel(showsSpreadShell ? "隐藏画布外壳" : "显示画布外壳")
-                    .disabled(session.busy || importingCameraPhotos)
+                    .disabled(session.busy || importingCameraPhotos || session.aiWorkspace.addingMaterials)
             }
             Button { session.undo() } label: { Image(systemName: "arrow.uturn.backward") }
                 .disabled(session.undoStack.isEmpty || session.busy || importingCameraPhotos).accessibilityLabel("撤销")
@@ -158,7 +183,7 @@ struct DiaryEditorScreen: View {
                     let size = session.canvasBounds.size
                     // 工具模式用紧凑边距适配全部可见高度，普通模式保留完整手柄空间。
                     let margin = toolOpen || session.layerMode ? DiaryCanvasSurface.toolControlMargin : DiaryCanvasSurface.controlMargin
-                    let horizontalPadding: CGFloat = toolOpen ? margin * 2 : 40
+                    let horizontalPadding: CGFloat = aiMode ? margin * 2 + 32 : (toolOpen ? margin * 2 : 40)
                     let verticalPadding: CGFloat = toolOpen ? 0 : 24
                     let scale = max(0.01, min((geometry.size.width - horizontalPadding) / size.width,
                                              (geometry.size.height - margin * 2 - verticalPadding) / size.height))
@@ -191,6 +216,7 @@ struct DiaryEditorScreen: View {
                       }
                       .frame(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)
                     }
+                    .padding(.horizontal, aiMode ? 16 : 0)
                     .allowsHitTesting(!aiMode)
                     .clipped()
                     .overlay(alignment: .top) {
@@ -198,7 +224,10 @@ struct DiaryEditorScreen: View {
                             let materialTop = max(size.height * scale + margin * 2 + 12, geometry.size.height * 0.62)
                             VStack(spacing: 0) {
                                 Color.clear.frame(height: materialTop)
-                                DiaryAIMaterialRows(workspace: session.aiWorkspace)
+                                DiaryAIMaterialRows(workspace: session.aiWorkspace,
+                                    onPhotos: { showAIPhotos = true },
+                                    onCamera: { capturedPhotos = []; showCamera = true },
+                                    onStickers: { showAIStickers = true })
                                     .frame(height: max(0, geometry.size.height - materialTop))
                             }
                         }
@@ -270,7 +299,8 @@ struct DiaryEditorScreen: View {
             guard data.count == images.count else {
                 session.errorMessage = "无法读取拍摄照片，请重试。"; return
             }
-            await session.importPhotos(data)
+            if aiMode { _ = await session.aiWorkspace.addMaterials(data) }
+            else { await session.importPhotos(data) }
         }
     }
     private func openText() {

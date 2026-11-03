@@ -27,6 +27,52 @@ import SwiftUI
         let deadline = Date().addingTimeInterval(15)
         while workspace.running && Date() < deadline { try await Task.sleep(for: .milliseconds(30)) }
     }
+    @Test func addMaterialsToEmptyStyleCanvasSurvivesResumeAndPublishes() async throws {
+        let (session, root) = try await fixture(count: 0)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let baseline = session.document
+        let model = WorkspaceModel()
+        let workspace = DiaryAIWorkspace(session: session, model: model, root: root)
+        var request = DiaryAIRequest.defaults(.relayout)
+        request.design = .init(style: .vintage)
+        await workspace.enter(request)
+        let data = try #require(UIGraphicsImageRenderer(size: CGSize(width: 100, height: 150)).image { c in
+            UIColor.orange.setFill(); c.fill(CGRect(x: 0, y: 0, width: 100, height: 150))
+        }.pngData())
+        #expect(await workspace.addMaterials([data, data]))
+        #expect(await workspace.addMaterials([data], sticker: true, name: "测试贴纸"))
+        #expect(workspace.pending.count == 3)
+        #expect(workspace.objects.filter { $0.role == "photo" }.count == 2)
+        #expect(session.document == baseline)
+        #expect(workspace.displaySession?.scopeLayers.isEmpty == true)
+        #expect(model.batchSizes.isEmpty)
+        await workspace.keepForLater()
+        let resumed = DiaryAIWorkspace(session: session, model: model, root: root)
+        await resumed.enter(request)
+        #expect(resumed.pending.count == 3 && resumed.thumbnails.count == 3)
+        model.version = resumed.version
+        resumed.processAll(); try await wait(resumed)
+        #expect(resumed.error == nil)
+        #expect(resumed.pending.isEmpty)
+        #expect(resumed.displaySession?.scopeLayers.count == 3)
+        #expect(await resumed.save())
+        #expect(session.scopeLayers.count == 3)
+    }
+    @Test func styleArtworkIsBundledAndDeckRenders() throws {
+        for style in DiaryAIPageStyle.allCases {
+            #expect(UIImage(named: "TravelStyle-" + style.rawValue) != nil)
+            var request = DiaryAIRequest.editorDefaults(.relayout)
+            request.design = .init(style: style)
+            #expect(request.coordinated().background?.style == style.backgroundID)
+        }
+        let host = UIHostingController(rootView: TravelStyleDeck(selection: .constant(.scenic), open: {}))
+        host.view.frame = CGRect(x: 0, y: 0, width: 393, height: 470)
+        host.view.layoutIfNeeded()
+        let image = UIGraphicsImageRenderer(size: host.view.bounds.size).image { _ in
+            host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+        }
+        try image.pngData()?.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("travel-style-deck.png"))
+    }
     @Test func emptyCanvasDoesNotStartPaidModelWork() async throws {
         let (session, root) = try await fixture(count: 0); defer { try? FileManager.default.removeItem(at: root) }
         let model = WorkspaceModel()

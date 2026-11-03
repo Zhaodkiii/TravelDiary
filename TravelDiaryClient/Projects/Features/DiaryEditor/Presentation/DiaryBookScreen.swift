@@ -28,6 +28,8 @@ struct DiaryBookScreen: View {
     @State private var orderBeforeDrag: DiaryBook?
     @State private var dragStartPoint = CGPoint.zero
     @State private var showingExport = false
+    @State private var deleteZone = CGRect.zero
+    @State private var hoveringDelete = false
 
     init(ownerID: String, book: DiaryBook) {
         self.ownerID = ownerID
@@ -46,12 +48,14 @@ struct DiaryBookScreen: View {
                               coverID: book.effectiveCover?.id) { page in
                 pageCard(page)
             }.padding()
+            if draggingPage == nil {
             Menu {
                 Button("空白页", systemImage: "doc") { Task { await createPage(data: nil) } }
                 Button("从照片新建", systemImage: "photo") { pickingPhoto = true }
                 Button("从预设选择") { presetAfterPageID = nil; showingPresetPicker = true }
             } label: { Label("新建一页", systemImage: "plus") }
                 .buttonStyle(.borderedProminent).padding(.bottom)
+            }
         }
         .scrollDisabled(draggingPage != nil)
         .onPreferenceChange(DiaryPageSortFrames.self) { pageFrames = $0 }
@@ -69,6 +73,31 @@ struct DiaryBookScreen: View {
                 .allowsHitTesting(false)
             }
         }
+        .overlay(alignment: .bottom) {
+            if draggingPage != nil {
+                VStack(spacing: 8) {
+                    Image(systemName: hoveringDelete ? "trash.fill" : "trash")
+                        .font(.system(size: 28, weight: .semibold))
+                    Text(hoveringDelete ? "松手永久删除" : "拖到此处永久删除")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .foregroundStyle(hoveringDelete ? Color.white : Color.red)
+                .frame(maxWidth: .infinity)
+                .frame(height: 100)
+                .background(hoveringDelete ? Color.red : Color(uiColor: .secondarySystemBackground),
+                            in: RoundedRectangle(cornerRadius: 24))
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear.preference(key: DiaryPageDeleteFrame.self,
+                            value: geometry.frame(in: .named("diary-page-sort")))
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+                .allowsHitTesting(false)
+            }
+        }
+        .onPreferenceChange(DiaryPageDeleteFrame.self) { deleteZone = $0 }
         .coordinateSpace(name: "diary-page-sort")
         .task(id: draggingPage?.id) {
             // 手指靠近上下边缘时继续滚动，可跨越当前可见页排序。
@@ -77,7 +106,7 @@ struct DiaryBookScreen: View {
                 guard !Task.isCancelled, let dragged = draggingPage else { break }
                 let y = dragOrigin.midY + dragTranslation.height
                 let direction = y < 80 ? -1 : (y > viewport.size.height - 80 ? 1 : 0)
-                guard direction != 0 else { continue }
+                guard direction != 0, !hoveringDelete else { continue }
                 let visible = book.pages.indices.filter {
                     guard let frame = pageFrames[book.pages[$0].id] else { return false }
                     return frame.maxY > 0 && frame.minY < viewport.size.height
@@ -181,7 +210,7 @@ struct DiaryBookScreen: View {
                         onTap: { Task { await open(page) } },
                         onBegin: { point in beginSorting(page, at: point) },
                         onMove: { translation in moveSorting(page, translation: translation) },
-                        onEnd: { finishSorting() }
+                        onEnd: { cancelled in finishSorting(cancelled: cancelled) }
                     ).accessibilityHidden(true)
                 }
                 .accessibilityAddTraits(.isButton)
@@ -214,6 +243,7 @@ struct DiaryBookScreen: View {
         dragOrigin = frame
         dragTranslation = .zero
         dragStartPoint = CGPoint(x: frame.minX + point.x, y: frame.minY + point.y)
+        hoveringDelete = false
         draggingPage = page
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
@@ -222,6 +252,12 @@ struct DiaryBookScreen: View {
         guard !busy, draggingPage?.id == page.id else { return }
         dragTranslation = translation
         let point = CGPoint(x: dragStartPoint.x + translation.width, y: dragStartPoint.y + translation.height)
+        let deleting = deleteZone != .zero && deleteZone.contains(point)
+        if deleting != hoveringDelete {
+            hoveringDelete = deleting
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        }
+        guard !deleting else { return }
         guard let target = book.pages.first(where: {
             $0.id != page.id && $0.id != book.shellPageID && $0.id != book.effectiveCover?.id && pageFrames[$0.id]?.contains(point) == true
         }), let from = book.pages.firstIndex(where: { $0.id == page.id }),
@@ -232,11 +268,19 @@ struct DiaryBookScreen: View {
         }
     }
 
-    private func finishSorting() {
-        guard draggingPage != nil, let before = orderBeforeDrag else { return }
+    private func finishSorting(cancelled: Bool) {
+        guard let page = draggingPage, let before = orderBeforeDrag else { return }
+        let shouldDelete = hoveringDelete && !cancelled
         let ids = book.pages.map(\.id)
         draggingPage = nil
         orderBeforeDrag = nil
+        hoveringDelete = false
+        if cancelled { book = before; return }
+        if shouldDelete {
+            book = before
+            perform { try await store.permanentlyDeletePage(page.id, expectedRevision: before.catalogRevision) }
+            return
+        }
         guard ids != before.pages.map(\.id) else { return }
         busy = true
         Task { @MainActor in
@@ -394,4 +438,9 @@ private struct DiaryPageSortFrames: PreferenceKey {
     static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
     }
+}
+
+private struct DiaryPageDeleteFrame: PreferenceKey {
+    static let defaultValue = CGRect.zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
 }
