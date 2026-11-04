@@ -36,7 +36,7 @@ final class HelpFeedbackService: ObservableObject {
         guard self.owner == owner else { throw HelpFailure("账号已变化，请重新打开帮助与反馈") }
         if formal && !bound { throw HelpFailure("请先登录或绑定正式账号，以便换设备查看回复") }
     }
-    func request<T: Decodable>(_ path: String, owner: String? = nil, method: SupportHTTPMethod = .get, body: [String: Any]? = nil) async throws -> T {
+    func request<T: Decodable>(_ path: String, owner: String? = nil, method: SupportHTTPMethod = .get, body: [String: Any]? = nil, forceRefresh: Bool = false, onCached: ((T) -> Void)? = nil) async throws -> T {
         if let owner { try require(owner) }
         let stamp = generation
         guard let engine else { throw HelpFailure("服务尚未初始化") }
@@ -55,7 +55,11 @@ final class HelpFeedbackService: ObservableObject {
         let bytes: Data
         if cacheable {
             bytes = try await CatalogResponseCache.shared.load(owner: owner ?? "public-help", domain: "help",
-                path: engine.serviceBaseURL.absoluteString + "/support/" + path, fetch: fetch)
+                path: engine.serviceBaseURL.absoluteString + "/support/" + path, forceRefresh: forceRefresh,
+                onCached: { data in
+                    guard stamp == self.generation, let value = try? JSONDecoder().decode(T.self, from: data) else { return }
+                    onCached?(value)
+                }, policy: .reference, fetch: fetch)
         } else { bytes = try await fetch() }
         try Task.checkCancellation()
         if let owner { try require(owner); guard stamp == generation else { throw CancellationError() } }
@@ -63,12 +67,12 @@ final class HelpFeedbackService: ObservableObject {
     }
 
     func config() async throws -> HelpServiceConfig { try await request("config/") }
-    func categories() async throws -> [HelpCategory] { try await request("help/categories/") }
-    func articles(query: String, category: String, cursor: String? = nil) async throws -> SupportPage<HelpArticle> {
+    func categories(onCached: (([HelpCategory]) -> Void)? = nil) async throws -> [HelpCategory] { try await request("help/categories/", onCached: onCached) }
+    func articles(query: String, category: String, cursor: String? = nil, forceRefresh: Bool = false, onCached: ((SupportPage<HelpArticle>) -> Void)? = nil) async throws -> SupportPage<HelpArticle> {
         var c = URLComponents(); c.path = "help/articles/"; c.queryItems = [URLQueryItem(name:"q",value:query),URLQueryItem(name:"category",value:category),URLQueryItem(name:"version",value:AppVersionInformation.version),URLQueryItem(name:"limit",value:"20"),URLQueryItem(name:"cursor",value:cursor)]
-        return try await request(c.string ?? "help/articles/")
+        return try await request(c.string ?? "help/articles/", forceRefresh: forceRefresh, onCached: onCached)
     }
-    func article(_ id: String) async throws -> HelpArticle { try await request("help/articles/\(id)/?version=\(AppVersionInformation.version)") }
+    func article(_ id: String, onCached: ((HelpArticle) -> Void)? = nil) async throws -> HelpArticle { try await request("help/articles/\(id)/?version=\(AppVersionInformation.version)", onCached: onCached) }
     func ticket(_ id: String, owner: String) async throws -> FeedbackTicket { try await request("tickets/\(id)/", owner: owner) }
     func tickets(owner: String, status: String = "", cursor: String? = nil) async throws -> SupportPage<FeedbackTicket> {
         try await request("tickets/?status=\(status)&cursor=\(cursor ?? "")", owner: owner)

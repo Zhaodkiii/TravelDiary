@@ -181,6 +181,45 @@ struct ResourceCacheTests {
         _ = try await reopened.load(newVersion)
         #expect(CacheImageURLProtocol.count(host: host) == 2)
     }
+    @Test func derivedThumbnailSurvivesOriginalEvictionAndCategoryClearRemovesBoth() async throws {
+        let f = Fixture(); defer { f.remove() }
+        let host = UUID().uuidString.lowercased() + ".test"
+        CacheImageURLProtocol.install(host: host, data: try png()); defer { CacheImageURLProtocol.remove(host: host) }
+        let cache = ResourceCache(paths: f.paths)
+        let request = PreviewImageRequest(key: f.key("rendition"), url: URL(string: "https://\(host)/image"), maxPixelSize: 384)
+        _ = try await PreviewImagePipeline(cache: cache, session: session()).load(request)
+        cache.remove(id: request.key.id)
+        let restarted = PreviewImagePipeline(cache: ResourceCache(paths: f.paths), session: session())
+        _ = try await restarted.load(request)
+        #expect(restarted.diskHits == 1)
+        #expect(restarted.networkBytes == 0)
+        #expect(CacheImageURLProtocol.count(host: host) == 1)
+        cache.clear(scope: request.key.scope, category: request.key.category)
+        #expect(cache.entries().isEmpty)
+    }
+    @Test func catalogReserveAndReplacementRespectTotalBudget() {
+        let f = Fixture(); defer { f.remove() }
+        let cache = ResourceCache(paths: f.paths, limit: 1000)
+        let catalog = ResourceCacheKey.account("a", category: "catalog-test", identity: "home")
+        cache.store(Data(repeating: 1, count: 50), for: catalog)
+        cache.store(Data(repeating: 2, count: 800), for: f.key("image"))
+        cache.store(Data(repeating: 3, count: 300), for: f.key("next"))
+        #expect(cache.data(for: catalog) != nil)
+        #expect(cache.data(for: f.key("image")) == nil)
+        #expect(cache.totalBytes <= 1000)
+        cache.store(Data(repeating: 4, count: 600), for: f.key("next"))
+        #expect(cache.totalBytes == 650)
+    }
+    @Test func disallowedDownloadURLNeverReachesNetwork() async throws {
+        let f = Fixture(); defer { f.remove() }
+        let host = UUID().uuidString.lowercased() + ".test"
+        CacheImageURLProtocol.install(host: host, data: try png()); defer { CacheImageURLProtocol.remove(host: host) }
+        let pipeline = PreviewImagePipeline(cache: ResourceCache(paths: f.paths), session: session())
+        let request = PreviewImageRequest(key: f.key("blocked"), url: URL(string: "https://\(host)/image"), validateURL: { _ in false })
+        await #expect(throws: URLError.self) { try await pipeline.load(request) }
+        #expect(CacheImageURLProtocol.count(host: host) == 0)
+    }
+
     @Test func concurrentConsumersShareDownloadAndCancellationDoesNotBreakOtherConsumer() async throws {
         let f = Fixture(); defer { f.remove() }
         let host = UUID().uuidString.lowercased() + ".test"

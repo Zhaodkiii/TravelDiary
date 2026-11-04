@@ -129,14 +129,18 @@ extension PresetDownloadManager {
         }
         return result
     }
-    func search(kind: String, query: String, filters: [String: Set<String>], cursor: String? = nil, seriesID: String? = nil, contentKind: String = "journal") async throws -> PresetSearchResponse {
+    func search(kind: String, query: String, filters: [String: Set<String>], cursor: String? = nil, seriesID: String? = nil, contentKind: String = "journal", forceRefresh: Bool = false, onCached: ((PresetSearchResponse) -> Void)? = nil) async throws -> PresetSearchResponse {
         var items = [URLQueryItem(name: "kind", value: kind), URLQueryItem(name: "q", value: query), URLQueryItem(name: "content_kind", value: contentKind)]
         for (dimension, ids) in filters where !ids.isEmpty {
             items.append(URLQueryItem(name: "\(dimension)_ids", value: ids.sorted().joined(separator: ",")))
         }
         if let cursor { items.append(URLQueryItem(name: "cursor", value: cursor)) }
         if let seriesID { items.append(URLQueryItem(name: "series", value: seriesID)) }
-        let response = try JSONDecoder().decode(PresetSearchResponse.self, from: await request("search/", queryItems: items))
+        let response = try JSONDecoder().decode(PresetSearchResponse.self, from: await request("search/", queryItems: items, onCached: { data in
+            guard let cached = try? JSONDecoder().decode(PresetSearchResponse.self, from: data) else { return }
+            PresetPreviewRepository.shared.registerSearch(cached.entries, ownerID: PreviewImagePipeline.shared.owner)
+            onCached?(cached)
+        }, forceRefresh: forceRefresh))
         PresetPreviewRepository.shared.registerSearch(response.entries, ownerID: PreviewImagePipeline.shared.owner)
         return response
     }

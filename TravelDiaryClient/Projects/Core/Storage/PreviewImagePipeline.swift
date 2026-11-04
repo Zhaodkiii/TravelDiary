@@ -9,6 +9,8 @@ nonisolated struct PreviewImageRequest: Sendable {
     var resolveLocalURL: (@Sendable () async -> URL?)? = nil
     var maxPixelSize: Int = 1024
     var sha256: String? = nil
+    var validateURL: (@Sendable (URL) -> Bool)? = nil
+    var maximumBytes: Int = 32 * 1024 * 1024
     var refreshURL: (@Sendable () async throws -> URL?)? = nil
 }
 
@@ -56,11 +58,21 @@ final class PreviewImagePipeline {
         for task in pending.values { task.cancel() }; pending.removeAll()
         for task in dataRequests.values { task.cancel() }; dataRequests.removeAll()
     }
+    /// Bounded, sequential warmup. Call after a page has rendered, never as a launch dependency.
+    func prefetch(_ requests: [PreviewImageRequest]) async {
+        let owner = self.owner
+        for request in requests.prefix(8) {
+            guard !Task.isCancelled, self.owner == owner else { return }
+            _ = try? await load(request)
+        }
+    }
     func clearMemory() { memory.removeAllObjects() }
     func decoded(_ data: Data, request: PreviewImageRequest) async throws -> UIImage {
         if let image = cached(request) { return image }
         let id = memoryKey(request)
+        let start = ProcessInfo.processInfo.systemUptime
         let image = try await Task.detached { try Self.decode(data, pixels: request.maxPixelSize) }.value
+        ResourceLoadMetrics.shared.record(request.key, "image.decode", since: start, bytes: data.count)
         memory.setObject(image, forKey: id as NSString, cost: image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0)
         return image
     }
@@ -81,19 +93,33 @@ final class PreviewImagePipeline {
     }
     func cached(_ request: PreviewImageRequest) -> UIImage? { memory.object(forKey: memoryKey(request) as NSString) }
     func load(_ request: PreviewImageRequest) async throws -> UIImage {
+        let loadStart = ProcessInfo.processInfo.systemUptime
+        defer { ResourceLoadMetrics.shared.record(request.key, "image.load.finished", since: loadStart) }
         if let image = cached(request) {
             memoryHits += 1
+            ResourceLoadMetrics.shared.record(request.key, "image.memory.hit")
             Task.detached { self.cache.touch(request.key) }
             return image
         }
         let id = memoryKey(request)
         let started = cache.generation(for: request.key)
         if let task = pending[id] {
+            ResourceLoadMetrics.shared.record(request.key, "image.coalesced")
             let image = try await task.value
             guard cache.generation(for: request.key) == started else { throw CancellationError() }
             return image
         }
         let task = Task<UIImage, Error> { [self] in
+            let thumbnailKey = ResourceCacheKey(scope: request.key.scope, category: request.key.category,
+                identity: request.key.identity + ":pixels=\(request.maxPixelSize):v1")
+            let thumbnailGeneration = cache.generation(for: thumbnailKey)
+            if request.maxPixelSize <= 1024,
+               let data = await Task.detached(operation: { self.cache.data(for: thumbnailKey) }).value,
+               let image = try? await Task.detached(operation: { try Self.decode(data, pixels: request.maxPixelSize) }).value {
+                diskHits += 1
+                ResourceLoadMetrics.shared.record(request.key, "image.rendition.hit")
+                return image
+            }
             let resolvedLocal = await request.resolveLocalURL?()
             if let url = request.localURL ?? resolvedLocal ?? (request.url?.isFileURL == true ? request.url : nil),
                let image = try? await Task.detached(operation: {
@@ -108,7 +134,18 @@ final class PreviewImagePipeline {
             }
             let data = try await bytes(request, generation: started)
             guard Self.valid(data, sha256: request.sha256) else { throw URLError(.badServerResponse) }
-            do { return try await Task.detached { try Self.decode(data, pixels: request.maxPixelSize) }.value }
+            do {
+                let start = ProcessInfo.processInfo.systemUptime
+                let image = try await Task.detached { try Self.decode(data, pixels: request.maxPixelSize) }.value
+                ResourceLoadMetrics.shared.record(request.key, "image.decode", since: start, bytes: data.count)
+                if request.maxPixelSize <= 1024 {
+                    let encoded = await Task.detached { image.pngData() }.value
+                    if let encoded, cache.generation(for: request.key) == started {
+                        _ = await Task.detached { self.cache.store(encoded, for: thumbnailKey, expectedGeneration: thumbnailGeneration) }.value
+                    }
+                }
+                return image
+            }
             catch { cache.remove(id: request.key.id); throw error }
         }
         pending[id] = task
@@ -128,22 +165,31 @@ final class PreviewImagePipeline {
             if let data = await Task.detached(operation: { self.cache.data(for: request.key) }).value {
                 let valid = await Task.detached { Self.valid(data, sha256: request.sha256) && (try? Self.decode(data, pixels: 32)) != nil }.value
                 if valid { diskHits += 1; return data }
+                ResourceLoadMetrics.shared.record(request.key, "image.corrupt")
                 cache.remove(id: request.key.id)
             }
-            guard var url = request.url, !url.isFileURL else { throw URLError(.fileDoesNotExist) }
-            var result = try await session.data(from: url)
+            let initialURL: URL?
+            if let url = request.url { initialURL = url } else { initialURL = try await request.refreshURL?() }
+            guard var url = initialURL, !url.isFileURL else { throw URLError(.fileDoesNotExist) }
+            guard request.validateURL?(url) != false else { throw URLError(.badURL) }
+            let networkStart = ProcessInfo.processInfo.systemUptime
+            var result = try await PreviewDownloadGate.shared.data(session: session, url: url, key: request.key)
+            networkBytes += Int64(result.0.count)
+            ResourceLoadMetrics.shared.record(request.key, "image.download", since: networkStart, bytes: result.0.count)
             if let response = result.1 as? HTTPURLResponse, [401, 403].contains(response.statusCode), let refresh = request.refreshURL {
                 try Task.checkCancellation()
                 guard let refreshed = try await refresh() else { throw URLError(.badURL) }
-                url = refreshed; result = try await session.data(from: url)
+                guard request.validateURL?(refreshed) != false else { throw URLError(.badURL) }
+                url = refreshed; result = try await PreviewDownloadGate.shared.data(session: session, url: url, key: request.key)
+                networkBytes += Int64(result.0.count)
+                ResourceLoadMetrics.shared.record(request.key, "image.download.retry", bytes: result.0.count)
             }
             guard let response = result.1 as? HTTPURLResponse, (200..<300).contains(response.statusCode),
-                  result.0.count <= 32 * 1024 * 1024, Self.valid(result.0, sha256: request.sha256) else { throw URLError(.badServerResponse) }
+                  result.0.count <= request.maximumBytes, Self.valid(result.0, sha256: request.sha256) else { throw URLError(.badServerResponse) }
             let data = result.0
             _ = try await Task.detached { try Self.decode(data, pixels: 32) }.value
             try Task.checkCancellation()
-            networkBytes += Int64(data.count)
-            await Task.detached { self.cache.store(data, for: request.key, expectedGeneration: generation) }.value
+            _ = await Task.detached { self.cache.store(data, for: request.key, expectedGeneration: generation) }.value
             return data
         }
         dataRequests[id] = task

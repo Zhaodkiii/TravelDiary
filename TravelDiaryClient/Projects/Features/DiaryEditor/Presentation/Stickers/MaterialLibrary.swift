@@ -126,7 +126,6 @@ final class MaterialCatalogRepository: ObservableObject {
         let capturedChange = changeID
         let cursor = URLComponents(string: path)?.queryItems?.first(where: { $0.name == "cursor" })?.value
         if let cursor, MaterialPaginationPolicy.expired(cursor) {
-            CatalogResponseCache.shared.invalidate(owner: capturedOwner, domain: "materials")
             throw MaterialPaginationPolicy.Expired()
         }
         let fetch: @MainActor () async throws -> Data = { [self] in
@@ -144,14 +143,13 @@ final class MaterialCatalogRepository: ObservableObject {
                     path: engine.serviceBaseURL.absoluteString + "/materials/" + path, forceRefresh: forceRefresh,
                     onCached: { data in if let value = try? JSONDecoder().decode(T.self, from: data) { onCached?(value) } }, onOffline: { [weak self] in self?.isOffline = true }, fetch: fetch)
             } catch {
-                if owner == capturedOwner, cursor != nil, MaterialPaginationPolicy.shouldRestart(error) {
-                    CatalogResponseCache.shared.invalidate(owner: capturedOwner, domain: "materials")
-                }
                 throw error
             }
         } else {
             data = try await fetch()
-            CatalogResponseCache.shared.invalidate(owner: capturedOwner, domain: "materials")
+            if path.contains("favorite") {
+                await CatalogResponseCache.shared.markStale(owner: capturedOwner, domain: "materials")
+            } else { CatalogResponseCache.shared.invalidate(owner: capturedOwner, domain: "materials") }
             changeID = UUID()
         }
         guard owner == capturedOwner else { throw CancellationError() }
@@ -789,6 +787,25 @@ struct MaterialLibraryBrowser: View {
     }
 }
 
+@MainActor
+enum MaterialPreviewRequests {
+    static func cover(_ resource: MaterialImageResource, libraryID: String?, version: Int?, pixels: Int = 512) -> PreviewImageRequest {
+        let owner = MaterialCatalogRepository.shared.owner
+        return PreviewImageRequest(
+            key: ResourceCacheKey(scope: "shared", category: "material-images", identity: resource.sha256),
+            url: URL(string: resource.url), maxPixelSize: pixels, sha256: resource.sha256,
+            validateURL: { $0.scheme == "https" && $0.host?.hasSuffix(".aliyuncs.com") == true },
+            maximumBytes: 15 * 1024 * 1024,
+            refreshURL: {
+                guard await MaterialCatalogRepository.shared.owner == owner else { throw CancellationError() }
+                guard let libraryID, let version else { throw URLError(.userAuthenticationRequired) }
+                let refreshed = try await MaterialCatalogRepository.shared.refreshPreview(resourceID: resource.resource_id, libraryID: libraryID, version: version)
+                guard refreshed.sha256 == resource.sha256 else { throw URLError(.badServerResponse) }
+                return URL(string: refreshed.url)
+            })
+    }
+}
+
 actor MaterialThumbnailCache {
     static let shared = MaterialThumbnailCache()
     private var generation = 0
@@ -861,10 +878,18 @@ struct MaterialThumbnail: View {
             if item.revision == 0, let local=DiaryStickerCatalog.items.first(where:{"local."+$0.id == item.id}) { image=local.image();return }
             if item.availability == "unavailable" { failed=true;return }
             do {
-                let request = PreviewImageRequest(key: ResourceCacheKey(scope: "shared", category: "material-thumbnails", identity: item.thumbnail_sha256), url: URL(string: item.thumbnail_url), maxPixelSize: 640)
-                if let cached = PreviewImagePipeline.shared.cached(request) { image = cached; return }
-                let data = try await MaterialThumbnailCache.shared.load(item)
-                let loaded = try await PreviewImagePipeline.shared.decoded(data, request: request)
+                let request = PreviewImageRequest(
+                    key: ResourceCacheKey(scope: "shared", category: "material-thumbnails", identity: item.thumbnail_sha256),
+                    url: URL(string: item.thumbnail_url), maxPixelSize: 384, sha256: item.thumbnail_sha256,
+                    validateURL: { $0.scheme == "https" && $0.host?.hasSuffix(".aliyuncs.com") == true },
+                    maximumBytes: 2_000_000,
+                    refreshURL: {
+                        guard let libraryID = item.library_id, let version = item.library_version else { throw URLError(.badURL) }
+                        let refreshed = try await MaterialCatalogRepository.shared.refreshPreview(resourceID: item.thumbnail_sha256, libraryID: libraryID, version: version)
+                        guard refreshed.sha256 == item.thumbnail_sha256 else { throw URLError(.badServerResponse) }
+                        return URL(string: refreshed.url)
+                    })
+                let loaded = try await PreviewImagePipeline.shared.load(request)
                 try Task.checkCancellation()
                 image = loaded
             } catch { if !Task.isCancelled { failed = true } }

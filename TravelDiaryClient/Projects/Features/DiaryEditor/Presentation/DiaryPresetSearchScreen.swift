@@ -17,6 +17,7 @@ struct DiaryPresetSearchScreen: View {
     @State private var total = 0
     @State private var cursor: String?
     @State private var loading = false
+    @State private var loadedFilter = ""
     @State private var paging = false
     @State private var error: String?
     @State private var offline = false
@@ -32,8 +33,9 @@ struct DiaryPresetSearchScreen: View {
     private var materialName: String { contentKind == "album" ? "相册" : "模板" }
     private var activeSeries: String? { clearsSeriesScope ? nil : fixedSeriesID }
     private let downloads = PresetDownloadManager.shared
-    private var queryKey: String {
-        "\(contentKind)|\(ownerID)|\(kind)|\(searchText)|\(onlyDownloaded)|\(activeSeries ?? "")|\(filters.keys.sorted().map { $0 + (filters[$0] ?? []).sorted().joined(separator: ",") }.joined())|\(reload)"
+    private var queryKey: String { filterKey + "|\(reload)" }
+    private var filterKey: String {
+        "\(contentKind)|\(ownerID)|\(kind)|\(searchText)|\(onlyDownloaded)|\(activeSeries ?? "")|\(filters.keys.sorted().map { $0 + (filters[$0] ?? []).sorted().joined(separator: ",") }.joined())"
     }
     private var taxonomyURL: URL {
         StoragePaths.system.cacheAccount(ownerID).appendingPathComponent("Catalog/taxonomy.json")
@@ -71,7 +73,7 @@ struct DiaryPresetSearchScreen: View {
                         Button("清空条件") { searchText = ""; filters = [:]; onlyDownloaded = false }
                     }
                 }
-                if loading { ProgressView("正在搜索…").frame(maxWidth: .infinity).padding(40) }
+                if loading && entries.isEmpty { ProgressView("正在搜索…").frame(maxWidth: .infinity).padding(40) }
                 else if entries.isEmpty && error == nil {
                     ContentUnavailableView(kind == "spread" ? "暂无匹配跨页" : "暂无匹配\(materialName)", systemImage: "magnifyingglass",
                         description: Text(offline ? "本机没有符合条件的完整离线内容。" : "试试其他关键词或清空筛选条件。"))
@@ -211,10 +213,11 @@ struct DiaryPresetSearchScreen: View {
     }
     private func loadFirst() async {
         let key = queryKey
-        entries = []; cursor = nil; total = 0; error = nil; loading = true; offline = onlyDownloaded
+        if loadedFilter != filterKey { entries = []; total = 0; loadedFilter = filterKey }
+        cursor = nil; error = nil; loading = true; offline = onlyDownloaded
         downloads.activate(owner: ownerID)
         do {
-            try await Task.sleep(for: .milliseconds(300))
+            if !searchText.isEmpty { try await Task.sleep(for: .milliseconds(300)) }
             // Do not send uncommitted Chinese IME composition to the server.
             while hasMarkedSearchText {
                 try await Task.sleep(for: .milliseconds(100))
@@ -224,7 +227,10 @@ struct DiaryPresetSearchScreen: View {
             guard key == queryKey else { return }
             if onlyDownloaded { entries = localResults(); total = entries.count }
             else {
-                let value = try await downloads.search(kind: kind, query: searchText, filters: filters, seriesID: activeSeries, contentKind: contentKind)
+                let value = try await downloads.search(kind: kind, query: searchText, filters: filters, seriesID: activeSeries, contentKind: contentKind, forceRefresh: reload > 0, onCached: { cached in
+                    guard key == queryKey, !Task.isCancelled else { return }
+                    entries = cached.entries; total = cached.total; cursor = cached.next_cursor
+                })
                 try Task.checkCancellation()
                 guard key == queryKey else { return }
                 entries = value.entries; total = value.total; cursor = value.next_cursor
@@ -233,8 +239,8 @@ struct DiaryPresetSearchScreen: View {
         } catch is CancellationError { }
         catch {
             guard key == queryKey else { return }
-            entries = localResults(); total = entries.count; offline = true; loading = false
-            self.error = "在线搜索暂时不可用，可重试；下方仅展示本机离线结果。"
+            if entries.isEmpty { entries = localResults(); total = entries.count }; offline = true; loading = false
+            self.error = "在线搜索暂时不可用，可重试；下方展示已缓存的内容。"
         }
     }
     private var hasMarkedSearchText: Bool {

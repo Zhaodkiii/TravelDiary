@@ -13,7 +13,7 @@ import Foundation
     }
     static func body(reference: Data, prompt: String) -> [String: Any] {
         var result: [String: Any] = ["model": model, "prompt": prompt,
-         "response_format": "url", "size": "2K", "stream": false, "watermark": true]
+         "response_format": "url", "size": "2K", "stream": false, "watermark": false]
         if !reference.isEmpty { result["image"] = "data:image/jpeg;base64,\(reference.base64EncodedString())" }
         return result
     }

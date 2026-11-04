@@ -16,8 +16,10 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     selected = {'CatalogResponseCacheTests.swift', 'ResourceCacheTests.swift', 'StorageManagementTests.swift',
-                'DiaryPresetTemplateLibraryTests.swift', 'DiaryPresetImportFlowTests.swift'}
-    suites = ['CatalogResponseCacheTests', 'ResourceCacheTests', 'StorageManagementTests', 'DiaryPresetTemplateLibraryTests']
+                'DiaryPresetTemplateLibraryTests.swift', 'DiaryPresetImportFlowTests.swift',
+                'HelpFeedbackTests.swift', 'DiaryAlbumPreviewPerformanceTests.swift'}
+    suites = ['CatalogResponseCacheTests', 'ResourceCacheTests', 'StorageManagementTests', 'DiaryPresetTemplateLibraryTests',
+              'HelpFeedbackTests', 'DiaryAlbumPreviewPerformanceTests']
     if args.include_import_flow:
         suites.append('DiaryPresetImportFlowTests')
     excluded = sorted(p.name for p in (root / 'TravelDiaryTests').rglob('*.swift') if p.name not in selected)

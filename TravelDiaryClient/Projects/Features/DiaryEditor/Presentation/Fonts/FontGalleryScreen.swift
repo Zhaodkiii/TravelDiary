@@ -79,7 +79,7 @@ struct FontGalleryScreen: View {
                         }.buttonStyle(.plain).accessibilityLabel("\(font.title)，\(font.priceLabel)")
                     }
                 }
-                if loading { ProgressView() }
+                if loading && fonts.isEmpty { ProgressView() }
                 if !mine && fonts.count < total {
                     Button("加载更多") { Task { await load(reset: false) } }.disabled(loading)
                 }
@@ -131,12 +131,13 @@ struct FontGalleryScreen: View {
 private struct FontSpecimenImage: View {
     let font: CloudFont
     let resourceID: String?
+    var maxPixelSize: Int = 384
     var body: some View {
         let owner = CloudFontRepository.shared.owner
         let identity = "\(font.id):\(font.version):\(resourceID ?? "cover")"
         CachedPreviewImage(request: PreviewImageRequest(
             key: .account(owner, category: "font-images", identity: identity),
-            url: resourceID.flatMap { font.images[$0] }.flatMap(URL.init(string:)),
+            url: resourceID.flatMap { font.images[$0] }.flatMap(URL.init(string:)), maxPixelSize: maxPixelSize,
             refreshURL: {
                 let updated: CloudFont = try await CloudFontRepository.shared.request("families/\(font.id)/", forceRefresh: true)
                 guard await CloudFontRepository.shared.owner == owner, updated.version == font.version else { throw CancellationError() }
@@ -163,7 +164,7 @@ struct FontDetailScreen: View {
             VStack(alignment:.leading,spacing:20) {
                 Text(font.title).font(.title.bold())
                 Text(font.content.author).foregroundStyle(.secondary)
-                FontSpecimenImage(font: font, resourceID: font.content.cover).frame(maxWidth:.infinity).frame(height:280)
+                FontSpecimenImage(font: font, resourceID: font.content.cover, maxPixelSize: 1024).frame(maxWidth:.infinity).frame(height:280)
                 HStack { Text(font.priceLabel).foregroundStyle(.pink);Spacer();Button(favorite ? "已收藏" : "收藏") { Task { do { try await repository.favorite(font,value:!favorite);favorite.toggle() } catch { self.error=error.localizedDescription } } } }
                 Text(font.content.description)
                 Text(font.content.languages.joined(separator:" · ")).font(.caption).foregroundStyle(.secondary)
@@ -173,7 +174,7 @@ struct FontDetailScreen: View {
                     Text(text).font(Font(DiaryFontCatalog.shared.font(selected,size:28)))
                     if let warning=DiaryFontCatalog.shared.warning(selected,text:text) { Text(warning).font(.caption).foregroundStyle(.secondary) }
                 }
-                ForEach(font.content.previews,id:\.self) { id in FontSpecimenImage(font: font, resourceID: id).frame(maxWidth:.infinity).frame(height:280) }
+                ForEach(font.content.previews,id:\.self) { id in FontSpecimenImage(font: font, resourceID: id, maxPixelSize: 1024).frame(maxWidth:.infinity).frame(height:280) }
                 if let error { Text(error).foregroundStyle(.red).font(.caption) }
                 if downloaded && onUse == nil { Text("字体已加入我的字体。打开手帐的文字编辑器即可使用。") }
             }.padding()

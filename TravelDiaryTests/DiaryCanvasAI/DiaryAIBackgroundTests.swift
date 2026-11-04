@@ -16,6 +16,22 @@ import SwiftUI
         let options = try JSONDecoder().decode(DiaryAIBackgroundOptions.self, from: Data(#"{"style":"paper","strength":"中","saveToAlbum":true,"backgroundOnly":false}"#.utf8))
         #expect(!options.isTextOnly)
     }
+    @Test func gardenPaperNativePreviews() throws {
+        let output = URL(fileURLWithPath: "/tmp/DiaryGardenPaperPreviews")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        for kind in DiaryTextPaper.Kind.allCases where kind.isGarden {
+            #expect(UIImage(named: kind.assetName!) != nil)
+            var layer = DiaryLayer(name: "花园便签", kind: .text,
+                                   transform: DiaryTransform(position: .zero, pivot: .zero),
+                                   size: CGSize(width: 700, height: 400))
+            layer.text = "把温柔收藏\n让日子慢慢开花"
+            layer.fontSize = 40
+            layer.textAppearance = DiaryTextAppearance(paper: DiaryTextPaper(kind: kind))
+            let image = DiaryPageRenderer.textPreview(layer)
+            #expect(image.size.width > 0 && image.size.height > 0)
+            try #require(image.pngData()).write(to: output.appendingPathComponent(kind.rawValue + ".png"))
+        }
+    }
     private func image(_ size: CGSize = CGSize(width: 1000, height: 800)) throws -> Data {
         let format = UIGraphicsImageRendererFormat(); format.scale = 1
         return try #require(UIGraphicsImageRenderer(size: size, format: format).image { ctx in
@@ -134,16 +150,25 @@ import SwiftUI
         guard !FileManager.default.fileExists(atPath: "/tmp/traveldiary-design-flow-enabled") else { return }
         try await runFullFlow(parallel)
     }
-    @Test(arguments: Array(0..<26)) func liveDesignFlow(_ index: Int) async throws {
+    @Test(arguments: Array(0..<62)) func liveDesignFlow(_ index: Int) async throws {
         guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-design-flow-enabled") else { return }
         let selectedCase = try String(contentsOfFile: "/tmp/traveldiary-design-flow-enabled", encoding: .utf8)
         guard selectedCase == "all" || selectedCase.split(separator: ",").contains(Substring(String(index))) else { return }
         let layouts: [DiaryAILayout] = [.hero, .story, .headline, .collage, .editorial, .automatic]
         let datasets = ["archive-city", "archive-family", "archive-food", "archive-nature", "archive-portrait", "archive-mixed"]
-        let designIndex = index >= 8 ? (index - 8) % 6 : index % 6
-        try await runFullFlow(true, design: .init(layout: layouts[designIndex], style: DiaryAIPageStyle.allCases[designIndex]), dataset: index >= 8 ? datasets[designIndex] : index >= 6 ? (index == 6 ? "wedding" : "coast") : nil, mode: (14..<20).contains(index) ? "textOnly" : "guided")
+        if index >= 26 {
+            let combination = index - 26
+            let layoutIndex = combination / DiaryAIPageStyle.allCases.count
+            let styleIndex = combination % DiaryAIPageStyle.allCases.count
+            try await runFullFlow(true,
+                                  design: .init(layout: layouts[layoutIndex], style: DiaryAIPageStyle.allCases[styleIndex]),
+                                  dataset: "cross-scene-\(combination)", mode: "guided")
+        } else {
+            let designIndex = index >= 8 ? (index - 8) % 6 : index % 6
+            try await runFullFlow(true, design: .init(layout: layouts[designIndex], style: DiaryAIPageStyle.allCases[designIndex]), dataset: index >= 8 ? datasets[designIndex] : index >= 6 ? (index == 6 ? "wedding" : "coast") : nil, mode: (14..<20).contains(index) ? "textOnly" : "guided")
+        }
     }
-    private func runFullFlow(_ parallel: Bool, design: DiaryAIDesignSelection? = nil, dataset: String? = nil, mode: String = "guided") async throws {
+    private func runFullFlow(_ parallel: Bool, design: DiaryAIDesignSelection? = nil, dataset: String? = nil, mode: String = "guided", storyCase: Int? = nil) async throws {
         guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-fullflow-benchmark-enabled") else { return }
         let output = URL(fileURLWithPath: "/tmp/TravelDiaryBook8Validation/fullflow-benchmark")
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
@@ -165,17 +190,35 @@ import SwiftUI
         let session = DiaryEditorSession(document: sourceDocument, images: dataset == nil ? loaded.images : [:], store: store)
         if let dataset {
             let input = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("DesignFixtures/" + dataset)
-            let photos = try FileManager.default.contentsOfDirectory(at: input.appendingPathComponent("photos"), includingPropertiesForKeys: nil).sorted { $0.path < $1.path }
+            func files(in folder: String) throws -> [URL] {
+                let files = try FileManager.default.contentsOfDirectory(at: input.appendingPathComponent(folder), includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]).sorted { $0.path < $1.path }
+                let currentStudy = files.filter { $0.lastPathComponent.hasPrefix("study-") }
+                return currentStudy.isEmpty ? files : currentStudy
+            }
+            let photos = try files(in: "photos")
             #expect(await session.importPhotos(try photos.map { try Data(contentsOf: $0) }))
-            for sticker in try FileManager.default.contentsOfDirectory(at: input.appendingPathComponent("stickers"), includingPropertiesForKeys: nil).sorted(by: { $0.path < $1.path }) {
+            for sticker in try files(in: "stickers").prefix(8) {
                 #expect(await session.importPhoto(try Data(contentsOf: sticker), asSticker: true, stickerName: sticker.deletingPathExtension().lastPathComponent))
             }
         }
+        let fixtureInfo = dataset.map { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("DesignFixtures/" + $0 + "/fixture-info.json") }
         let before = session.document
         let w = DiaryAIWorkspace(session: session, root: root, parallelExecution: parallel)
         let measuredStart = Date()
         var r = DiaryAIRequest.defaults(.relayout); r.allowsText = true; r.background = .init(saveToAlbum: false); r.scene = "山野徒步"; r.location = "雨崩"
         if dataset != nil { r.scene = "不指定"; r.location = "" }
+        if let storyCase {
+            let scenario = storyCase / 6
+            let titles = ["热气里的小确幸", "把日子读慢一点", "池边的慢时光", "雪落成诗", "花树下的我们", "和你一起看湖"]
+            let stories = ["绕了几条街，终于吃到了想念的那一碗面。", "今天没有赶路，读了几页书，也看了很久的树影。", "池边坐了十分钟，才发现慢下来也能看见很多。", "手指冻得发红，还是舍不得把相机收起来。", "最喜欢这张树下合照，笑起来的那一刻很自然。", "那天风有点大，我们蹲在木栏边，笑成了一团。"]
+            let locations = ["重庆·街角小店", "杭州·午后公园", "杭州·池边", "哈尔滨·冬日", "杭州·花园", "九寨沟·湖边栈道"]
+            var brief = CreationBrief()
+            brief.upsertStoryEntry(.init(kind: .title, text: titles[scenario], usage: .exact))
+            brief.upsertStoryEntry(.init(kind: .content, text: stories[scenario], usage: storyCase % 3 == 0 ? .exact : .rewrite))
+            brief.upsertStoryEntry(.init(kind: .direction, text: "保留全部照片与已有贴纸，标题醒目，旁注贴近对应照片。新增装饰少一点，文字清楚，避免遮脸。", usage: .reference))
+            brief.upsertStoryEntry(.init(kind: .location, text: locations[scenario], usage: storyCase % 2 == 0 ? .exact : .reference))
+            r.creationBrief = brief
+        }
         r.background?.generationMode = mode
         r.design = design; r = r.coordinated()
         print("DESIGN_DATASET \(dataset ?? "book8")")
@@ -201,13 +244,15 @@ import SwiftUI
             while w.running && Date() < retryDeadline { try await Task.sleep(for: .milliseconds(250)) }
             if w.error == nil && parallel { w.processAll(); while w.running && Date() < retryDeadline { try await Task.sleep(for: .milliseconds(250)) } }
         }
-        try JSONEncoder().encode(w.events).write(to: output.appendingPathComponent("events.json"), options: .atomic)
-        if let png = w.backgroundPreview?.pngData() { try png.write(to: output.appendingPathComponent("background.png")) }
-        if let jpg = w.preview?.jpegData(compressionQuality: 0.9) { try jpg.write(to: output.appendingPathComponent("composed.jpg")) }
-        print("BENCHMARK mode=\(parallel ? "parallel" : "serial") seconds=\(Date().timeIntervalSince(measuredStart)) result=\(w.error ?? w.stage)")
         let runFolder = output.appendingPathComponent((design.map { "design-" + (dataset.map { $0 + "-" } ?? "") + $0.layout.rawValue + "-" + $0.style.rawValue + "-" } ?? (parallel ? "parallel-" : "serial-")) + UUID().uuidString)
         try FileManager.default.createDirectory(at: runFolder, withIntermediateDirectories: true)
-        for name in ["events.json", "background.png", "composed.jpg"] { if FileManager.default.fileExists(atPath: output.appendingPathComponent(name).path) { try FileManager.default.copyItem(at: output.appendingPathComponent(name), to: runFolder.appendingPathComponent(name)) } }
+        if let fixtureInfo, FileManager.default.fileExists(atPath: fixtureInfo.path) {
+            try FileManager.default.copyItem(at: fixtureInfo, to: runFolder.appendingPathComponent("fixture-info.json"))
+        }
+        try JSONEncoder().encode(r.creationBrief).write(to: runFolder.appendingPathComponent("user-input.json"), options: .atomic)
+        try JSONEncoder().encode(w.events).write(to: runFolder.appendingPathComponent("events.json"), options: .atomic)
+        if let png = w.backgroundPreview?.pngData() { try png.write(to: runFolder.appendingPathComponent("background.png")) }
+        if let jpg = w.preview?.jpegData(compressionQuality: 0.9) { try jpg.write(to: runFolder.appendingPathComponent("composed.jpg")) }
         if let diagnostics = try? await w.exportProductionLog() {
             try FileManager.default.copyItem(at: diagnostics, to: runFolder.appendingPathComponent("production-log.zip"))
         }
@@ -218,6 +263,15 @@ import SwiftUI
         #expect(w.backgroundRecord?.verified == true)
         #expect(await w.save())
         let reopened = try await store.load(page.id)
+        if let brief = r.creationBrief {
+            let texts = reopened.document.objects.values.flatMap(\.layers).filter { $0.kind == .text }.map(\.text)
+            let missing = brief.requiredStoryTexts.filter { required in !texts.contains(where: { $0.contains(required) }) }
+            let privateLocations = (brief.storyEntries ?? []).filter { $0.kind == .location && $0.usage == .reference }.map(\.text)
+            let leaked = privateLocations.filter { place in texts.contains(where: { $0.contains(place) }) }
+            try JSONSerialization.data(withJSONObject: ["renderedTexts": texts, "missingExactTexts": missing, "leakedReferenceLocations": leaked], options: [.prettyPrinted, .sortedKeys]).write(to: runFolder.appendingPathComponent("story-check.json"))
+            #expect(missing.isEmpty)
+            #expect(leaked.isEmpty)
+        }
         let exported = output.appendingPathComponent("背景生成项目-" + UUID().uuidString)
         try await store.exportSourceFiles(try await store.loadBook(), to: exported)
         print("BACKGROUND_EXPORT \(exported.path)")
@@ -423,7 +477,7 @@ import SwiftUI
     @Test func requestContractAndBackwardDecoding() throws {
         let body = DiarySeedreamBackgroundProvider.body(reference: Data([1,2]), prompt: "背景")
         #expect(body["model"] as? String == "doubao-seedream-5-0-flash-260915")
-        #expect(body["watermark"] as? Bool == true)
+        #expect(body["watermark"] as? Bool == false)
         #expect(body["stream"] as? Bool == false)
         #expect(body["image"] as? String == "data:image/jpeg;base64,AQI=")
         var old = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(request())) as? [String: Any])

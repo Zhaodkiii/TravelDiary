@@ -56,7 +56,7 @@ struct HelpCenterScreen: View {
                             .feedbackPaperCard()
                     }.buttonStyle(.plain)
                 }
-                if loading { ProgressView("正在查找答案…").frame(maxWidth: .infinity).padding() }
+                if loading && articles.isEmpty { ProgressView("正在查找答案…").frame(maxWidth: .infinity).padding() }
                 else if articles.isEmpty && error == nil {
                     SupportEmptyState(symbol: "book.closed", title: query.isEmpty && category.isEmpty ? "帮助内容正在整理" : "没有找到相关答案", message: "你可以直接提交反馈，我们会在反馈详情中回复。")
                     NavigationLink { FeedbackFormScreen(owner: owner) } label: { Text("向我们提问").frame(maxWidth: .infinity) }.buttonStyle(FeedbackPrimaryButtonStyle())
@@ -67,7 +67,7 @@ struct HelpCenterScreen: View {
         .navigationTitle("帮助与反馈")
         .task(id:query+"|"+category) { if !query.isEmpty { try? await Task.sleep(for:.milliseconds(300)) }; guard !Task.isCancelled else { return };await load() }
         .task { config = try? await service.config(); await service.refreshUnread(owner:owner) }
-        .refreshable { await load(); await service.refreshUnread(owner:owner) }
+        .refreshable { await load(forceRefresh: true); await service.refreshUnread(owner:owner) }
     }
     private func categoryButton(_ title: String, code: String) -> some View {
         Button { category = code } label: {
@@ -77,7 +77,7 @@ struct HelpCenterScreen: View {
                 .background(category == code ? DiaryLibraryStyle.accent.opacity(0.10) : DiaryLibraryStyle.surface, in: Capsule())
         }.buttonStyle(.plain).accessibilityAddTraits(category == code ? .isSelected : [])
     }
-    private func load(more: Bool = false) async {
+    private func load(more: Bool = false, forceRefresh: Bool = false) async {
         let previousCursor = more ? cursor : nil
         if more { guard !loading, cursor != nil, loadedFilter == query + "|" + category else { return } }
         let filter = query + "|" + category
@@ -85,8 +85,11 @@ struct HelpCenterScreen: View {
         let stamp = UUID();generation = stamp;loading = true;error = nil
         defer { if stamp == generation { loading = false } }
         do {
-            let values = try await service.articles(query:query,category:category,cursor:more ? cursor : nil)
-            let cats = more ? categories : ((try? await service.categories()) ?? categories)
+            let values = try await service.articles(query:query,category:category,cursor:more ? cursor : nil, forceRefresh: forceRefresh, onCached: { cached in
+                guard !more, stamp == generation, filter == query + "|" + category else { return }
+                articles = cached.results; cursor = cached.next_cursor
+            })
+            let cats = more ? categories : ((try? await service.categories(onCached: { cached in if stamp == generation { categories = cached } })) ?? categories)
             guard stamp == generation, filter == query + "|" + category else { return }
             categories = cats; articles = more ? articles.appendingUnique(values.results) : values.results;cursor = values.next_cursor == previousCursor ? nil : values.next_cursor;offline = false
             if query.isEmpty && category.isEmpty { service.cache(articles,name:"articles");service.cache(cats,name:"categories");service.cache(Date(),name:"cached-at") }
@@ -122,7 +125,7 @@ struct HelpArticleScreen: View {
         }.navigationTitle("帮助详情").task { await load() }
     }
     private func load() async {
-        do { value = try await HelpFeedbackService.shared.article(article.id);offline = false;unavailable = false;error = nil;HelpFeedbackService.shared.cache(value,name:"article-"+article.id) }
+        do { value = try await HelpFeedbackService.shared.article(article.id, onCached: { value = $0 });offline = false;unavailable = false;error = nil;HelpFeedbackService.shared.cache(value,name:"article-"+article.id) }
         catch {
             // A server response explicitly invalidating the article must never fall back to a published cache.
             let invalid: Bool
@@ -214,22 +217,21 @@ private struct HelpArticleBody: View {
     }
 }
 private struct HelpArticleImage: View {
-    let id: String;let alt: String
-    @State private var url: URL?
-    @State private var error: String?
+    let id: String
+    let alt: String
     var body: some View {
-        VStack(alignment:.leading) {
-            if let url { AsyncImage(url:url) { phase in switch phase { case .success(let image):image.resizable().scaledToFit();case .failure:Text("图片暂不可用");case .empty:ProgressView();@unknown default:EmptyView() } }.accessibilityLabel(alt.isEmpty ? "帮助示意图" : alt) }
-            if let error { Text(error).font(.caption);Button("重试图片") { Task { await load() } } }
+        VStack(alignment: .leading) {
+            CachedPreviewImage(request: PreviewImageRequest(
+                key: ResourceCacheKey(scope: "shared", category: "help-images",
+                    identity: id + ":" + AppVersionInformation.version), url: nil, maxPixelSize: 1024,
+                validateURL: { $0.scheme == "https" && $0.host?.hasSuffix(".aliyuncs.com") == true },
+                refreshURL: {
+                    struct Link: Decodable { let url: String }
+                    let link: Link = try await HelpFeedbackService.shared.request("help/images/\(id)/url/?version=\(AppVersionInformation.version)")
+                    return URL(string: link.url)
+                }))
+                .accessibilityLabel(alt.isEmpty ? "帮助示意图" : alt)
             if !alt.isEmpty { Text(alt).font(.caption).foregroundStyle(.secondary) }
-        }.task { await load() }
-    }
-    private func load() async {
-        struct Link:Decodable {let url:String}
-        do {
-            let link:Link = try await HelpFeedbackService.shared.request("help/images/\(id)/url/?version=\(AppVersionInformation.version)")
-            guard let u=URL(string:link.url),u.scheme=="https",u.host?.hasSuffix(".aliyuncs.com")==true else {throw HelpFailure("图片地址不可用")}
-            url=u;error=nil
-        } catch { self.error="图片加载失败，联网后可重试" }
+        }
     }
 }

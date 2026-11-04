@@ -178,7 +178,7 @@ final class PresetDownloadManager: ObservableObject {
             signedURLs.removeAll(); browseCache.removeAll(); rebuildAvailability()
         }
     }
-    func request(_ path: String, body: [String: [String]]? = nil, allowETag: Bool = false, queryItems: [URLQueryItem]? = nil) async throws -> Data {
+    func request(_ path: String, body: [String: [String]]? = nil, allowETag: Bool = false, queryItems: [URLQueryItem]? = nil, onCached: ((Data) -> Void)? = nil, forceRefresh: Bool = false) async throws -> Data {
         guard let engine else { throw URLError(.userAuthenticationRequired) }
         let cacheable = body == nil && ["search/", "taxonomy/"].contains(path)
         let request = SupportNetworkRequest(method: body == nil ? .get : .post,
@@ -198,7 +198,7 @@ final class PresetDownloadManager: ObservableObject {
         if cacheable {
             var parts = URLComponents(); parts.path = path; parts.queryItems = queryItems
             return try await CatalogResponseCache.shared.load(owner: context, domain: "presets",
-                path: engine.serviceBaseURL.absoluteString + "/presets/" + (parts.string ?? path), fetch: fetch)
+                path: engine.serviceBaseURL.absoluteString + "/presets/" + (parts.string ?? path), forceRefresh: forceRefresh, onCached: onCached, fetch: fetch)
         }
         return try await fetch()
     }

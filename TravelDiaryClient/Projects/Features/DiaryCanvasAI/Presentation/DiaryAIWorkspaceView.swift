@@ -338,7 +338,7 @@ struct DiaryAIInlinePanel: View {
                     }
                 }.buttonStyle(.borderedProminent).controlSize(.large)
                 .fixedSize(horizontal: true, vertical: false)
-                .disabled(!workspace.active || workspace.addingMaterials || !workspace.preparingPhotos.isEmpty)
+                .disabled(!workspace.active || workspace.saving || workspace.addingMaterials || !workspace.preparingPhotos.isEmpty)
             }
         }.padding(16).frame(maxWidth: .infinity).background(DiaryLibraryStyle.background)
             .tint(Color(red: 0.24, green: 0.39, blue: 0.34))
@@ -346,7 +346,10 @@ struct DiaryAIInlinePanel: View {
                 controller.restoreIfNeeded()
                 design = controller.form(action).design ?? workspace.currentDesign ?? .init()
                 onDesign(design)
-                started = workspace.running || workspace.version > 0 && workspace.pending.isEmpty
+                started = workspace.hasStartedWork
+            }
+            .onChange(of: workspace.active) { _, active in
+                if active { started = workspace.hasStartedWork }
             }
             .onChange(of: controller.restored) { _, restored in
                 if restored { design = controller.form(action).design ?? workspace.currentDesign ?? .init() }

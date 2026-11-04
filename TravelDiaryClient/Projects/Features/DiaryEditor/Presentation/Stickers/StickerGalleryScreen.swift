@@ -85,6 +85,7 @@ struct MaterialResourceImage: View {
     let resource: MaterialImageResource?
     var libraryID: String? = nil
     var version: Int? = nil
+    var maxPixelSize: Int = 512
     @State private var bitmap: UIImage?
     @State private var displayedID: String?
     @State private var failed = false
@@ -101,19 +102,11 @@ struct MaterialResourceImage: View {
             }
         }.task(id: (resource?.sha256 ?? "") + String(retry)) {
             failed = false
-            guard var resource else { return }
+            guard let resource else { return }
             if displayedID != resource.sha256 { bitmap = nil; displayedID = resource.sha256 }
-            let imageRequest = PreviewImageRequest(key: ResourceCacheKey(scope: "shared", category: "material-images", identity: resource.sha256), url: URL(string: resource.url), maxPixelSize: 2048)
-            if let image = PreviewImagePipeline.shared.cached(imageRequest) { bitmap = image; return }
+            let imageRequest = MaterialPreviewRequests.cover(resource, libraryID: libraryID, version: version, pixels: maxPixelSize)
             do {
-                let data: Data
-                do { data = try await MaterialImageCache.shared.load(resource) }
-                catch {
-                    guard let libraryID, let version else { throw error }
-                    resource = try await MaterialCatalogRepository.shared.refreshPreview(resourceID:resource.resource_id,libraryID:libraryID,version:version)
-                    data = try await MaterialImageCache.shared.load(resource)
-                }
-                let image = try await PreviewImagePipeline.shared.decoded(data, request: imageRequest)
+                let image = try await PreviewImagePipeline.shared.load(imageRequest)
                 try Task.checkCancellation(); bitmap = image
             } catch { if !Task.isCancelled { failed = true } }
         }
@@ -129,7 +122,7 @@ private struct MaterialLargePreview: View {
     var body: some View {
         NavigationStack {
             ScrollView([.horizontal,.vertical]) {
-                MaterialResourceImage(resource:resource,libraryID:library.id,version:library.version)
+                MaterialResourceImage(resource:resource,libraryID:library.id,version:library.version, maxPixelSize: 2048)
                     .frame(width: 350 * scale * magnification, height: 350 * CGFloat(resource.height) / CGFloat(max(1,resource.width)) * scale * magnification)
                     .gesture(MagnifyGesture().updating($magnification) { value,state,_ in state=value.magnification }.onEnded { scale=min(5,max(1,scale*$0.magnification)) })
             }.navigationTitle("贴纸展示").toolbar { Button("完成") { dismiss() } }
@@ -243,7 +236,7 @@ struct StickerGalleryScreen: View {
                         }
                     }
                 }.buttonStyle(.plain)
-                if loading { ProgressView() }
+                if loading && packs.isEmpty && stickers.isEmpty { ProgressView() }
                 if let cursor { DiaryPaginationFooter(token: filter + "|" + cursor, loading: loading, error: error) { await load(more: true) } }
                 if !loading && packs.isEmpty && stickers.isEmpty && error == nil {
                     ContentUnavailableView("暂无贴纸", systemImage: "square.grid.2x2", description: Text(mine ? "把喜欢的贴纸包加入这里，或收藏单张贴纸。" : "试试其他关键词。"))
@@ -270,13 +263,19 @@ struct StickerGalleryScreen: View {
         .safeAreaInset(edge: .bottom) {
             if managing { Button("移除所选（\(selection.count)）") { Task { await removeSelected() } }.buttonStyle(.borderedProminent).disabled(selection.isEmpty || removing).padding().frame(maxWidth: .infinity).background(.regularMaterial) }
         }
-        .task(id: filter) { do { try await Task.sleep(for: .milliseconds(300)); await load() } catch { } }
+        .task(id: packs.map { $0.id + ":" + String($0.version) }.joined(separator: "|"), priority: .background) {
+            await Task.yield()
+            await PreviewImagePipeline.shared.prefetch(packs.prefix(8).compactMap { pack in
+                pack.cover.map { MaterialPreviewRequests.cover($0, libraryID: pack.id, version: pack.version) }
+            })
+        }
+        .task(id: filter) { do { if !query.isEmpty { try await Task.sleep(for: .milliseconds(300)) }; await load() } catch { } }
         .onChange(of: repository.owner) { _, _ in packs=[];stickers=[];featuredStickers=[];selection=[];cursor=nil;requestID=UUID() }
         .onChange(of: repository.changeID) { _, _ in Task { await load() } }
         .onChange(of: mode) { _, _ in selection = [] }
         .refreshable { await load(forceRefresh: true); if isHome { await loadFeaturedStickers(forceRefresh: true) } }
         .task(id: "\(repository.owner)|\(repository.changeID)") { if isHome { await loadFeaturedStickers() } }
-        .task { if !mine { tags = (try? await repository.request("tags/")) ?? [] } }
+        .task { if !mine { let owner = repository.owner; let loaded: [String]? = try? await repository.request("tags/", onCached: { (cached: [String]) in if repository.owner == owner { tags = cached } }); if repository.owner == owner, let loaded { tags = loaded } } }
         .sheet(isPresented:$showCache) { MaterialCacheScreen() }
         .sheet(item: $preview, onDismiss: {
             guard let item = itemToUse else { return }
@@ -515,7 +514,7 @@ struct StickerPackDetailScreen: View {
                 if let error { DiaryLibraryNotice(message: error) { Task { await load() } } }
                 ForEach(library.previews ?? []) { image in
                     Button { largePreview=image } label: {
-                        MaterialResourceImage(resource: image,libraryID:library.id,version:library.version).aspectRatio(CGFloat(image.width)/CGFloat(max(1,image.height)),contentMode: .fit)
+                        MaterialResourceImage(resource: image,libraryID:library.id,version:library.version, maxPixelSize: 2048).aspectRatio(CGFloat(image.width)/CGFloat(max(1,image.height)),contentMode: .fit)
                             .contentZoomSource(id: image.id, in: packPreviewTransition)
                     }.buttonStyle(.plain)
                 }
@@ -546,7 +545,7 @@ struct StickerPackDetailScreen: View {
                     .disabled(library.availability == "unavailable")
             }.padding().background(.regularMaterial)
         }
-        .task(id:query + "|" + category) { do { try await Task.sleep(for:.milliseconds(300)); await load() } catch {} }
+        .task(id:query + "|" + category) { do { if !query.isEmpty { try await Task.sleep(for:.milliseconds(300)) }; await load() } catch {} }
         .sheet(item: $largePreview) { resource in
             MaterialLargePreview(resource: resource, library: library)
                 .contentZoomTransition(sourceID: resource.id, in: packPreviewTransition)
@@ -703,8 +702,10 @@ private struct MaterialCacheScreen: View {
             try await PresetDownloadManager.shared.clearMaterialCache()
             try await MaterialImageCache.shared.clear()
             try await MaterialThumbnailCache.shared.clear()
-            let scope = StoragePaths.scopeKey(MaterialCatalogRepository.shared.owner)
+            let owner = MaterialCatalogRepository.shared.owner
+            let scope = StoragePaths.scopeKey(owner)
             ResourceCache.shared.clear(scope: scope, category: "material-catalog")
+            CatalogResponseCache.shared.invalidate(owner: owner, domain: "materials")
             PreviewImagePipeline.shared.clearMemory()
             let catalog=roots().last!
             try await Task.detached(priority:.utility) { if FileManager.default.fileExists(atPath:catalog.path) { try FileManager.default.removeItem(at:catalog) } }.value

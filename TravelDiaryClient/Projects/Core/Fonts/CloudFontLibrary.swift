@@ -156,7 +156,9 @@ actor FontDownloadManager {
         } else {
             bytes = try await fetch()
             if path.hasSuffix("/favorite/") || path.hasSuffix("/claim/") {
-                CatalogResponseCache.shared.invalidate(owner: owner, domain: "fonts")
+                if path.hasSuffix("/favorite/") {
+                    await CatalogResponseCache.shared.markStale(owner: owner, domain: "fonts")
+                } else { CatalogResponseCache.shared.invalidate(owner: owner, domain: "fonts") }
                 catalogRevision = UUID()
             }
         }

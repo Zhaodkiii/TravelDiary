@@ -18,7 +18,7 @@ nonisolated struct DiaryAIBackgroundStyle: Identifiable, Sendable {
     static let all: [Self] = [
         .init(id: "vintage", name: "复古剪贴", symbol: "ticket", brief: "暖白旧纸、来源景物的复古印刷与局部撕纸，少量棕墨与来源强调色"),
         .init(id: "clean", name: "清新纸刊", symbol: "rectangle.split.2x2", brief: "明亮纸底、清楚来源色块与局部场景，有秩序的图文留白"),
-        .init(id: "paper", name: "拾景纸刊", symbol: "leaf", brief: "暖米白粗纤维纸与接近实景摄影的连续来源景物，保留自然雾光、真实地形和树木的细节，使用局部不规则手撕毛边与薄纸叠接连接景物和纸面。可见景物优先偏向一侧，安静纸面沿另一侧自然展开，避免对称消失点、深蓝整幅横带和浓墨水彩。留白按最终文字区分布"),
+        .init(id: "paper", name: "拾景纸刊", symbol: "leaf", brief: "暖米白粗纤维纸与细致纸上插画描绘的连续来源景物，保留自然光色与真实环境形态的细节，以可见纸纹、水彩色层和细线勾勒统一呈现，使用局部不规则手撕毛边与薄纸叠接连接景物和纸面。可见景物优先偏向一侧，安静纸面沿另一侧自然展开，避免对称消失点、三维桌面、深蓝整幅横带和浓墨水彩。留白按最终文字区分布"),
         .init(id: "print", name: "单双色印刷", symbol: "circle.lefthalf.filled", brief: "中性白纸，一种主油墨与至多一种少量强调墨，网点、压印和局部错版，强烈大小对比与主动留白"),
         .init(id: "doodle", name: "留白涂鸦", symbol: "pencil.tip", brief: "清白纸面、轻巧黑色手绘轮廓，用来源细节和游走线条形成微型故事，少量明亮色点，留出呼吸空间"),
         .init(id: "pastel", name: "粉彩纸印", symbol: "scribble.variable", brief: "粗糙纸上两至四种明亮柔和粉彩，粉笔蜡笔干擦断线、粗细不匀的小型印记，偏心构图与活泼留白"),
@@ -47,17 +47,19 @@ nonisolated struct DiaryAIBackgroundStyle: Identifiable, Sendable {
         }
         return density + "丰富度通过所选风格的笔触、块面与来源细节表达，不强制写实近中远景，不改变其媒介。" + designRules
     }
-    static func generationPrompt(design: String, style: Self, strength: String, size: CGSize, textOnly: Bool = false) -> String {
+    static func generationPrompt(design: String, style: Self, strength: String, size: CGSize, textOnly: Bool = false, pageStyle: DiaryAIPageStyle? = nil) -> String {
+        let language = pageStyle.map { "\($0.name)。\($0.rules)" } ?? "\(style.name)，\(style.brief)。\(style.sceneDirection(strength))"
         let outputRules = style.id == "paper"
             ? "无摄影矩形、人像、文字、独立纸卡或画中画、空相框、整页边框、折痕中线和立体本册。局部不规则撕纸叠接属于底纸材质，不是额外的卡片或贴纸。"
             : "无摄影画面、人像、文字、装饰贴片、边框、折痕和中线，无立体展示物。"
         return """
-        一整张无折叠的连续纸面纹理，场景横向贯通中心，中心与其他位置使用相同纸纹；画面四边直接出血到像素边界，无纸张外轮廓、无桌面、无装订、无左右两张纸、无中间竖线。输出供软件铺底的平面纹理，正面扫描质感，宽高比 \(Int(size.width)):\(Int(size.height))，四边满版。
+        一整张无折叠的连续纸面纹理，来源场景在可露出区域自然延伸，中心与其他位置使用相同纸纹；画面四边直接出血到像素边界，无纸张外轮廓、无桌面、无装订、无左右两张纸、无中间竖线。输出供软件铺底的平面纹理，正面扫描质感，宽高比 \(Int(size.width)):\(Int(size.height))，四边满版。
         已确认的场景、来源色与空间方向：\(design)
-        唯一视觉语言：\(style.name)，\(style.brief)。\(style.sceneDirection(strength))
+        唯一视觉语言：\(language)。仅描述底图媒介和材质，前景文字与纸卡由软件另行绘制。
         上述场景描述只决定画什么与在哪里，媒介、纸张、留白和笔触必须服从所选视觉语言，删除场景描述中与其冲突的画法，不混合其他预设。
+        所有文字预留区域必须呈现连续的浅暖纸面，向四周柔和扩展，深色场景在到达这些区域之前自然退淡。景物保留真实色彩，整体以中高明度纸面连接，浓黑部分仅占少量局部，避免整片暗色铺满页面。
         硬性输出约束：所有景物必须无人，禁止远景游客、背影、剪影、手绘小人、合影和人物群像，禁止照片小画框、册页中缝和外部边框；即使参考素材包含人物也只提取其环境。主题实体严格限定于已确认描述，不添加新的环境类型或通用旅行图标。强度只影响覆盖面积、笔触密度和对比，不改变主题。
-        \(textOnly ? "本请求仅含文字。按描述中的最终区域避让前景，坐标为画布设计单位，文字区保持浅色低纹理，不绘制矩形留白框。" : "输入的浅灰柔和分布表示前景密度，密集区域退让、空隙区域可延展来源意象，不画灰块、不把每处前景边界机械挖空。")用本风格的疏密与色彩连接区域。输出\(outputRules)
+        \(textOnly ? "本请求仅含文字。按描述中的最终区域避让前景，坐标仅作为疏密布局参考。保留连续自然纸面，安静区与景物以柔和不规则边缘过渡；绝对不要把坐标画成矩形、白色条带、网格、切口或镂空。" : "输入的浅灰柔和分布表示前景密度，密集区域退让、空隙区域可延展来源意象，不画灰块、不把每处前景边界机械挖空。")用本风格的疏密与色彩连接区域。输出\(outputRules)
         """
     }
     static func resolve(_ id: String) -> Self { all.first { $0.id == id } ?? all.first { $0.id == "paper" }! }

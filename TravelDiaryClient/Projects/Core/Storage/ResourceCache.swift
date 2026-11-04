@@ -143,11 +143,27 @@ nonisolated final class ResourceCache: @unchecked Sendable {
         touch(id: key.id)
         return url
     }
+    /// Mutate only indexed cache bytes under the same lock as eviction and clearing.
+    func transform(scope: String, category: String, _ update: (Data) -> Data?) {
+        locked {
+            for entry in entries() where entry.scope == scope && entry.category == category {
+                guard isSafe(entry.url), let data = try? Data(contentsOf: entry.url), let replacement = update(data) else { continue }
+                do {
+                    try activity.exclusively(entry.url) { try replacement.write(to: entry.url, options: .atomic) }
+                    execute("UPDATE entries SET bytes=? WHERE id=?", [String(replacement.count), entry.id])
+                } catch { }
+            }
+            trim()
+        }
+    }
     func data(for key: ResourceCacheKey) -> Data? {
         locked {
-            guard let url = fileURL(key) else { return nil }
+            guard let url = fileURL(key) else { ResourceLoadMetrics.shared.record(key, "disk.miss"); return nil }
+            let start = ProcessInfo.processInfo.systemUptime
             let lease = activity.acquire(url); defer { withExtendedLifetime(lease) {} }
-            return try? Data(contentsOf: url)
+            let data = try? Data(contentsOf: url)
+            ResourceLoadMetrics.shared.record(key, data == nil ? "disk.read.failed" : "disk.hit", since: start, bytes: data?.count ?? 0)
+            return data
         }
     }
     func touch(_ key: ResourceCacheKey) { locked { if fileURL(key) != nil { touch(id: key.id) } } }
@@ -170,10 +186,10 @@ nonisolated final class ResourceCache: @unchecked Sendable {
         locked {
             openIfNeeded()
             guard database != nil, expectedGeneration == nil || expectedGeneration == generation(for: key),
-                  Int64(data.count) <= limit, limit > 0 else { return nil }
+                  Int64(data.count) <= limit, limit > 0 else { ResourceLoadMetrics.shared.record(key, "write.rejected"); return nil }
             let old = entry(where: "id", value: key.id)
-            trim(incoming: Int64(data.count), excluding: old.map { [$0.id] } ?? [])
-            guard totalBytes + Int64(data.count) <= limit else { return nil }
+            trim(incoming: max(0, Int64(data.count) - (old?.bytes ?? 0)), excluding: old.map { [$0.id] } ?? [])
+            guard totalBytes - (old?.bytes ?? 0) + Int64(data.count) <= limit else { ResourceLoadMetrics.shared.record(key, "write.capacity"); return nil }
             let url = root.appendingPathComponent("Files/\(StoragePaths.digest(key.scope))/\(UUID().uuidString).cache")
             do {
                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -182,8 +198,9 @@ nonisolated final class ResourceCache: @unchecked Sendable {
                     try? FileManager.default.removeItem(at: url); return nil
                 }
                 if let old, old.url != url { try? activity.exclusively(old.url) { try FileManager.default.removeItem(at: old.url) } }
+                ResourceLoadMetrics.shared.record(key, "write.success", bytes: data.count)
                 return url
-            } catch { return nil }
+            } catch { ResourceLoadMetrics.shared.record(key, "write.failed"); return nil }
         }
     }
 
@@ -254,7 +271,16 @@ nonisolated final class ResourceCache: @unchecked Sendable {
         var remaining = totalBytes
         guard remaining + incoming > limit else { return }
         let target = max(0, limit - limit / 10 - incoming)
-        for entry in entries().sorted(by: { $0.accessedAt < $1.accessedAt }) where remaining > target && !excluding.contains(entry.id) {
+        let all = entries()
+        let catalogBytes = all.filter { $0.category.hasPrefix("catalog-") }.reduce(Int64(0)) { $0 + $1.bytes }
+        let reserve = min(16 * 1024 * 1024, limit / 10)
+        let ordered = all.sorted {
+            let a = $0.category.hasPrefix("catalog-") && catalogBytes <= reserve
+            let b = $1.category.hasPrefix("catalog-") && catalogBytes <= reserve
+            if a != b { return !a }
+            return $0.accessedAt < $1.accessedAt
+        }
+        for entry in ordered where remaining > target && !excluding.contains(entry.id) {
             if remove(id: entry.id) { remaining -= entry.bytes }
         }
     }

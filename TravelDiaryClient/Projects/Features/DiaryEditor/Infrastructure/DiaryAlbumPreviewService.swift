@@ -28,7 +28,10 @@ nonisolated struct DiaryAlbumPreviewRequest: Equatable, Sendable {
     static func load(_ url: URL, maximumDimension: Int = 128) async -> UIImage? {
         let dimension = min(1024, max(64, maximumDimension))
         let key = "\(url.path):\(dimension)"
-        if let image = cache.object(forKey: key as NSString) { return image }
+        let metricKey = ResourceCacheKey(scope: "local-preview", category: "album-thumbnails", identity: key)
+        let start = ProcessInfo.processInfo.systemUptime
+        defer { ResourceLoadMetrics.shared.record(metricKey, "image.load.finished", since: start) }
+        if let image = cache.object(forKey: key as NSString) { ResourceLoadMetrics.shared.record(metricKey, "image.memory.hit"); return image }
         let work: Task<UIImage?, Never>
         if let existing = pending[key] { work = existing }
         else {

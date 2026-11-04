@@ -23,6 +23,13 @@ extension DiaryPageRenderer {
         let style = layer.textAppearance ?? DiaryTextAppearance()
         if let paper = style.paper {
             guard paper.kind != .none else { return .zero }
+            if paper.kind.isGarden, let name = paper.kind.assetName, let image = UIImage(named: name) {
+                let cardHeight = layer.size.width * image.size.height / image.size.width
+                let isTag = paper.kind == .gardenLilyTag
+                return UIEdgeInsets(top: cardHeight * (isTag ? 0.32 : 0.25),
+                                    left: layer.size.width * (isTag ? 0.56 : 0.23),
+                                    bottom: cardHeight * 0.22, right: layer.size.width * 0.15)
+            }
             return UIEdgeInsets(top: layer.fontSize * (paper.verticalPadding + (paper.kind.assetName == nil ? 0 : 0.55)), left: layer.fontSize * (paper.horizontalPadding + (paper.kind.assetName == nil ? 0 : 0.55)),
                                 bottom: layer.fontSize * (paper.verticalPadding + (paper.kind.assetName == nil ? 0 : 0.55)), right: layer.fontSize * (paper.horizontalPadding + (paper.kind.assetName == nil ? 0 : 0.55)))
         }
@@ -40,7 +47,11 @@ extension DiaryPageRenderer {
             with: CGSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: textStyle(layer), context: nil)
         let naturalHeight = max(ceil(measured.height), layer.fontSize * 1.2) + padding.top + padding.bottom
-        let height = max(naturalHeight, CGFloat(layer.textAppearance?.minimumCardHeight ?? 0))
+        var height = max(naturalHeight, CGFloat(layer.textAppearance?.minimumCardHeight ?? 0))
+        if let paper = layer.textAppearance?.paper, paper.kind.isGarden,
+           let name = paper.kind.assetName, let image = UIImage(named: name) {
+            height = max(height, layer.size.width * image.size.height / image.size.width)
+        }
         let effect: CGFloat = max(CGFloat(layer.textAppearance?.paper?.kind == DiaryTextPaper.Kind.none ? 0 : (layer.textAppearance?.paper?.shadow ?? 0)) * 24, max(CGFloat(layer.textAppearance?.shadowRadius ?? 0) * 2,
                                   layer.fontSize * CGFloat(layer.textAppearance?.strokeWidth ?? 0) / 100))
         return CGRect(x: -effect, y: -effect, width: layer.size.width + effect * 2, height: height + effect * 2)
@@ -59,7 +70,7 @@ extension DiaryPageRenderer {
         defer { context.restoreGState() }
         drawTextDecoration(style, rect: rect, in: context)
         var textRect = rect.inset(by: textInsets(layer))
-        if style.minimumCardHeight != nil {
+        if style.minimumCardHeight != nil || style.paper?.kind.isGarden == true {
             let measured = (displayedText(layer) as NSString).boundingRect(
                 with: CGSize(width: max(1, textRect.width), height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: textStyle(layer), context: nil)
@@ -135,6 +146,13 @@ extension DiaryPageRenderer {
         guard paper.kind != .none else { return }
         let r = rect.insetBy(dx: 2, dy: 2)
         if let name = paper.kind.assetName, let source = UIImage(named: name) {
+            if paper.kind.isGarden {
+                let naturalHeight = r.width * source.size.height / source.size.width
+                if abs(r.height - naturalHeight) < max(8, naturalHeight * 0.03) {
+                    source.draw(in: r)
+                    return
+                }
+            }
             // Nine slices preserve corner illustrations and torn edges while extending the paper interior.
             let ratio = min(1, min(r.height / source.size.height, r.width / source.size.width))
             let size = CGSize(width: max(1, source.size.width * ratio), height: max(1, source.size.height * ratio))

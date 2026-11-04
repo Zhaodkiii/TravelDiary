@@ -36,6 +36,34 @@ final class CatalogResponseCacheTests {
         let forced = try await cache.load(owner: "a", domain: "fonts", path: "/list", forceRefresh: true) { Data([3]) }
         XCTAssertEqual(forced, Data([3]))
     }
+    @Test func softInvalidationKeepsSnapshotAcrossRestartButRevalidates() async throws {
+        _ = try await cache.load(owner: "a", domain: "materials", path: "/list") { Data([1]) }
+        await cache.markStale(owner: "a", domain: "materials")
+        let restarted = CatalogResponseCache(cache: disk, now: { self.clock })
+        var received = false
+        let result = try await restarted.load(owner: "a", domain: "materials", path: "/list", onCached: {
+            received = true; XCTAssertEqual($0, Data([1]))
+        }) {
+            XCTAssertTrue(received)
+            return Data([2])
+        }
+        XCTAssertEqual(result, Data([2]))
+    }
+    @Test func policyRetentionAndOfflinePhasesAreExplicit() async throws {
+        _ = try await cache.load(owner: "a", domain: "help", path: "/list") { Data([1]) }
+        clock.addTimeInterval(8 * 24 * 3600)
+        var phases: [CatalogLoadPhase] = []
+        let result = try await cache.load(owner: "a", domain: "help", path: "/list", policy: .reference,
+            onPhase: { phases.append($0) }) { throw URLError(.notConnectedToInternet) }
+        XCTAssertEqual(result, Data([1]))
+        XCTAssertEqual(phases.count, 4)
+        guard case .offline = phases.last else { return XCTFail("expected offline phase") }
+        do {
+            _ = try await cache.load(owner: "a", domain: "help", path: "/list") { throw URLError(.notConnectedToInternet) }
+            XCTFail("standard retention must reject an eight-day-old snapshot")
+        } catch is URLError { }
+    }
+
     @Test func testAccountPageAndFilterIsolation() async throws {
         _ = try await cache.load(owner: "a", domain: "fonts", path: "/list?page=1") { Data([1]) }
         for (owner, path) in [("b", "/list?page=1"), ("a", "/list?page=2"), ("a", "/list?page=1&q=other")] {

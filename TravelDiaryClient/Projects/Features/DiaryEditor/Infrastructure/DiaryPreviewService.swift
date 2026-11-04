@@ -13,7 +13,10 @@ enum DiaryPreviewService {
         // 不把任意账号的页面图缓存在同一个 pageID 键下；磁盘缓存由 Store 额外隔离账号和本。
         try Task.checkCancellation()
         let identity = "\(store.previewScope)-\(page.id)-\(page.revisionID)-\(large)"
-        if let image = cache.object(forKey: identity as NSString) { return image }
+        let metricKey = ResourceCacheKey(scope: "local-preview", category: "diary-page-previews", identity: identity)
+        let start = ProcessInfo.processInfo.systemUptime
+        defer { ResourceLoadMetrics.shared.record(metricKey, "image.load.finished", since: start) }
+        if let image = cache.object(forKey: identity as NSString) { ResourceLoadMetrics.shared.record(metricKey, "image.memory.hit"); return image }
         let work: Task<UIImage, Error>
         if let existing = pending[identity] { work = existing }
         else {
@@ -30,11 +33,15 @@ enum DiaryPreviewService {
     }
 
     private static func generate(page: DiaryPageEntry, store: DiaryDocumentStore, large: Bool, key: NSString) async throws -> UIImage {
-        if let data = try await store.cachedPreview(page, large: large), let image = UIImage(data: data) {
+        let metricKey = ResourceCacheKey(scope: "local-preview", category: "diary-page-previews", identity: key as String)
+        if let data = try await store.cachedPreview(page, large: large),
+           let image = try? await Task.detached(operation: { try PreviewImagePipeline.decode(data, pixels: large ? 1800 : 480) }).value {
+            ResourceLoadMetrics.shared.record(metricKey, "image.disk.hit", bytes: data.count)
             try Task.checkCancellation()
             cache.setObject(image, forKey: key, cost: (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0))
             return image
         }
+        let renderStart = ProcessInfo.processInfo.systemUptime
         let source = try await store.loadPreviewSource(page, large: large)
         try Task.checkCancellation()
         let size = source.document.root.referenceSize
@@ -43,6 +50,7 @@ enum DiaryPreviewService {
         let image = UIGraphicsImageRenderer(size: size, format: format).image { renderer in
             DiaryPageRenderer.draw(source.document, images: source.images, in: renderer.cgContext, cacheObjects: false)
         }
+        ResourceLoadMetrics.shared.record(metricKey, "image.render", since: renderStart)
         cache.setObject(image, forKey: key, cost: (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0))
         // 串行后台编码控制峰值内存；磁盘缓存失败不影响已交付的图片。
         Task.detached(priority: .utility) {

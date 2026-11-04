@@ -88,5 +88,41 @@
     "postScriptName": "LXGWMarkerGothic-Regular",
     "relativePath": "fonts/LXGWMarkerGothic-Regular.ttf",
     "sha256": "b26c5a81a7a0bb06ed417474e0be6880c7558ec7ccb5b914dba2eb61a96de1ed"
+  },
+  {
+    "id": "display.tsanger-heading",
+    "version": "1",
+    "displayName": "仓耳周珂正大榜书",
+    "category": "display",
+    "postScriptName": "TsangerZhoukeZhengdabangshu",
+    "relativePath": "fonts/仓耳周珂正大榜书.ttf",
+    "sha256": "598e95ff626957ca26c74eae412b14394fcf5062c2cd17453d18cdb69843d695"
+  },
+  {
+    "id": "display.douyin-bold",
+    "version": "1",
+    "displayName": "抖音美好体",
+    "category": "display",
+    "postScriptName": "DOUYINSANSBOLD-GB",
+    "relativePath": "fonts/DouyinSansBold.ttf",
+    "sha256": "fbecfacdfac33982774e301073a8d357a09c698cd3134bb6ddec0f5bfc268fa1"
+  },
+  {
+    "id": "display.smiley-sans",
+    "version": "1",
+    "displayName": "得意黑",
+    "category": "display",
+    "postScriptName": "SmileySans-Oblique",
+    "relativePath": "fonts/SmileySans-Oblique.ttf",
+    "sha256": "b447d7e781f08bc95c4c9f23ba71ed2b8ebb639aa7184485c71c4ca5afcd25c4"
+  },
+  {
+    "id": "display.zcool-kuaile",
+    "version": "1",
+    "displayName": "站酷快乐体",
+    "category": "display",
+    "postScriptName": "ZCOOLKuaiLe-Regular",
+    "relativePath": "fonts/ZCOOLKuaiLe-Regular.ttf",
+    "sha256": "812a6fc1fe54b6d73a419245c32dfeba8aa33104d5be90d1cf6af082007cb71d"
   }
 ]

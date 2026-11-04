@@ -63,7 +63,7 @@ struct DiaryEditorScreen: View {
                 Button("保存已完成部分") { Task { _ = await session.aiWorkspace.save() } }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("还有待排素材。保存当前画布后，待排素材会保留在项目中，但不会显示在作品和导出中。")
+                Text("制作尚未全部完成。将当前画布保存为作品，未完成步骤不会自动执行；待排素材保留在项目中，不显示在作品和导出中。")
             }
             .confirmationDialog("删除当前草稿并新建？", isPresented: $confirmsNewPage, titleVisibility: .visible) {
                 Button("删除当前草稿并新建", role: .destructive) { newPage() }
@@ -196,6 +196,14 @@ struct DiaryEditorScreen: View {
                 .disabled(enteringCreation || !creationEntered || creatingNewPage || session.busy || importingCameraPhotos || session.aiWorkspace.addingMaterials)
             }
             if aiMode {
+                if session.aiWorkspace.enteredFromDraft {
+                    Button(session.aiWorkspace.saving ? "保存中…" : "保存作品") {
+                        if session.aiWorkspace.hasUnfinishedWork { confirmsSaveAIWork = true }
+                        else { Task { _ = await session.aiWorkspace.save() } }
+                    }
+                    .disabled(!session.aiWorkspace.canSaveWork)
+                    .accessibilityIdentifier("diary.ai.save-work")
+                }
                 Menu {
                     if session.aiWorkspace.version > 0 && session.aiWorkspace.pending.isEmpty {
                         Button(aiCompare ? "查看当前作品" : "对比原版", systemImage: "rectangle.on.rectangle") { aiCompare.toggle() }

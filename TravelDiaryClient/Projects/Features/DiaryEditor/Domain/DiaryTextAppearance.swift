@@ -74,13 +74,20 @@ nonisolated enum DiaryTitleLayout: String, Codable, CaseIterable, Identifiable, 
 
 nonisolated struct DiaryTextPaper: Codable, Equatable, Sendable {
     enum Kind: String, Codable, CaseIterable, Identifiable, Sendable {
-        case none, torn, tape, note, warmHeart, blueTape, pinkWish, titleParchment, lavenderStrip, pinkHeart, botanicalLine, coralUnderline, kraftStrip
+        case none, torn, tape, note, warmHeart, blueTape, pinkWish, titleParchment, lavenderStrip, pinkHeart, botanicalLine, coralUnderline, kraftStrip, gardenLavender, gardenStrawberry, gardenLily, gardenLilyTag, gardenClover, gardenBlueTicket
+        var isGarden: Bool { rawValue.hasPrefix("garden") }
         var assetName: String? { [.none, .torn, .tape, .note].contains(self) ? nil : "TextPaper-" + rawValue }
         var id: Self { self }
         var title: String {
             switch self { case .none: "无背景"; case .torn: "手撕纸"; case .tape: "胶带"; case .note: "便签"
             case .warmHeart: "暖纸爱心"; case .blueTape: "蓝胶带纸卡"; case .pinkWish: "粉色心愿"
             case .titleParchment: "层叠标题纸"; case .lavenderStrip: "薰衣草纸条"; case .pinkHeart: "粉纸手绘心"
+            case .gardenLavender: "薰衣草清单"
+            case .gardenStrawberry: "草莓便签"
+            case .gardenLily: "铃兰花笺"
+            case .gardenLilyTag: "铃兰吊牌"
+            case .gardenClover: "三叶草标签"
+            case .gardenBlueTicket: "蓝花票笺"
             case .botanicalLine: "植物划线卡"; case .coralUnderline: "珊瑚划线纸"; case .kraftStrip: "牛皮纸条"
             }
         }

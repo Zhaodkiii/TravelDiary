@@ -4,9 +4,13 @@ struct PersonalStickerGrid: View {
     var query: String
     var onCreate: () -> Void
     var onSelect: (PersonalSticker, Data) async -> Void
+    @ObservedObject private var repository = MaterialCatalogRepository.shared
+    @State private var requestID = UUID()
+    @State private var displayedOwner = ""
     @State private var items: [PersonalSticker] = []
     @State private var next: Int?
     @State private var loading = false
+    @State private var selecting = false
     @State private var error: String?
     @Environment(\.dynamicTypeSize) private var typeSize
     var body: some View {
@@ -20,30 +24,36 @@ struct PersonalStickerGrid: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: typeSize.isAccessibilitySize ? 2 : 4)) {
                 ForEach(items) { sticker in
                     Button { Task { await select(sticker) } } label: {
-                        AsyncImage(url: sticker.url) { image in image.resizable().scaledToFit() } placeholder: { ProgressView() }
+                        CachedPreviewImage(request: PersonalStickerService.imageRequest(sticker))
                             .frame(height: 88).frame(maxWidth: .infinity).padding(6)
                             .background(.background, in: RoundedRectangle(cornerRadius: 12))
-                    }.disabled(loading).accessibilityLabel("添加我制作的贴纸")
+                    }.disabled(selecting).accessibilityLabel("添加我制作的贴纸")
                         .contextMenu { Button("从我的贴纸删除", role: .destructive) { Task { await remove(sticker) } } }
                 }
             }
-            if loading { ProgressView().padding() }
+            if loading && items.isEmpty { ProgressView().padding() }
             if next != nil { Button("加载更多") { Task { await load(true) } }.disabled(loading) }
-        }.padding(.horizontal, 16).task(id: MaterialCatalogRepository.shared.owner) { await load(false) }
+        }.padding(.horizontal, 16).task(id: repository.owner) { await load(false) }
     }
     private func load(_ more: Bool) async {
+        let owner = repository.owner
+        if displayedOwner != owner { items = []; next = nil; displayedOwner = owner }
+        let stamp = UUID(); requestID = stamp
         loading = true; error = nil
-        defer { loading = false }
+        defer { if requestID == stamp { loading = false } }
         do {
-            let page = try await PersonalStickerService.list(offset: more ? next ?? 0 : 0)
+            let page = try await PersonalStickerService.list(offset: more ? next ?? 0 : 0, onCached: { cached in
+                if !more, repository.owner == owner, requestID == stamp { items = cached.items; next = cached.next }
+            })
+            guard repository.owner == owner, requestID == stamp, !Task.isCancelled else { return }
             var seen = Set<String>()
             items = (more ? items + page.items : page.items).filter { seen.insert($0.id).inserted }
             next = page.next
         }
-        catch { self.error = "无法加载我的贴纸，请检查登录状态或网络" }
+        catch { if repository.owner == owner, requestID == stamp, !CatalogLoadError.isCancellation(error) { self.error = "无法加载我的贴纸，请检查登录状态或网络" } }
     }
     private func select(_ sticker: PersonalSticker) async {
-        loading = true; defer { loading = false }
+        selecting = true; defer { selecting = false }
         let owner = MaterialCatalogRepository.shared.owner
         do { let data = try await PersonalStickerService.image(sticker); guard owner == MaterialCatalogRepository.shared.owner else { return }; await onSelect(sticker, data) }
         catch { self.error = "贴纸加载失败，请刷新后重试" }

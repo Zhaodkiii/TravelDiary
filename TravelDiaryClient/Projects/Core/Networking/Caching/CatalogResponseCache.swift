@@ -8,6 +8,7 @@ final class CatalogResponseCache {
     nonisolated struct Snapshot: Codable, Sendable {
         let data: Data
         let validatedAt: Date
+        var needsRefresh: Bool? = nil
     }
     private struct Pending {
         let id: UUID
@@ -37,33 +38,57 @@ final class CatalogResponseCache {
         revisions[group] = UUID()
         cache.clear(scope: StoragePaths.scopeKey(owner), category: "catalog-" + domain)
     }
+    /// Keep visible content after non-authoritative mutations (for example favorites).
+    /// Rights changes must still use invalidate, never this method.
+    func markStale(owner: String, domain: String) async {
+        let group = owner + "|" + domain
+        revisions[group] = UUID()
+        let scope = StoragePaths.scopeKey(owner)
+        await Task.detached { [cache] in
+            cache.transform(scope: scope, category: "catalog-" + domain) { data in
+                guard var snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return nil }
+                snapshot.needsRefresh = true
+                return try? JSONEncoder().encode(snapshot)
+            }
+        }.value
+    }
     func load(owner: String, domain: String, path: String, forceRefresh: Bool = false,
               onCached: ((Data) -> Void)? = nil, onOffline: (() -> Void)? = nil,
+              policy: CatalogCachePolicy = .standard, onPhase: ((CatalogLoadPhase) -> Void)? = nil,
               fetch: @escaping @MainActor () async throws -> Data) async throws -> Data {
         let key = key(owner: owner, domain: domain, path: path)
         let group = owner + "|" + domain
         let revision = revisions[group]
         let generation = cache.generation(for: key)
+        let started = ProcessInfo.processInfo.systemUptime
+        defer { ResourceLoadMetrics.shared.record(key, "catalog.load.finished", since: started) }
+        onPhase?(.loading)
         let snapshot = await Task.detached { [cache] in
             cache.data(for: key).flatMap { try? JSONDecoder().decode(Snapshot.self, from: $0) }
         }.value
         try Task.checkCancellation()
         guard revision == revisions[group], generation == cache.generation(for: key) else { throw CancellationError() }
-        let usable = snapshot.flatMap { now().timeIntervalSince($0.validatedAt) < Self.retention ? $0 : nil }
+        let usable = snapshot.flatMap { now().timeIntervalSince($0.validatedAt) < policy.retention ? $0 : nil }
         if let usable {
+            ResourceLoadMetrics.shared.record(key, "catalog.disk.hit", since: started, bytes: usable.data.count)
+            onPhase?(.cached)
             onCached?(usable.data)
-            if !forceRefresh, now().timeIntervalSince(usable.validatedAt) < Self.freshness { return usable.data }
+            if !forceRefresh, now().timeIntervalSince(usable.validatedAt) < policy.freshness, usable.needsRefresh != true { onPhase?(.ready); return usable.data }
         }
+        if usable == nil { ResourceLoadMetrics.shared.record(key, snapshot == nil ? "catalog.miss" : "catalog.expired", since: started) }
+        onPhase?(.refreshing)
         let pendingKey = key.id + ":" + generation + ":" + (revision?.uuidString ?? "initial")
         let work: Pending
-        if let existing = pending[pendingKey] { work = existing }
+        if let existing = pending[pendingKey] { work = existing; ResourceLoadMetrics.shared.record(key, "catalog.coalesced") }
         else {
             work = Pending(id: UUID(), task: Task { [self] in
+                let networkStart = ProcessInfo.processInfo.systemUptime
                 let data = try await fetch()
+                ResourceLoadMetrics.shared.record(key, "catalog.fetch", since: networkStart, bytes: data.count)
                 try Task.checkCancellation()
                 guard revision == revisions[group], generation == cache.generation(for: key) else { throw CancellationError() }
                 let envelope = try JSONEncoder().encode(Snapshot(data: data, validatedAt: now()))
-                await Task.detached { [cache] in
+                _ = await Task.detached { [cache] in
                     cache.store(envelope, for: key, expectedGeneration: generation)
                 }.value
                 return data
@@ -75,6 +100,7 @@ final class CatalogResponseCache {
             let data = try await work.task.value
             try Task.checkCancellation()
             guard revision == revisions[group], generation == cache.generation(for: key) else { throw CancellationError() }
+            onPhase?(.ready)
             return data
         } catch {
             try Task.checkCancellation()
@@ -85,7 +111,8 @@ final class CatalogResponseCache {
             else { connectionError = error as? URLError }
             if let error = connectionError,
                [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotConnectToHost].contains(error.code),
-               let usable { onOffline?(); return usable.data }
+               let usable { onOffline?(); onPhase?(.offline); ResourceLoadMetrics.shared.record(key, "catalog.offline"); return usable.data }
+            onPhase?(.failed)
             throw error
         }
     }
