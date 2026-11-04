@@ -211,6 +211,8 @@ nonisolated final class DiaryDocumentStore: Sendable {
         try await save(published)
     }
 
+    /// 保存完成表示文档和素材引用已可靠提交。阅读派生图由阅读入口按需准备，
+    /// 避免草稿与正式页重复合成，也避免保存后的后台绘制抢占编辑交互。
     func save(_ document: DiaryDocument) async throws {
         try await run {
             guard document.bookID == self.bookID else { throw DiaryEditorError.invalidDocument.logged() }
@@ -239,27 +241,22 @@ nonisolated final class DiaryDocumentStore: Sendable {
                 try JSONEncoder().encode(Pointer(manifestPath: path)).write(to: current, options: .atomic)
             }
         }
-        await preparePhotoComposites(document)
     }
 
-    /// 派生资源失败不影响已提交的作品；阅读时可以重建。
-    private func preparePhotoComposites(_ document: DiaryDocument) async {
-        guard document.objects.values.contains(where: { $0.layers.contains { $0.isPhotoFrame && $0.frameTargetID != nil } }) else { return }
-        guard let source = try? await run({ Loaded(document: document, images: try self.readImages(document, dimension: 1800)) }) else { return }
-        _ = await DiaryPhotoComposite.prepare(source, store: self)
-    }
-
+    // 同账号、同存储空间的页面共享内容寻址缓存；兼容旧作品内的派生文件。
     nonisolated func readPhotoComposite(_ key: String, documentID: UUID) async -> UIImage? {
         try? await run {
-            let url = self.assetDirectory(documentID).appendingPathComponent("derived/photo-composites/\(key).png")
-            guard let data = try? Data(contentsOf: url) else { return nil }
+            let shared = self.storagePaths.cacheAccount(self.ownerID).appendingPathComponent("photo-composites/\(key).png")
+            if let data = try? Data(contentsOf: shared), let image = UIImage(data: data) { return image }
+            let legacy = self.assetDirectory(documentID).appendingPathComponent("derived/photo-composites/\(key).png")
+            guard let data = try? Data(contentsOf: legacy) else { return nil }
             return UIImage(data: data)
         }
     }
 
     nonisolated func writePhotoComposite(_ data: Data, key: String, documentID: UUID) async {
         try? await run {
-            let url = self.assetDirectory(documentID).appendingPathComponent("derived/photo-composites/\(key).png")
+            let url = self.storagePaths.cacheAccount(self.ownerID).appendingPathComponent("photo-composites/\(key).png")
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
         }
@@ -284,7 +281,6 @@ nonisolated final class DiaryDocumentStore: Sendable {
             try self.publish(book)
             for (id, revision) in revisions { self.opened.values[id] = revision }
         }
-        for document in documents { await preparePhotoComposites(document) }
     }
 
     func load(_ id: UUID) async throws -> Loaded {
@@ -915,14 +911,14 @@ extension DiaryDocumentStore {
     }
 
     /// 预览读取不改变编辑会话的保存基线；浏览一本不会抢占某页编辑状态。
-    nonisolated func loadPreviewSource(_ page: DiaryPageEntry, large: Bool) async throws -> Loaded {
+    nonisolated func loadPreviewSource(_ page: DiaryPageEntry, large: Bool, compositePhotos: Bool = false) async throws -> Loaded {
         let source = try await run {
             let path = "revisions/\(page.revisionID.uuidString)/manifest.json"
             let doc = try self.readSnapshot(path, directory: self.directory(page.id), documentID: page.id)
             return Loaded(document: doc, images: try self.readImages(doc, dimension: large ? 1800 : 480))
         }
-        // 固定使用大图源生成持久化资源，避免缩略图先访问时污染阅读清晰度。
-        if large { return await DiaryPhotoComposite.prepare(source, store: self) }
+        // 整页预览直接绘制原图层；逐元素播放才需要合成照片与相框。固定大图源保证缓存清晰度。
+        if large && compositePhotos { return await DiaryPhotoComposite.prepare(source, store: self) }
         return source
     }
     /// 导出使用目录捕获的不可变页版本，不改变正在编辑页面的保存基线。

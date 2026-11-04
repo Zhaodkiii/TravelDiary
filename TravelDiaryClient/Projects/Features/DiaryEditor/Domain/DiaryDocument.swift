@@ -121,6 +121,7 @@ nonisolated struct DiaryLayer: Codable, Equatable, Identifiable, Sendable {
     var photoBatchID: UUID? = nil
     /// 手动调整后的可见边界；旧作品缺省为自动计算，不拉伸对象内部素材。
     var displayBounds: CGRect? = nil
+    var storySourceID: UUID? = nil
     var text = ""
     var fontSize: CGFloat = 36
     var textAppearance: DiaryTextAppearance? = nil

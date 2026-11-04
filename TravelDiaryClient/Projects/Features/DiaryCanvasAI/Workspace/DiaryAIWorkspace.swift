@@ -85,6 +85,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private var baseline: DiaryAIWorkspaceCheckpoint?
     private var checkpoints: [DiaryAIWorkspaceCheckpoint] = []
     private var request = DiaryAIRequest.defaults(.relayout)
+    var currentCreationBrief: CreationBrief? { request.creationBrief }
     var currentDesign: DiaryAIDesignSelection? { request.design }
     private var composition = ""
     private var layoutRegions: [DiaryAILayoutRegion] = []
@@ -307,9 +308,35 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         }
     }
 
+    /// Retire only unlocked text with an explicit story source; manual text stays intact.
+    func prepareStoryAdjustment() async -> Bool {
+        guard active, !running, !addingMaterials, let working else { return false }
+        error = nil
+        var document = working.document
+        var retired = Set<UUID>()
+        func collect(_ layers: [DiaryLayer]) {
+            for layer in layers where !layer.locked {
+                if layer.storySourceID != nil { retired.insert(layer.id) }
+                if let child = layer.contentID { collect(document.objects[child]?.layers ?? []) }
+            }
+        }
+        collect(working.scopeLayers)
+        for key in Array(document.objects.keys) {
+            document.objects[key]?.layers.removeAll { retired.contains($0.id) }
+        }
+        do {
+            try await setup(document)
+            try await refresh()
+            backgroundRecord = nil; backgroundPreview = nil
+            await prepareLayoutAdjustment()
+            return error == nil
+        } catch { self.error = error.localizedDescription; return false }
+    }
+
     func prepareLayoutAdjustment() async {
         guard active, !running, !addingMaterials, let working else { return }
         pending = objects.filter { $0.editable && $0.role != "background" }.map(\.id)
+        textDone = false
         composition = ""; layoutRegions = []; awaitingConfirmation = false; visualRevision = nil; confirmationScope = nil
         checkpoints.append(.init(working.document, pending: pending))
         do { try await persist(); try await refresh() }
@@ -413,11 +440,19 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             active = false; source.aiWorkspacePresented = false; return true
         } catch { self.error = error.localizedDescription; return false }
     }
-    func keepForLater() async {
-        guard !addingMaterials, preparingPhotos.isEmpty else { return }
+    @discardableResult
+    func keepForLater() async -> Bool {
+        guard !addingMaterials, preparingPhotos.isEmpty else { return false }
         pause()
-        do { try await persist(); active = false; source?.aiWorkspacePresented = false }
-        catch { self.error = error.localizedDescription }
+        do {
+            try await persist()
+            active = false
+            source?.aiWorkspacePresented = false
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
     }
     private func persist() async throws {
         await thumbnailTask?.value
@@ -581,17 +616,22 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         let guide = try await DiaryAIImageWork.run { try DiaryAIBackgroundImaging.occupancyGuide(canvas: size, objects: plannedObjects, textRegions: textRegions) }
         let style = DiaryAIBackgroundStyle.resolve(options.style)
         let context = "整页设计：\(request.designBrief)。共同构图：\(composition)。区域：\(try DiaryAIDraftController.json(layoutRegions))。场景：\(request.scene)。用户要求：\(request.instruction)。创作资料：\(request.creationBrief?.modelInstructions ?? "")。风格：\(style.name)，\(style.brief)。\(style.sceneDirection(options.strength))。这是排版前的素材参考，背景空间必须按共同构图预留，不按旧照片坐标。"
-        backgroundRecord = .init(inputDigest: try DiaryEditorAIBridge.digest(working.document))
+        if backgroundRecord == nil { backgroundRecord = .init(inputDigest: try DiaryEditorAIBridge.digest(working.document)) }
         log("parallel", "背景与图层排版同时开始", "按同一构图区域生成背景；前景继续分批处理。")
         backgroundTask = Task { [self] in
-            let design = try await backgroundProvider.design(reference: reference, context: context)
+            let design: DiaryAIBackgroundDesign
+            if let prompt = backgroundRecord?.generationPrompt, let brief = backgroundRecord?.designBrief {
+                design = .init(brief: brief, prompt: prompt)
+            } else {
+                design = try await backgroundProvider.design(reference: reference, context: context)
+            }
             try Task.checkCancellation(); guard generation == token else { throw CancellationError() }
             backgroundRecord?.designBrief = design.brief; backgroundRecord?.generationPrompt = design.prompt
             try await persist()
             let prepared: String
             do { prepared = try DiarySeedreamBackgroundProvider.preparePrompt(design.prompt) }
             catch { prepared = try await (backgroundProvider as? DiarySeedreamBackgroundProvider)?.repairPrompt(design.prompt) ?? design.prompt }
-            let url = try await backgroundProvider.generate(reference: guide, prompt: DiaryAIBackgroundStyle.generationPrompt(design: prepared, style: style, strength: options.strength, size: size))
+            let url = try await backgroundProvider.generate(reference: options.isTextOnly ? Data() : guide, prompt: DiaryAIBackgroundStyle.generationPrompt(design: prepared + "\n最终前景避让区域（优先于设计中的位置建议）：" + (try DiaryAIDraftController.json(layoutRegions)), style: style, strength: options.strength, size: size, textOnly: options.isTextOnly))
             try Task.checkCancellation(); guard generation == token else { throw CancellationError() }
             backgroundRecord?.remoteURL = url; try await persist()
             log("parallel", "并行背景已生成", "立即下载并检查纯背景，前景继续排版。")
@@ -684,11 +724,11 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             stage = "正在生成背景"
             let guideObjects = objects
             let guide = try await DiaryAIImageWork.run { try DiaryAIBackgroundImaging.occupancyGuide(canvas: size, objects: guideObjects) }
-            log("request", "发送背景生成请求", "\(DiarySeedreamBackgroundProvider.model) · 2K · \(style.name) · 水印开启；场景设计说明＋空间占位图，避免复制前景", images: [.init(id: "background-guide", caption: "浅灰柔和区域是前景避让范围，输出不得保留灰色占位痕迹", data: guide)])
+            log("request", "发送背景生成请求", "\(DiarySeedreamBackgroundProvider.model) · 2K · \(style.name) · 水印开启；\(options.isTextOnly ? "纯文本场景描述" : "场景设计说明＋空间占位图")，避免复制前景", images: [.init(id: "background-guide", caption: "浅灰柔和区域是前景避让范围，输出不得保留灰色占位痕迹", data: guide)])
             try await persist()
             try check()
-            let generationPrompt = DiaryAIBackgroundStyle.generationPrompt(design: backgroundRecord?.generationPrompt ?? "", style: style, strength: options.strength, size: size)
-            let url = try await backgroundProvider.generate(reference: guide, prompt: generationPrompt)
+            let generationPrompt = DiaryAIBackgroundStyle.generationPrompt(design: backgroundRecord?.generationPrompt ?? "", style: style, strength: options.strength, size: size, textOnly: options.isTextOnly)
+            let url = try await backgroundProvider.generate(reference: options.isTextOnly ? Data() : guide, prompt: generationPrompt)
             try check(); backgroundRecord?.remoteURL = url; try await persist()
             log("response", "背景服务已返回图片地址", "开始下载；不会把临时地址作为作品资源。")
         }
@@ -823,7 +863,8 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         if !images.isEmpty { images[0].id = "layout-base"; images[0].caption = "排版基础画布：待排照片、贴纸及绑定相框全部移出；只显示背景和不参与本轮的固定内容。不是原版布局图。素材板与画布分开提供。" }
         if !hasRetainedVisualContent { images.removeAll { $0.id == "layout-base" } }
         if request.background != nil, !images.isEmpty { images[0].caption = "旧背景将替换，参考图已移除旧背景；不要为旧背景图案保留空间，只保护锁定内容。" }
-        let prompt = (request.background != nil ? "本轮将在排版后生成新背景，旧背景不参与构图，不保护它的文字/人物。" : "") + "若没有 layout-base，则画布为空白；按尺寸和素材规划。若有，第一张 layout-base 是清理待排素材后的排版基础，不是原来的布局。素材板只用于识别素材，不代表素材已放在页面上。先看清背景的图案、主体和留白，再规划构图。先规划整体构图，不执行图层修改。只调用 plan_composition，\(versionInstruction) 有照片时用heroID明确主照UUID；用户指定主照优先，主照区域要按原图比例实际容纳，实际面积大于辅助照片。summary 用80～160字说明左右页分区、主照片、照片大小比例、文字预留区和贴纸依附关系；只调用此工具一次。重新排版时同时提供regions：每个photo区域提供rotation（0/90/-90/180），根据素材板中原照片实际像素方向判断：正常竖照/横照为0；横倒的人物、动物或地平线必须给纠正角度，不因区域横竖形状而旋转。rotation是最终绝对角度，后续不得擅自改变。每张真实照片恰好一个带objectID的photo区域，不能重复照片或给贴纸分配photo区域，授权文字时按文字密度预留区域：简短补充1至2个text区域，丰富记录3至5个有主次的text区域（标题、引题、照片旁注、结语），优先保留照片主体，空间不足减少文字角色；文字区域需容纳真实文字和纸卡内边距，标题区高度建议400至550、旁注区320至450，不能仅按裸文字高度预留。区域用设计单位x/y/width/height，必须在单页内避开书脊24单位，照片区域不占文字区域。已有图层只规划可编辑对象。禁止输出JSON排版文件、操作数组和长篇正文。避免所有对象缩小聚在中央。背景不可遮挡的主体也需预留。全部图层：\(try modelContext(context, text: false))。用户要求：\(try DiaryAIDraftController.json(request))。风格：\(request.designBrief)。后续每批最多8个图层，同类素材优先一起处理。"
+        let backgroundPlanning = request.background.map { options in "同时输出backgroundBrief与backgroundPrompt。backgroundBrief说明来源照片证据、唯一主题与1至3个主要意象。backgroundPrompt用450至700字精确描述可直接生成的无人场景：主体形态、位置与占比、空间延伸、光线方向、来源配色、纸张与笔触、安静文字区。风格为\(DiaryAIBackgroundStyle.resolve(options.style).brief)。不得猜测地点或关系，不复制照片，不生成桌面、书缝、横贯整页深色带、文字或占位框。backgroundPrompt本身只写正向无人环境，不写上述禁用词清单，不使用照片、人物、相框、贴纸、书页、手帐等词；禁用规则由客户端统一追加。以一个清晰来源场景为重心，避免泛用旅行图标。客户端最终区域优先，意象可在剩余边缘延展。" } ?? ""
+        let prompt = backgroundPlanning + (request.background != nil ? "本轮将在排版后生成新背景，旧背景不参与构图，不保护它的文字/人物。" : "") + "若没有 layout-base，则画布为空白；按尺寸和素材规划。若有，第一张 layout-base 是清理待排素材后的排版基础，不是原来的布局。素材板只用于识别素材，不代表素材已放在页面上。先看清背景的图案、主体和留白，再规划构图。先规划整体构图，不执行图层修改。只调用 plan_composition，\(versionInstruction) 有照片时用heroID明确主照UUID；用户指定主照优先，主照区域要按原图比例实际容纳，实际面积大于辅助照片。summary 用80～160字说明左右页分区、主照片、照片大小比例、文字预留区和贴纸依附关系；只调用此工具一次。重新排版时同时提供regions：每个photo区域提供rotation（0/90/-90/180），根据素材板中原照片实际像素方向判断：正常竖照/横照为0；横倒的人物、动物或地平线必须给纠正角度，不因区域横竖形状而旋转。rotation是最终绝对角度，后续不得擅自改变。每张真实照片恰好一个带objectID的photo区域，不能重复照片或给贴纸分配photo区域，授权文字时按文字密度预留区域：简短补充1至2个text区域，丰富记录3至5个有主次的text区域（标题、引题、照片旁注、结语），优先保留照片主体，空间不足减少文字角色；文字区域需容纳真实文字和纸卡内边距，标题区高度建议400至550、旁注区320至450，不能仅按裸文字高度预留。区域用设计单位x/y/width/height，必须在单页内避开书脊24单位，照片区域不占文字区域。已有图层只规划可编辑对象。禁止输出JSON排版文件、操作数组和长篇正文。避免所有对象缩小聚在中央。背景不可遮挡的主体也需预留。全部图层：\(try modelContext(context, text: false))。用户要求：\(try DiaryAIDraftController.json(request))。风格：\(request.designBrief)。后续每批最多8个图层，同类素材优先一起处理。"
         var planningFeedback = ""
         let planningAttempts = efficientExecution ? 2 : 3
         for attempt in 0..<planningAttempts {
@@ -891,6 +932,11 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                     if let id = regions[index].objectID, let rotation = sourceRotations[id] { regions[index].rotation = rotation }
                 }
                 layoutRegions = regions; composition = adoptedSummary
+                if request.background != nil, let brief = raw["backgroundBrief"] as? String,
+                   let prompt = raw["backgroundPrompt"] as? String, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let working {
+                    backgroundRecord = .init(inputDigest: try DiaryEditorAIBridge.digest(working.document), designBrief: brief, generationPrompt: prompt)
+                    log("design", "首轮规划已生成背景设计", "模式：\(request.background?.generationMode ?? "guided") · 提示词版本 2\n" + prompt)
+                }
             } catch {
                 if attempt == planningAttempts - 1, efficientExecution, request.action == .relayout {
                     let photos = context.objects.filter { $0.role == "photo" && $0.editable }

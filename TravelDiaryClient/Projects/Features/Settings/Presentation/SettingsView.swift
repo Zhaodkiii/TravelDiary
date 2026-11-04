@@ -36,14 +36,9 @@ struct SettingsView: View {
                 Button { showsMakingGuide = true } label: {
                     SupportNavigationRow(title: "重看制作引导", symbol: "book.pages", detail: "看一页旅行手帐如何慢慢成形")
                 }.buttonStyle(.plain).feedbackPaperCard()
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("AI 运行方式").font(.headline)
-                    Picker("AI 运行方式", selection: $parallelAI) {
-                        Text("原方案 · 串行").tag(false)
-                        Text("新方案 · 并行").tag(true)
-                    }.pickerStyle(.segmented)
-                    Text("并行时背景与图层排版同时进行。切换后对新打开的 AI 任务生效。").font(.caption).foregroundStyle(.secondary)
-                }.padding(16).feedbackPaperCard()
+                NavigationLink { DiaryAIMakingSettingsView() } label: {
+                    SupportNavigationRow(title: "AI 制作", symbol: "sparkles", detail: "运行方式与背景生成")
+                }.buttonStyle(.plain).feedbackPaperCard()
 
                 NavigationLink {
                     StorageManagementScreen(owner: String(session.accountID), service: storageService).id(session.accountID)
@@ -96,5 +91,25 @@ struct SettingsView: View {
         let name = session.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !name.isEmpty && !name.lowercased().hasPrefix("device_") && !name.lowercased().hasPrefix("guest_") { return name }
         return "我的账户"
+    }
+}
+
+private struct DiaryAIMakingSettingsView: View {
+    @AppStorage("DiaryCanvasAI.parallelExecution") private var parallel = false
+    @AppStorage("DiaryCanvasAI.backgroundMode") private var mode = "guided"
+    var body: some View {
+        Form {
+            Section("运行方式") {
+                Toggle("并行制作", isOn: $parallel)
+                Text("背景与图层排版同时进行，对新打开的任务生效。").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("背景生成") {
+                Picker("生成方式", selection: $mode) {
+                    Text("文字提示词 + 空间占位图").tag("guided")
+                    Text("纯文本生成").tag("textOnly")
+                }
+                Text("空间占位图帮助避让照片与文字。纯文本根据场景描述及区域说明生成。修改对新任务生效。").font(.caption).foregroundStyle(.secondary)
+            }
+        }.navigationTitle("AI 制作")
     }
 }

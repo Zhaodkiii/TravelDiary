@@ -69,6 +69,12 @@ extension DiaryAIRequest {
     /// Keep an explicit background-off choice. Normalize only its medium, never permissions.
     func coordinated() -> Self {
         var value = self
+        if let brief = value.creationBrief {
+            if brief.hasVisibleStoryEntries { value.allowsText = true }
+            if let place = brief.storyEntries?.first(where: { $0.kind == .location }) {
+                value.location = place.text; value.writesLocation = place.usage != .reference
+            }
+        }
         if let design, value.background != nil { value.background?.style = design.style.backgroundID }
         return value
     }

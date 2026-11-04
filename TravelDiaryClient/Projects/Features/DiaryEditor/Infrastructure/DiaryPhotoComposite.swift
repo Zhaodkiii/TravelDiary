@@ -3,6 +3,8 @@ import CryptoKit
 
 /// 阅读专用派生图。永远不写回可编辑文档；内容寻址支持旧版本、撤销和并发读取。
 @MainActor enum DiaryPhotoComposite {
+    private nonisolated static let encodingQueue = DispatchQueue(label: "TravelDiary.PhotoCompositeEncoding", qos: .utility)
+
     static func prepare(_ source: DiaryDocumentStore.Loaded, store: DiaryDocumentStore) async -> DiaryDocumentStore.Loaded {
         var document = source.document
         var images = source.images
@@ -37,7 +39,12 @@ import CryptoKit
                         }
                     }
                     image = rendered
-                    if let data = rendered.pngData() { await store.writePhotoComposite(data, key: key, documentID: document.id) }
+                    let data: Data? = await withCheckedContinuation { continuation in
+                        encodingQueue.async {
+                            continuation.resume(returning: autoreleasepool { rendered.pngData() })
+                        }
+                    }
+                    if let data { await store.writePhotoComposite(data, key: key, documentID: document.id) }
                 }
                 guard let image else { continue }
                 let id = UUID()

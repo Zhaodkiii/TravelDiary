@@ -59,6 +59,21 @@ enum DiaryAIWorkspaceTools {
         guard request.design != nil, let text = raw["text"] as? String else { return }
         let supplied = request.instruction + " " + request.customScene + " " + (request.creationBrief?.confirmedFacts ?? "")
         if let brief = request.creationBrief {
+            for entry in brief.storyEntries ?? [] {
+                if entry.kind == .location && entry.usage == .reference && text.contains(entry.text) {
+                    throw DiaryAIError.invalid("地点仅供参考，不得写入成品文字。")
+                }
+                if entry.kind == .content && entry.usage == .reference && text.contains(entry.text) {
+                    throw DiaryAIError.invalid("参考内容不得直接印在作品中，请根据可公开内容重新组织文案。")
+                }
+                let matchesSource = raw["clientObjectKey"] as? String == "story-" + entry.id.uuidString
+                if entry.usage == .exact && matchesSource && text != entry.text {
+                    throw DiaryAIError.invalid("此条文字必须原样使用：" + entry.text)
+                }
+                if entry.kind == .title && entry.usage == .exact && raw["textRole"] as? String == "title" && text != entry.text {
+                    throw DiaryAIError.invalid("主标题必须原样使用：" + entry.text)
+                }
+            }
             if !brief.displaysLocation, !brief.location.isEmpty, text.contains(brief.location) { throw DiaryAIError.invalid("地点仅供理解，不得写入成品。请只修改这段文字。") }
             let forbidden = brief.forbidden.components(separatedBy: CharacterSet(charactersIn: "，,；;\n")).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
             if forbidden.contains(where: text.contains) { throw DiaryAIError.invalid("文字包含用户禁止的内容，请修改此段。") }
@@ -68,11 +83,17 @@ enum DiaryAIWorkspaceTools {
             throw DiaryAIError.invalid("文案包含用户未确认的事实“\(claim)”。保留位置和样式，只把此段改成照片可见细节或明确祝愿，不推断亲属、年龄或事件先后。")
         }
     }
+    static func validateRequiredStoryTexts(_ texts: [String], brief: CreationBrief) throws {
+        let missing = brief.requiredStoryTexts.filter { required in !texts.contains(where: { $0.contains(required) }) }
+        if !missing.isEmpty {
+            throw DiaryAIError.invalid("尚未完整呈现原样文字，请补充对应文字图层后重新提交：" + missing.joined(separator: "；"))
+        }
+    }
     static var schemas: [[String: Any]] {
         let string: [String: Any] = ["type": "string"]
         let number: [String: Any] = ["type": "number"]
         var definitions: [(String, [String: Any], [String])] = [
-            ("plan_composition", ["heroID": string, "summary": string, "regions": ["type": "array", "maxItems": 20, "items": ["type": "object", "additionalProperties": false, "properties": ["role": ["type": "string", "enum": ["photo", "text"]], "objectID": string, "rotation": ["type": "number", "enum": [-90, 0, 90, 180]], "x": number, "y": number, "width": number, "height": number], "required": ["role", "rotation", "x", "y", "width", "height"]]]], ["summary"]),
+            ("plan_composition", ["backgroundBrief": string, "backgroundPrompt": string, "heroID": string, "summary": string, "regions": ["type": "array", "maxItems": 20, "items": ["type": "object", "additionalProperties": false, "properties": ["role": ["type": "string", "enum": ["photo", "text"]], "objectID": string, "rotation": ["type": "number", "enum": [-90, 0, 90, 180]], "x": number, "y": number, "width": number, "height": number], "required": ["role", "rotation", "x", "y", "width", "height"]]]], ["summary"]),
             ("report_photo_orientations", ["rotations": ["type": "array", "items": ["type": "object", "additionalProperties": false, "properties": ["objectID": string, "angle": ["type": "number", "enum": [-90, 0, 90, 180]]], "required": ["objectID", "angle"]]]], ["rotations"]),
             ("request_batch_revision", ["objectIDs": ["type": "array", "items": string, "minItems": 1, "maxItems": DiaryAIWorkspace.maximumBatchLayers], "reason": string], ["objectIDs", "reason"]),
             ("get_workspace", [:], []), ("get_canvas_image", [:], []), ("list_fonts", [:], []),

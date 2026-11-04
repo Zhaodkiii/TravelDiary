@@ -21,10 +21,11 @@ import UIKit
             (FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
                 .filter { $0.path.contains("photo-composites/") && $0.pathExtension == "png" }
         }
+        #expect(files().isEmpty)
+        let prepared = await DiaryPhotoComposite.prepare(original, store: store)
         #expect(files().count == 1)
         let cached = try #require(files().first)
         let bytes = try Data(contentsOf: cached)
-        let prepared = await DiaryPhotoComposite.prepare(original, store: store)
         #expect(prepared.document.layer(photo.id)?.kind == .sticker)
         #expect(prepared.document.objects[photo.ownerID]?.layers.contains { $0.frameTargetID == photo.id } == false)
         #expect(try Data(contentsOf: cached) == bytes)

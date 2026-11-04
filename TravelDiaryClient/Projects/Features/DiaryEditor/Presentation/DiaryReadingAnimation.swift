@@ -174,7 +174,7 @@ enum DiaryReadingSources {
         else {
             task = Task {
                 defer { pending[key] = nil }
-                let source = try await store.loadPreviewSource(page, large: true)
+                let source = try await store.loadPreviewSource(page, large: true, compositePhotos: true)
                 let cost = source.images.values.reduce(0) { $0 + ($1.cgImage?.bytesPerRow ?? 0) * ($1.cgImage?.height ?? 0) }
                 cache.setObject(Box(source), forKey: key as NSString, cost: cost)
                 return source

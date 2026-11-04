@@ -12,8 +12,10 @@ import Foundation
         self.session = session ?? URLSession(configuration: config)
     }
     static func body(reference: Data, prompt: String) -> [String: Any] {
-        ["model": model, "prompt": prompt, "image": "data:image/jpeg;base64,\(reference.base64EncodedString())",
+        var result: [String: Any] = ["model": model, "prompt": prompt,
          "response_format": "url", "size": "2K", "stream": false, "watermark": true]
+        if !reference.isEmpty { result["image"] = "data:image/jpeg;base64,\(reference.base64EncodedString())" }
+        return result
     }
     private func post(_ body: [String: Any], to url: URL) async throws -> [String: Any] {
         let apiKey = try DiaryAITestConfig.requireAPIKey()

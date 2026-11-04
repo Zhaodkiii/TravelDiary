@@ -36,6 +36,8 @@ struct DiaryEditorScreen: View {
     @State private var selectionViewportRect: CGRect?
 
     @State private var studioDesign: DiaryAIDesignSelection?
+    @State private var closingAIEditor = false
+    @State private var openedDirectlyInAI = false
     @State private var aiMode = false
     @State private var aiCompare = false
     @State private var aiDisplaySession: DiaryEditorSession?
@@ -45,7 +47,7 @@ struct DiaryEditorScreen: View {
     var body: some View {
         NavigationStack {
             editorContent
-            .disabled(creatingNewPage || session.busy || (!aiMode && importingCameraPhotos) || session.aiWorkspace.saving)
+            .disabled(closingAIEditor || creatingNewPage || session.busy || (!aiMode && importingCameraPhotos) || session.aiWorkspace.saving)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { editorToolbar }
@@ -69,7 +71,7 @@ struct DiaryEditorScreen: View {
             } message: { Text("当前待处理素材和未保存的制作内容将删除，已保存的正式作品会保留。") }
             .onReceive(session.aiWorkspace.$displaySession) { aiDisplaySession = $0 }
             .onChange(of: session.aiWorkspacePresented) { _, presented in
-                if !presented { withAnimation(.smooth(duration: 0.4)) { aiMode = false } }
+                if !presented && !closingAIEditor { withAnimation(.smooth(duration: 0.4)) { aiMode = false } }
             }
             .fullScreenCover(item: $childEditor) { child in
                 AnyView(DiaryEditorScreen(session: child))
@@ -136,6 +138,7 @@ struct DiaryEditorScreen: View {
                     creationEntered = true
                     session.canvasAI.setForm(creationRequest)
                     studioDesign = creationRequest.design
+                    openedDirectlyInAI = true
                     aiMode = true
                     enteringCreation = true
                     await session.aiWorkspace.enter(creationRequest)
@@ -175,7 +178,8 @@ struct DiaryEditorScreen: View {
         ToolbarItem(placement: .topBarLeading) {
             HStack {
                 if aiMode {
-                    Button("关闭") { Task { await session.aiWorkspace.keepForLater(); withAnimation { aiMode = false } } }
+                    Button("关闭", action: closeAIEditor)
+                        .disabled(enteringCreation || !session.aiWorkspace.preparingPhotos.isEmpty)
                 } else { Button("完成") { Task { if await session.commitToParent() { dismiss() } } }
                 if !session.isRoot { Button("取消") { Task { await session.cancelEditor(); dismiss() } } }
                 }
@@ -204,11 +208,11 @@ struct DiaryEditorScreen: View {
                         .disabled(enteringCreation || !creationEntered || creatingNewPage || session.busy || importingCameraPhotos)
                     }
                     Button("保存草稿并关闭", systemImage: "square.and.arrow.down") {
-                        Task { await session.aiWorkspace.keepForLater(); aiMode = false }
+                        closeAIEditor()
                     }
                 } label: { Image(systemName: "ellipsis.circle") }
                 .accessibilityLabel("更多操作")
-                .disabled(session.aiWorkspace.running || session.aiWorkspace.addingMaterials || session.aiWorkspace.saving)
+                .disabled(session.aiWorkspace.running || session.aiWorkspace.addingMaterials || session.aiWorkspace.saving || !session.aiWorkspace.preparingPhotos.isEmpty)
             } else {
             if supportsSpreadPreview {
                 Button { session.finishInteraction(); showsSpreadShell.toggle() } label: { Image(systemName: showsSpreadShell ? "eye.fill" : "eye") }
@@ -220,6 +224,30 @@ struct DiaryEditorScreen: View {
             Button { session.redo() } label: { Image(systemName: "arrow.uturn.forward") }
                 .disabled(session.redoStack.isEmpty || session.busy || importingCameraPhotos).accessibilityLabel("重做")
 
+            }
+        }
+    }
+
+    private func closeAIEditor() {
+        guard !closingAIEditor, !enteringCreation else { return }
+        closingAIEditor = true
+        Task {
+            defer { closingAIEditor = false }
+            do {
+                if openedDirectlyInAI && session.isRoot { try await session.save() }
+                guard await session.aiWorkspace.keepForLater() else { return }
+                if !openedDirectlyInAI {
+                    aiCompare = false
+                    withAnimation { aiMode = false }
+                    return
+                }
+                if !session.isRoot, !(await session.commitToParent()) {
+                    aiMode = false
+                    return
+                }
+                dismiss()
+            } catch {
+                session.errorMessage = error.localizedDescription
             }
         }
     }
@@ -348,8 +376,13 @@ struct DiaryEditorScreen: View {
             onAI: {
                 session.finishInteraction(); session.select(nil)
                 activeTool = nil
+                openedDirectlyInAI = false
                 withAnimation(.smooth(duration: 0.45)) { aiMode = true }
-                Task { await session.aiWorkspace.enter(session.canvasAI.form(.relayout)) }
+                enteringCreation = true
+                Task {
+                    defer { enteringCreation = false }
+                    await session.aiWorkspace.enter(session.canvasAI.form(.relayout))
+                }
             },
             onTransform: { session.beginFreeTransform(); if session.transformDraft != nil { activeTool = .transform } },
             selectionToolsOnly: selectionToolsOnly)

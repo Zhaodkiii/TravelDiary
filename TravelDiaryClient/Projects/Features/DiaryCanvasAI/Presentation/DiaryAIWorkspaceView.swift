@@ -233,6 +233,7 @@ struct DiaryAIInlinePanel: View {
     @ObservedObject var workspace: DiaryAIWorkspace
     @ObservedObject var controller: DiaryAIDraftController
     @State private var customizing = false
+    @State private var editingStory: DiaryStoryEntry?
     @State private var showingDetails = false
     @State private var action = DiaryAIAction.relayout
     @State private var design = DiaryAIDesignSelection()
@@ -311,17 +312,23 @@ struct DiaryAIInlinePanel: View {
                   }.padding(.bottom, 2)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            HStack {
-                Button("写点故事", systemImage: "slider.horizontal.3") { customizing = true }
-                    .font(.subheadline).disabled(workspace.running)
-                Spacer()
-                Button(!workspace.preparingPhotos.isEmpty ? "照片准备中" : workspace.running ? "暂停" : complete ? "保存作品" : photos.isEmpty && !started ? "添加照片" : started ? (workspace.error == nil ? "继续制作" : "重试本步") : "开始制作") {
+            HStack(spacing: 12) {
+                storyTags
+                Button(!workspace.preparingPhotos.isEmpty ? "照片准备中" : workspace.running ? "暂停" : storyChanged && started ? "按新故事重新制作" : complete ? "保存作品" : photos.isEmpty && !started ? "添加照片" : started ? (workspace.error == nil ? "继续制作" : "重试本步") : "开始制作") {
                     if workspace.running { workspace.pause() }
+                    else if storyChanged && started {
+                        Task {
+                            guard await workspace.prepareStoryAdjustment() else { return }
+                            var request = controller.form(action); request.design = design
+                            workspace.configureAndStart(request)
+                        }
+                    }
                     else if complete { Task { _ = await workspace.save() } }
                     else if photos.isEmpty && !started { onPhotos() }
                     else if started { workspace.processAll() }
                     else {
                         var request = controller.form(action); request.design = design; request.selectedOnly = false
+                        if request.creationBrief == nil { request.creationBrief = workspace.currentCreationBrief }
                         if let notes = request.creationNotes {
                             let valid = Set(photos.map { $0.id.uuidString })
                             let lines = notes.filter { valid.contains($0.key) && !$0.value.isEmpty }.sorted { $0.key < $1.key }.map { "照片\($0.key)：\($0.value)" }
@@ -330,16 +337,22 @@ struct DiaryAIInlinePanel: View {
                         started = true; workspace.configureAndStart(request)
                     }
                 }.buttonStyle(.borderedProminent).controlSize(.large)
+                .fixedSize(horizontal: true, vertical: false)
                 .disabled(!workspace.active || workspace.addingMaterials || !workspace.preparingPhotos.isEmpty)
             }
         }.padding(16).frame(maxWidth: .infinity).background(DiaryLibraryStyle.background)
             .tint(Color(red: 0.24, green: 0.39, blue: 0.34))
             .onAppear {
+                controller.restoreIfNeeded()
                 design = controller.form(action).design ?? workspace.currentDesign ?? .init()
                 onDesign(design)
                 started = workspace.running || workspace.version > 0 && workspace.pending.isEmpty
             }
+            .onChange(of: controller.restored) { _, restored in
+                if restored { design = controller.form(action).design ?? workspace.currentDesign ?? .init() }
+            }
             .onChange(of: design) { _, value in
+                guard controller.restored else { return }
                 var request = controller.form(action); request.design = value; controller.setForm(request.coordinated()); onDesign(value)
             }
             .sheet(isPresented: Binding(get: { inspecting != nil }, set: { if !$0 { inspecting = nil } })) {
@@ -369,11 +382,54 @@ struct DiaryAIInlinePanel: View {
                     .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $customizing) {
-                DiaryAIRequestSheet(controller: controller, action: action, onConfigure: { request in
+                DiaryStoryInputSheet(brief: Binding(get: {
+                    controller.form(action).creationBrief ?? workspace.currentCreationBrief ?? CreationBrief()
+                }, set: { brief in
+                    var request = controller.form(action)
+                    request.creationBrief = brief
+                    if brief.hasVisibleStoryEntries { request.allowsText = true }
                     controller.setForm(request)
-                    action = request.action; design = request.design ?? .init(); instruction = request.instruction
-                })
+                }), editing: editingStory)
             }
+    }
+    private var storyChanged: Bool {
+        ((controller.form(action).creationBrief ?? workspace.currentCreationBrief)?.storyEntries ?? []) != (workspace.currentCreationBrief?.storyEntries ?? [])
+    }
+    private var storyEntries: [DiaryStoryEntry] {
+        (controller.form(action).creationBrief ?? workspace.currentCreationBrief)?.storyEntries ?? []
+    }
+    private var storyTags: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                Button {
+                    editingStory = nil; customizing = true
+                } label: {
+                    if storyEntries.isEmpty {
+                        Label("写点故事", systemImage: "square.and.pencil")
+                    } else {
+                        Image(systemName: "square.and.pencil")
+                            .frame(minWidth: 36, minHeight: 44)
+                    }
+                }
+                .font(.subheadline)
+                .accessibilityLabel("写点故事")
+                .disabled(workspace.running || !controller.restored)
+                ForEach(storyEntries) { entry in
+                    Button {
+                        editingStory = entry; customizing = true
+                    } label: {
+                        Text("\(entry.kind.rawValue) · \(entry.text)\(entry.usage == .reference && entry.kind != .direction ? " · 仅参考" : "")")
+                            .font(.caption).lineLimit(1)
+                            .frame(maxWidth: 200)
+                            .padding(.horizontal, 10).padding(.vertical, 7)
+                            .background(Color.accentColor.opacity(0.08), in: Capsule())
+                            .frame(minHeight: 44)
+                    }.buttonStyle(.plain).disabled(workspace.running)
+                }
+            }.fixedSize(horizontal: true, vertical: false)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 44)
     }
     private var materialPage: some View {
         VStack(spacing: 8) {

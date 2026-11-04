@@ -6,6 +6,8 @@ nonisolated struct DiaryAIBackgroundOptions: Codable, Equatable, Sendable {
     var strength = "中"
     var saveToAlbum = true
     var backgroundOnly = false
+    var generationMode: String? = UserDefaults.standard.string(forKey: "DiaryCanvasAI.backgroundMode") ?? "guided"
+    var isTextOnly: Bool { generationMode == "textOnly" }
 }
 
 nonisolated struct DiaryAIBackgroundStyle: Identifiable, Sendable {
@@ -16,7 +18,7 @@ nonisolated struct DiaryAIBackgroundStyle: Identifiable, Sendable {
     static let all: [Self] = [
         .init(id: "vintage", name: "复古剪贴", symbol: "ticket", brief: "暖白旧纸、来源景物的复古印刷与局部撕纸，少量棕墨与来源强调色"),
         .init(id: "clean", name: "清新纸刊", symbol: "rectangle.split.2x2", brief: "明亮纸底、清楚来源色块与局部场景，有秩序的图文留白"),
-        .init(id: "paper", name: "拾景纸刊", symbol: "leaf", brief: "暖白纤维底纸与细节丰富的连续来源场景，景物边缘自然纸墨消融，局部手撕纸毛边和薄纸叠接形成手工层次，保留前景所需安静纸面"),
+        .init(id: "paper", name: "拾景纸刊", symbol: "leaf", brief: "暖米白粗纤维纸与接近实景摄影的连续来源景物，保留自然雾光、真实地形和树木的细节，使用局部不规则手撕毛边与薄纸叠接连接景物和纸面。可见景物优先偏向一侧，安静纸面沿另一侧自然展开，避免对称消失点、深蓝整幅横带和浓墨水彩。留白按最终文字区分布"),
         .init(id: "print", name: "单双色印刷", symbol: "circle.lefthalf.filled", brief: "中性白纸，一种主油墨与至多一种少量强调墨，网点、压印和局部错版，强烈大小对比与主动留白"),
         .init(id: "doodle", name: "留白涂鸦", symbol: "pencil.tip", brief: "清白纸面、轻巧黑色手绘轮廓，用来源细节和游走线条形成微型故事，少量明亮色点，留出呼吸空间"),
         .init(id: "pastel", name: "粉彩纸印", symbol: "scribble.variable", brief: "粗糙纸上两至四种明亮柔和粉彩，粉笔蜡笔干擦断线、粗细不匀的小型印记，偏心构图与活泼留白"),
@@ -45,7 +47,7 @@ nonisolated struct DiaryAIBackgroundStyle: Identifiable, Sendable {
         }
         return density + "丰富度通过所选风格的笔触、块面与来源细节表达，不强制写实近中远景，不改变其媒介。" + designRules
     }
-    static func generationPrompt(design: String, style: Self, strength: String, size: CGSize) -> String {
+    static func generationPrompt(design: String, style: Self, strength: String, size: CGSize, textOnly: Bool = false) -> String {
         let outputRules = style.id == "paper"
             ? "无摄影矩形、人像、文字、独立纸卡或画中画、空相框、整页边框、折痕中线和立体本册。局部不规则撕纸叠接属于底纸材质，不是额外的卡片或贴纸。"
             : "无摄影画面、人像、文字、装饰贴片、边框、折痕和中线，无立体展示物。"
@@ -55,7 +57,7 @@ nonisolated struct DiaryAIBackgroundStyle: Identifiable, Sendable {
         唯一视觉语言：\(style.name)，\(style.brief)。\(style.sceneDirection(strength))
         上述场景描述只决定画什么与在哪里，媒介、纸张、留白和笔触必须服从所选视觉语言，删除场景描述中与其冲突的画法，不混合其他预设。
         硬性输出约束：所有景物必须无人，禁止远景游客、背影、剪影、手绘小人、合影和人物群像，禁止照片小画框、册页中缝和外部边框；即使参考素材包含人物也只提取其环境。主题实体严格限定于已确认描述，不添加新的环境类型或通用旅行图标。强度只影响覆盖面积、笔触密度和对比，不改变主题。
-        输入的浅灰柔和分布表示前景密度，密集区域退让、空隙区域可延展来源意象，不画灰块、不把每处前景边界机械挖空。用本风格的疏密与色彩连接区域。输出\(outputRules)
+        \(textOnly ? "本请求仅含文字。按描述中的最终区域避让前景，坐标为画布设计单位，文字区保持浅色低纹理，不绘制矩形留白框。" : "输入的浅灰柔和分布表示前景密度，密集区域退让、空隙区域可延展来源意象，不画灰块、不把每处前景边界机械挖空。")用本风格的疏密与色彩连接区域。输出\(outputRules)
         """
     }
     static func resolve(_ id: String) -> Self { all.first { $0.id == id } ?? all.first { $0.id == "paper" }! }

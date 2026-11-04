@@ -382,6 +382,10 @@ import CoreText
                 let id = createdIDs[key] ?? UUID(); createdIDs[key] = id
                 try require(copy.layer(id) == nil, "重复新增文字 key")
                 var layer = DiaryLayer(id: id, name: "AI 文字", kind: .text, transform: DiaryTransform(position: .zero, pivot: .zero), size: CGSize(width: operation.width ?? 500, height: 80), textAppearance: DiaryNewTextDefaults.appearance, font: DiaryNewTextDefaults.font)
+                if key.hasPrefix("story-"), let sourceID = UUID(uuidString: String(key.dropFirst(6))),
+                   request.creationBrief?.storyEntries?.contains(where: { $0.id == sourceID }) == true {
+                    layer.storySourceID = sourceID
+                }
                 try configureText(operation, layer: &layer, context: context)
                 if !request.writesLocation && !request.location.isEmpty { try require(!layer.text.contains(request.location), "地点未授权写入文字") }
                 copy.appendObject(containing: layer, to: context.contentID)
@@ -451,6 +455,10 @@ import CoreText
                 }
             }
             copy.objects[context.contentID]?.layers = order.compactMap { id in layers.first { $0.id == id } }
+        }
+        if operations.contains(where: { $0.type == "createText" }), let brief = request.creationBrief {
+            let texts = (copy.objects[context.contentID]?.layers ?? []).flatMap { descendants($0, in: copy) }.filter { $0.kind == .text && $0.visible }.map(\.text)
+            try DiaryAIWorkspaceTools.validateRequiredStoryTexts(texts, brief: brief)
         }
         // Measure the complete decorated card before validating planned regions. Preserve typography and paper.
         var autoPositionedText = Set<UUID>()

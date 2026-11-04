@@ -5,6 +5,17 @@ import SwiftUI
 
 @Suite(.serialized)
 @MainActor struct DiaryAIBackgroundTests {
+    @Test func textOnlyRequestOmitsImage() {
+        let body = DiarySeedreamBackgroundProvider.body(reference: Data(), prompt: "松林夕阳")
+        #expect(body["image"] == nil)
+        #expect(body["prompt"] as? String == "松林夕阳")
+        let guided = DiarySeedreamBackgroundProvider.body(reference: Data([1, 2]), prompt: "松林夕阳")
+        #expect(guided["image"] != nil)
+    }
+    @Test func legacyBackgroundOptionsRemainGuided() throws {
+        let options = try JSONDecoder().decode(DiaryAIBackgroundOptions.self, from: Data(#"{"style":"paper","strength":"中","saveToAlbum":true,"backgroundOnly":false}"#.utf8))
+        #expect(!options.isTextOnly)
+    }
     private func image(_ size: CGSize = CGSize(width: 1000, height: 800)) throws -> Data {
         let format = UIGraphicsImageRendererFormat(); format.scale = 1
         return try #require(UIGraphicsImageRenderer(size: size, format: format).image { ctx in
@@ -123,16 +134,16 @@ import SwiftUI
         guard !FileManager.default.fileExists(atPath: "/tmp/traveldiary-design-flow-enabled") else { return }
         try await runFullFlow(parallel)
     }
-    @Test(arguments: Array(0..<14)) func liveDesignFlow(_ index: Int) async throws {
+    @Test(arguments: Array(0..<26)) func liveDesignFlow(_ index: Int) async throws {
         guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-design-flow-enabled") else { return }
         let selectedCase = try String(contentsOfFile: "/tmp/traveldiary-design-flow-enabled", encoding: .utf8)
         guard selectedCase == "all" || selectedCase.split(separator: ",").contains(Substring(String(index))) else { return }
         let layouts: [DiaryAILayout] = [.hero, .story, .headline, .collage, .editorial, .automatic]
         let datasets = ["archive-city", "archive-family", "archive-food", "archive-nature", "archive-portrait", "archive-mixed"]
-        let designIndex = index >= 8 ? index - 8 : index % 6
-        try await runFullFlow(true, design: .init(layout: layouts[designIndex], style: DiaryAIPageStyle.allCases[designIndex]), dataset: index >= 8 ? datasets[index - 8] : index >= 6 ? (index == 6 ? "wedding" : "coast") : nil)
+        let designIndex = index >= 8 ? (index - 8) % 6 : index % 6
+        try await runFullFlow(true, design: .init(layout: layouts[designIndex], style: DiaryAIPageStyle.allCases[designIndex]), dataset: index >= 8 ? datasets[designIndex] : index >= 6 ? (index == 6 ? "wedding" : "coast") : nil, mode: (14..<20).contains(index) ? "textOnly" : "guided")
     }
-    private func runFullFlow(_ parallel: Bool, design: DiaryAIDesignSelection? = nil, dataset: String? = nil) async throws {
+    private func runFullFlow(_ parallel: Bool, design: DiaryAIDesignSelection? = nil, dataset: String? = nil, mode: String = "guided") async throws {
         guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-fullflow-benchmark-enabled") else { return }
         let output = URL(fileURLWithPath: "/tmp/TravelDiaryBook8Validation/fullflow-benchmark")
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
@@ -165,6 +176,7 @@ import SwiftUI
         let measuredStart = Date()
         var r = DiaryAIRequest.defaults(.relayout); r.allowsText = true; r.background = .init(saveToAlbum: false); r.scene = "山野徒步"; r.location = "雨崩"
         if dataset != nil { r.scene = "不指定"; r.location = "" }
+        r.background?.generationMode = mode
         r.design = design; r = r.coordinated()
         print("DESIGN_DATASET \(dataset ?? "book8")")
         print("DESIGN_CASE \(design?.layout.rawValue ?? "legacy") \(design?.style.rawValue ?? "legacy")")
@@ -199,7 +211,7 @@ import SwiftUI
         if let diagnostics = try? await w.exportProductionLog() {
             try FileManager.default.copyItem(at: diagnostics, to: runFolder.appendingPathComponent("production-log.zip"))
         }
-        try JSONSerialization.data(withJSONObject: ["dataset": dataset ?? "book8", "layout": design?.layout.rawValue ?? "legacy", "style": design?.style.rawValue ?? "legacy", "elapsed": Date().timeIntervalSince(measuredStart), "error": w.error ?? "", "backgroundRetries": backgroundRetries], options: [.prettyPrinted, .sortedKeys]).write(to: runFolder.appendingPathComponent("metrics.json"))
+        try JSONSerialization.data(withJSONObject: ["mode": mode, "dataset": dataset ?? "book8", "layout": design?.layout.rawValue ?? "legacy", "style": design?.style.rawValue ?? "legacy", "elapsed": Date().timeIntervalSince(measuredStart), "error": w.error ?? "", "backgroundRetries": backgroundRetries], options: [.prettyPrinted, .sortedKeys]).write(to: runFolder.appendingPathComponent("metrics.json"))
         #expect(!w.running && w.backgroundRecord?.layerID != nil)
         #expect(w.error == nil)
         guard w.backgroundRecord?.layerID != nil else { return }
