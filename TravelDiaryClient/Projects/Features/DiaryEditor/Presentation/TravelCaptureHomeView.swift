@@ -51,16 +51,18 @@ struct TravelCaptureHomeView: View {
 
     var body: some View {
         homeContent
-        .toolbar(.hidden, for: .navigationBar)
         .background {
-            Color(uiColor: .systemGroupedBackground)
-            Canvas { context, size in
-                for x in stride(from: 8.0, to: size.width, by: 22) {
-                    for y in stride(from: 8.0, to: size.height, by: 22) {
-                        context.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 1.5, height: 1.5)), with: .color(.secondary.opacity(0.12)))
+            ZStack {
+                DiaryLibraryStyle.background
+                Canvas { context, size in
+                    for x in stride(from: 8.0, to: size.width, by: 22) {
+                        for y in stride(from: 8.0, to: size.height, by: 22) {
+                            context.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 1.5, height: 1.5)), with: .color(.secondary.opacity(0.12)))
+                        }
                     }
-                }
-            }.allowsHitTesting(false)
+                }.allowsHitTesting(false)
+            }
+            .ignoresSafeArea(.container, edges: [.top, .bottom])
         }
         .disabled(busy)
         .overlay { if busy { ProgressView("正在准备…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) } }
@@ -102,7 +104,8 @@ struct TravelCaptureHomeView: View {
         }
         .task { await loadCreationDrafts() }
         .fullScreenCover(item: $styleEditor, onDismiss: { Task { await reload() } }) { value in
-            DiaryEditorScreen(session: value, creationRequest: styleRequest)
+            DiaryEditorScreen(session: value, creationRequest: styleRequest, onNewPage: newStylePage)
+                .id(value.id)
         }
         .fullScreenCover(item: $editor, onDismiss: { Task { await reload(); await refreshPreview() } }) { DiaryEditorScreen(session: $0) }
         .alert("旅行随记", isPresented: Binding(get: { error != nil && reviewPhoto == nil }, set: { if !$0 { error = nil } })) { Button("好") { error = nil } } message: { Text(error ?? "") }
@@ -114,6 +117,25 @@ struct TravelCaptureHomeView: View {
             TravelStyleDeck(selection: $selectedStyle) { Task { await openStyleCanvas() } }
             Spacer(minLength: 0)
         }.padding(.horizontal, 20).frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func newStylePage() async throws {
+        guard let previous = styleCoordinator else { throw DiaryEditorError.invalidDocument }
+        var draft = CreationDraft(owner: ownerID, targetBookID: previous.draft.targetBookID)
+        draft.styleEntry = true
+        draft.design = styleEditor?.aiWorkspace.currentDesign ?? previous.draft.design
+        let next = CreationCoordinator(owner: ownerID, draft: draft)
+        guard let session = await next.prepare(allowEmpty: true) else {
+            throw DiaryAIError.invalid(next.error ?? "无法创建空白页")
+        }
+        do { try await previous.discardForNewPage() }
+        catch {
+            try? await next.discardForNewPage()
+            throw error
+        }
+        styleRequest = next.draft.request()
+        styleCoordinator = next
+        styleEditor = session
     }
 
     private func openStyleCanvas() async {

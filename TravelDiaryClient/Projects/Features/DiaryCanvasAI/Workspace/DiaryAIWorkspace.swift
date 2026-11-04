@@ -75,6 +75,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private var baseline: DiaryAIWorkspaceCheckpoint?
     private var checkpoints: [DiaryAIWorkspaceCheckpoint] = []
     private var request = DiaryAIRequest.defaults(.relayout)
+    var currentDesign: DiaryAIDesignSelection? { request.design }
     private var composition = ""
     private var layoutRegions: [DiaryAILayoutRegion] = []
     private var visualRevision: DiaryAIVisualRevision?
@@ -84,6 +85,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private var backgroundTask: Task<Void, Error>?
     private var parallelExecution: Bool
     private var generation = UUID()
+    private var discarded = false
     private var queue: [UUID] = []
     private var batchExpires: Date?
     private var autoAll = false
@@ -93,6 +95,11 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     @Published private(set) var backgroundPreview: UIImage?
     private let backgroundProvider: any DiaryAIBackgroundProvider
     private let albumSaver: any DiaryAIBackgroundAlbumSaving
+    @Published private(set) var saving = false
+    var canSaveWork: Bool {
+        active && !running && !addingMaterials && !saving &&
+        objects.contains { $0.visible && !pending.contains($0.id) }
+    }
     var hasBackgroundRequest: Bool { request.background != nil }
     var isBackgroundOnly: Bool { request.background?.backgroundOnly == true }
     var needsTextCompletion: Bool { request.action == .relayout && request.canCreateText && !textDone && !isBackgroundOnly }
@@ -122,19 +129,20 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             .appendingPathComponent("DiaryCanvasAI/Workspaces/\(DiaryEditorAIBridge(session).storageKey).json")
         storage = DiaryAIWorkspaceStore(url: archiveURL)
     }
+    private var thumbnailTask: Task<Void, Never>?
+
     private func log(_ kind: String, _ title: String, _ detail: String = "", images: [DiaryAIImage] = []) {
         let descriptions = images.map { "\($0.id) · \($0.caption) · \($0.data.count / 1024) KB" }.joined(separator: "\n")
-        let smallImages = images.compactMap { item -> Data? in
-            autoreleasepool { () -> Data? in
-            guard let image = UIImage(data: item.data) else { return nil }
-            let ratio = min(1, 480 / max(image.size.width, image.size.height))
-            let size = CGSize(width: image.size.width * ratio, height: image.size.height * ratio)
-            let format = UIGraphicsImageRendererFormat(); format.scale = 1
-            return UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }.jpegData(compressionQuality: 0.65)
-            }
-        }
         productionLog.record("event", ["kind": kind, "title": title, "detail": detail, "images": images.map { ["id": $0.id, "caption": $0.caption, "file": productionLog.attachment($0.data, ext: "jpg")] }])
-        events.append(.init(kind: kind, title: title, detail: detail + (descriptions.isEmpty ? "" : "\n" + descriptions), images: smallImages))
+        events.append(.init(kind: kind, title: title, detail: detail + (descriptions.isEmpty ? "" : "\n" + descriptions), images: []))
+        guard !images.isEmpty, let eventID = events.last?.id else { return }
+        let previous = thumbnailTask
+        thumbnailTask = Task { [weak self] in
+            await previous?.value
+            let thumbnails = (try? await DiaryAIImageWork.run { images.compactMap { DiaryAIImageWork.thumbnail($0.data) } }) ?? []
+            guard let self, let index = self.events.firstIndex(where: { $0.id == eventID }) else { return }
+            self.events[index].images = thumbnails
+        }
     }
     func exportProductionLog() async throws -> URL {
         productionLog.record("export", ["eventCount": events.count, "version": version, "pending": pending.map(\.uuidString)])
@@ -281,6 +289,37 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         }
     }
 
+    func prepareLayoutAdjustment() async {
+        guard active, !running, !addingMaterials, let working else { return }
+        pending = objects.filter { $0.editable && $0.role != "background" }.map(\.id)
+        composition = ""; layoutRegions = []; awaitingConfirmation = false; visualRevision = nil; confirmationScope = nil
+        checkpoints.append(.init(working.document, pending: pending))
+        do { try await persist(); try await refresh() }
+        catch { self.error = error.localizedDescription }
+    }
+
+    func removePendingMaterial(_ id: UUID) async {
+        guard active, !running, !addingMaterials, pending.contains(id), let working else { return }
+        let originalDocument = working.document
+        let originalPending = pending
+        do {
+            var document = working.document
+            document.objects[working.contentID]?.layers.removeAll { $0.id == id || $0.frameTargetID == id }
+            pending.removeAll { $0 == id }; selected.remove(id)
+            checkpoints.append(.init(document, pending: pending))
+            try await persist(); try await setup(document); try await refresh()
+            version += 1
+            composition = ""; layoutRegions = []
+            log("remove", "已移除待排素材", "原始恢复点保留，可回退上一批。")
+            try await persist()
+        } catch {
+            pending = originalPending
+            if checkpoints.count > 1 { checkpoints.removeLast() }
+            try? await setup(originalDocument); try? await refresh(); try? await persist()
+            self.error = error.localizedDescription
+        }
+    }
+
     func toggle(_ id: UUID) { if selected.contains(id) { selected.remove(id) } else if pending.contains(id) { selected.insert(id) } }
     func enqueue(_ ids: [UUID], hint: CGPoint? = nil) {
         let added = ids.filter { pending.contains($0) && !queue.contains($0) && !processing.contains($0) }
@@ -297,6 +336,23 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         stage = "已暂停"; log("pause", "已暂停", "已提交批次保留，未提交操作丢弃。")
         Task { do { try await persist() } catch { self.error = error.localizedDescription } }
     }
+    /// Cancel and join writers before the creation directory can be removed.
+    func discardForNewPage() async {
+        discarded = true
+        generation = UUID()
+        active = false
+        let previousTask = task, previousBackground = backgroundTask
+        previousTask?.cancel(); previousBackground?.cancel(); watchdog?.cancel()
+        task = nil; backgroundTask = nil; watchdog = nil
+        await previousTask?.value
+        _ = try? await previousBackground?.value
+        running = false; processing = []; queue = []
+        if let working { await working.discardCreationSession() }
+        if let displaySession { await displaySession.discardCreationSession() }
+        working = nil; displaySession = nil; bridge = nil
+        source?.aiWorkspacePresented = false
+    }
+
     func rollback() async {
         guard canRollback, checkpoints.count > 1 else { return }
         do {
@@ -319,7 +375,9 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         catch { self.error = error.localizedDescription }
     }
     func save() async -> Bool {
-        guard !running, !addingMaterials, let source, let baseline, let working else { return false }
+        guard !running, !addingMaterials, !saving, let source, let baseline, let working else { return false }
+        saving = true
+        defer { saving = false }
         do {
             guard source.document == baseline.restoredDocument else { throw DiaryAIError.invalid("原作品已变化，不能覆盖。请退出后重新进入。") }
             var published = working.document
@@ -343,8 +401,10 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         catch { self.error = error.localizedDescription }
     }
     private func persist() async throws {
+        await thumbnailTask?.value
+        guard !discarded else { return }
         try await productionLog.flush()
-        guard let baseline else { return }
+        guard !discarded, let baseline else { return }
         storageSequence += 1
         let value = DiaryAIWorkspaceArchive(parallelExecution: parallelExecution, awaitingConfirmation: awaitingConfirmation, logSession: productionLog.directory.lastPathComponent, baseline: baseline, checkpoints: checkpoints, request: request, events: events, composition: composition, version: version, textDone: textDone, background: backgroundRecord, layoutRegions: layoutRegions, visualRevision: visualRevision, confirmationScope: confirmationScope)
         try await storage.save(value, sequence: storageSequence)
@@ -477,14 +537,14 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         let inputBridge = DiaryEditorAIBridge(working)
         inputBridge.excludedRenderIDs = Set(objects.filter { $0.role == "background" }.map(\.id))
         _ = try await inputBridge.capture(request)
-        let reference = try DiaryAIBackgroundImaging.jpeg(try await inputBridge.originalPreview())
+        let reference = try await inputBridge.originalPreview()
         let size = working.content.referenceSize
         let plannedObjects = objects.map { object -> DiaryAIObject in
             var copy = object
             if let region = layoutRegions.first(where: { $0.objectID == object.id.uuidString || $0.objectID == object.shortID }) { copy.bounds = region.bounds }
             return copy
         }
-        let guide = try DiaryAIBackgroundImaging.occupancyGuide(canvas: size, objects: plannedObjects)
+        let guide = try await DiaryAIImageWork.run { try DiaryAIBackgroundImaging.occupancyGuide(canvas: size, objects: plannedObjects) }
         let style = DiaryAIBackgroundStyle.resolve(options.style)
         let context = "整页设计：\(request.designBrief)。共同构图：\(composition)。区域：\(try DiaryAIDraftController.json(layoutRegions))。场景：\(request.scene)。用户要求：\(request.instruction)。创作资料：\(request.creationBrief?.modelInstructions ?? "")。风格：\(style.name)，\(style.brief)。\(style.sceneDirection(options.strength))。这是排版前的素材参考，背景空间必须按共同构图预留，不按旧照片坐标。"
         backgroundRecord = .init(inputDigest: try DiaryEditorAIBridge.digest(working.document))
@@ -525,7 +585,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         stage = "准备背景参考图"
         bridge.excludedRenderIDs = Set(objects.filter { $0.role == "background" }.map(\.id))
         _ = try await bridge.capture(request)
-        let reference = try DiaryAIBackgroundImaging.jpeg(try await bridge.originalPreview())
+        let reference = try await bridge.originalPreview()
         try check()
         let size = working.content.referenceSize
         _ = try DiaryAIBackgroundImaging.exactSize(size)
@@ -559,7 +619,8 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 backgroundRecord?.generationPrompt = prepared; try await persist()
             }
             stage = "正在生成背景"
-            let guide = try DiaryAIBackgroundImaging.occupancyGuide(canvas: size, objects: objects)
+            let guideObjects = objects
+            let guide = try await DiaryAIImageWork.run { try DiaryAIBackgroundImaging.occupancyGuide(canvas: size, objects: guideObjects) }
             log("request", "发送背景生成请求", "\(DiarySeedreamBackgroundProvider.model) · 2K · \(style.name) · 水印开启；场景设计说明＋空间占位图，避免复制前景", images: [.init(id: "background-guide", caption: "浅灰柔和区域是前景避让范围，输出不得保留灰色占位痕迹", data: guide)])
             try await persist()
             try check()
@@ -569,7 +630,11 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             log("response", "背景服务已返回图片地址", "开始下载；不会把临时地址作为作品资源。")
         }
         var bytes: Data
-        if let filename = backgroundRecord?.filename { bytes = try Data(contentsOf: backgroundFile(filename)) }
+        if let filename = backgroundRecord?.filename {
+            let url = backgroundFile(filename)
+            bytes = try await DiaryAIImageWork.run { try Data(contentsOf: url) }
+            try check()
+        }
         else {
             guard let url = backgroundRecord?.remoteURL else { throw DiaryAIError.invalid("背景下载地址缺失") }
             stage = "正在下载并匹配画布比例"
@@ -577,13 +642,23 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             let downloaded = try await backgroundProvider.download(url); try check()
             // Keep the original download so a proportion/quality failure does not pay for a second generation.
             let rawName = "\(recordID).original"
-            try FileManager.default.createDirectory(at: backgroundFile(rawName).deletingLastPathComponent(), withIntermediateDirectories: true)
-            try downloaded.write(to: backgroundFile(rawName), options: .atomic)
+            let rawURL = backgroundFile(rawName)
+            try await DiaryAIImageWork.run {
+                try FileManager.default.createDirectory(at: rawURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try downloaded.write(to: rawURL, options: .atomic)
+            }
+            try check()
             backgroundRecord?.filename = rawName; try await persist(); bytes = downloaded
         }
-        bytes = try DiaryAIBackgroundImaging.prepare(bytes, canvas: size)
+        let downloadedBytes = bytes
         let filename = "\(recordID).png"
-        try bytes.write(to: backgroundFile(filename), options: .atomic)
+        let outputURL = backgroundFile(filename)
+        bytes = try await DiaryAIImageWork.run {
+            let prepared = try DiaryAIBackgroundImaging.prepare(downloadedBytes, canvas: size)
+            try prepared.write(to: outputURL, options: .atomic)
+            return prepared
+        }
+        try check()
         backgroundRecord?.filename = filename
         backgroundPreview = UIImage(data: bytes); try await persist()
         if backgroundRecord?.verified != true {
@@ -820,7 +895,8 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         let qualityRules = efficientExecution ? "这是最终整页验收。检查每张照片是否横倒/倒置，发现时只请求该图层以place_layer旋转纠正，不能保留侧倒的人物、动物或地平线。检查所选排版是否落实：主照是否有尺寸反差、大字主题的标题是否成为重心、旁注是否靠近对应照片、纸刊是否有阅读顺序。文字若猜测未提供的日期/地点/亲属/仪式/行程顺序则修订对应文字，不整页重做。只在具体可见问题时修复，说明对象与证据。只修复主体遮挡、文字不可读、严重碰撞或越界；照片区域是最大容纳范围，不要求铺满，禁止把原始竖照拉成横照。allowsDecorations=false表示不能隐藏已有贴纸，并非禁止摆放已有贴纸；不能要求移除、缩成零或移出画布。贴纸不协调时只要求依附照片组摆放，禁止无法由开放工具实现的修复。保留所有用户原照片，不因场景不统一要求替换原照片；没有替换、删除或拉伸工具。生成新背景时旧背景的图案与文字将被替换，不为旧背景重新移动照片。有限装饰压边允许，不因主观偏好反复修复。标题纸卡、下划线是否使用是视觉选择：只要主题层级、可读性和空间合格，不能仅因与规划中“直接写在纸上”的建议不同而反复要求去纸卡；用户明确要求无纸卡时仍必须遵从。结构化regions是最终位置依据，若文字构图描述与regions冲突，以regions为准，不要求对象回到已失效的文字坐标。通过时只finish_batch。如开启生成背景且尚未生成、也未并行设计，同时在finish_batch给出backgroundBrief（真实照片的共同主题与来源线索）及backgroundPrompt（150至250字纯正向场景底图，绝对位置，按指定视觉语言组织一处主题意象、少量来源呼应与主动留白，不强制写实景深或撕纸，不写照片、人物、贴纸、书页，不复制旧背景）。不合格时只request_batch_revision。" : ""
         let backgroundStyleRules = request.background.map { options in let style = DiaryAIBackgroundStyle.resolve(options.style); return "背景视觉语言：\(style.name)，\(style.brief)。\(style.sceneDirection(options.strength))。这些规则同时约束backgroundBrief与backgroundPrompt。" } ?? ""
         let prompt = request.designBrief + appliedBackgroundRule + qualityRules + backgroundStyleRules + "上一批已提交，当前版本\(version)。\(versionInstruction) 检查图片，有问题且允许时调用request_batch_revision，无问题finish_batch；不直接修改图层。允许工具：\(tools.sorted())。用户要求：\(try DiaryAIDraftController.json(request))。构图：\(composition)。结构化区域：\(try DiaryAIDraftController.json(layoutRegions))。确认范围：\(try DiaryAIDraftController.json(scope))。当前图层：\(try DiaryAIDraftController.json(objects))。"
-        var reviewImages = preview.flatMap { $0.jpegData(compressionQuality: 0.8) }.map { [DiaryAIImage(id: "confirmed-canvas", caption: "已提交结果", data: $0)] } ?? []
+        var reviewImages: [DiaryAIImage] = []
+        if let preview { reviewImages = [.init(id: "confirmed-canvas", caption: "已提交结果", data: try await DiaryAIImageWork.jpeg(preview, quality: 0.8))] }
         if efficientExecution, request.background != nil, backgroundRecord?.layerID == nil, let bridge {
             bridge.allowedBatchIDs = nil
             bridge.excludedRenderIDs = Set(objects.filter { $0.role == "background" }.map(\.id)).union(pending)
@@ -980,7 +1056,8 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 continuation = nil; results = []
             }
             recoveryPrompt = nil; resetContext = false
-            let recoveryImages = committed ? preview.flatMap { $0.jpegData(compressionQuality: 0.82) }.map { [DiaryAIImage(id: "confirmed-canvas", caption: "最新已提交画布", data: $0)] } ?? images : images
+            var recoveryImages = images
+            if committed, let preview { recoveryImages = [.init(id: "confirmed-canvas", caption: "最新已提交画布", data: try await DiaryAIImageWork.jpeg(preview))] }
             var reply = try await timedRequest(prompt: prompt, images: (rebuilding || efficientExecution) ? recoveryImages : [], continuation: continuation, results: results, token: token)
             if efficientExecution && reply.calls.contains(where: { DiaryAIWorkspaceTools.operationNames[$0.name] != nil }) {
                 log("client", "客户端自动提交本批", "已完整接收工具参数；不额外调用模型决定提交。")
@@ -1089,7 +1166,9 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                             let wanted = values.compactMap { reference in context.objects.first { $0.shortID == reference || $0.id.uuidString.caseInsensitiveCompare(reference) == .orderedSame }?.id }; guard wanted.count <= Self.maximumBatchLayers && wanted.allSatisfy(ids.contains) else { throw DiaryAIError.invalid("补图超出本批范围") }
                             feedback = try await bridge.inspect(.init(contextID: context.id, objectIDs: wanted, view: "fullAsset")); text = "素材图片已附"
                         case "get_canvas_image":
-                            let bytes = committed ? (preview?.jpegData(compressionQuality: 0.82) ?? Data()) : try await bridge.originalPreview()
+                            let bytes: Data
+                            if committed, let preview { bytes = try await DiaryAIImageWork.jpeg(preview) }
+                            else { bytes = try await bridge.originalPreview() }
                             feedback = [.init(id: "canvas-v\(version)", caption: "当前已提交画布", data: bytes)]; text = "当前画布"
                         case "rollback_batch": guard !committed else { throw DiaryAIError.invalid("已提交批次需用户回退") }; operations = []; commitFailed = false; text = ids.isEmpty ? "已清空本批新增文字；请按原文字计划重新创建，复用原clientObjectKey。" : "已清空本批全部未提交操作（不只失败的一项）。必须重新摆放全部对象：\(ids.compactMap { id in context.objects.first { $0.id == id }?.shortID }.joined(separator: "、"))，全部暂存后才能commit_batch。"
                         case "commit_batch":

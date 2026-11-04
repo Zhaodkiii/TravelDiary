@@ -104,7 +104,7 @@ extension DiaryAIBackgroundProvider {
     }
 }
 
-@MainActor enum DiaryAIBackgroundImaging {
+nonisolated enum DiaryAIBackgroundImaging {
     static func exactSize(_ canvas: CGSize, preferredLongEdge: Int = 1536) throws -> CGSize {
         guard canvas.width.isFinite, canvas.height.isFinite, canvas.width > 0, canvas.height > 0, canvas.width <= 100000, canvas.height <= 100000 else { throw DiaryAIError.invalid("画布尺寸无效") }
         let w = Int(canvas.width.rounded()), h = Int(canvas.height.rounded())
@@ -174,5 +174,5 @@ extension DiaryAIBackgroundProvider {
     }
 }
 private extension Optional where Wrapped == Data {
-    func unwrapBackground() throws -> Data { guard let self else { throw DiaryAIError.invalid("参考图编码失败") }; return self }
+    nonisolated func unwrapBackground() throws -> Data { guard let self else { throw DiaryAIError.invalid("参考图编码失败") }; return self }
 }

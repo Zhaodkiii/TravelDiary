@@ -28,20 +28,6 @@ import ZIPFoundation
         }
         record("resume", ["message": "继续上次制作日志"])
     }
-    private func sanitize(_ value: Any) -> Any {
-        if let dict = value as? [String: Any] {
-            return dict.mapValues { sanitize($0) }.filter { !["authorization", "api_key", "apikey"].contains($0.key.lowercased()) }
-        }
-        if let array = value as? [Any] { return array.map(sanitize) }
-        if let text = value as? String {
-            if text.hasPrefix("data:image/"), let comma = text.firstIndex(of: ","), let data = Data(base64Encoded: String(text[text.index(after: comma)...])) {
-                return ["attachment": attachment(data, ext: text.hasPrefix("data:image/png") ? "png" : "jpg"), "bytes": data.count] as [String: Any]
-            }
-            let key = DiaryAITestConfig.apiKey
-            return key.isEmpty ? text : text.replacingOccurrences(of: key, with: "[REDACTED]")
-        }
-        return value
-    }
     @discardableResult func attachment(_ data: Data, ext: String) -> String {
         let name = "attachments/\(DiaryEditorAIBridge.hash(data)).\(ext)"
         if knownAttachments.insert(name).inserted {
@@ -50,17 +36,13 @@ import ZIPFoundation
         return name
     }
     func record(_ kind: String, _ value: Any) {
-        sequence += 1
-        do {
-            let body: [String: Any] = ["sequence": sequence, "time": ISO8601DateFormatter().string(from: Date()), "kind": kind, "payload": sanitize(value)]
-            var bytes = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys, .fragmentsAllowed])
-            bytes.append(10)
-            writer.append(bytes, to: directory.appendingPathComponent("events.jsonl"))
-        } catch { failure = error.localizedDescription }
+        do { data(kind, try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])) }
+        catch { failure = error.localizedDescription }
     }
     func data(_ kind: String, _ data: Data) {
-        if let object = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed) { record(kind, object) }
-        else { record(kind, ["file": attachment(data, ext: "txt")]) }
+        sequence += 1
+        // Keep sequence/time assignment synchronous; parse, redact and encode on the ordered writer.
+        writer.record(kind, data: data, sequence: sequence, date: Date(), directory: directory, key: DiaryAITestConfig.apiKey)
     }
     func flush() async throws { try await writer.flush() }
     func export() async throws -> URL {
@@ -95,19 +77,55 @@ import ZIPFoundation
 }
 
 /// Ordered I/O and bounded-time batching; no file writes on the UI thread.
-private final class DiaryAILogWriter: @unchecked Sendable {
+private nonisolated final class DiaryAILogWriter: @unchecked Sendable {
     private let queue = DispatchQueue(label: "diary.ai.production-log", qos: .utility)
     private var pending: [URL: Data] = [:]
     private var scheduled = false
     private var failure: Error?
-    func append(_ data: Data, to url: URL) {
+    private let formatter = ISO8601DateFormatter()
+
+    func record(_ kind: String, data: Data, sequence: Int, date: Date, directory: URL, key: String) {
         queue.async {
-            self.pending[url, default: Data()].append(data)
-            if self.pending[url]!.count >= 64 * 1024 { self.drain() }
-            if !self.scheduled {
-                self.scheduled = true
-                self.queue.asyncAfter(deadline: .now() + 0.2) { self.scheduled = false; self.drain() }
+            autoreleasepool {
+                do {
+                    let value = try (try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed))
+                        ?? ["file": try self.attachment(data, ext: "txt", directory: directory)]
+                    let body: [String: Any] = ["sequence": sequence, "time": self.formatter.string(from: date),
+                        "kind": kind, "payload": try self.sanitize(value, directory: directory, key: key)]
+                    var bytes = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys, .fragmentsAllowed])
+                    bytes.append(10)
+                    self.appendOnQueue(bytes, to: directory.appendingPathComponent("events.jsonl"))
+                } catch { self.failure = error }
             }
+        }
+    }
+    private func sanitize(_ value: Any, directory: URL, key: String) throws -> Any {
+        if let dict = value as? [String: Any] {
+            return try dict.filter { !["authorization", "api_key", "apikey"].contains($0.key.lowercased()) }
+                .mapValues { try sanitize($0, directory: directory, key: key) }
+        }
+        if let array = value as? [Any] { return try array.map { try sanitize($0, directory: directory, key: key) } }
+        if let text = value as? String {
+            if text.hasPrefix("data:image/"), let comma = text.firstIndex(of: ","), let data = Data(base64Encoded: String(text[text.index(after: comma)...])) {
+                return ["attachment": try attachment(data, ext: text.hasPrefix("data:image/png") ? "png" : "jpg", directory: directory), "bytes": data.count] as [String: Any]
+            }
+            return key.isEmpty ? text : text.replacingOccurrences(of: key, with: "[REDACTED]")
+        }
+        return value
+    }
+    private func attachment(_ data: Data, ext: String, directory: URL) throws -> String {
+        let name = "attachments/\(DiaryEditorAIBridge.hash(data)).\(ext)"
+        let url = directory.appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: url.path) { try data.write(to: url, options: .atomic) }
+        return name
+    }
+    private func appendOnQueue(_ data: Data, to url: URL) {
+        pending[url, default: Data()].append(data)
+        if pending[url]!.count >= 64 * 1024 { drain() }
+        if !scheduled {
+            scheduled = true
+            queue.asyncAfter(deadline: .now() + 0.2) { self.scheduled = false; self.drain() }
         }
     }
     func save(_ data: Data, to url: URL) {

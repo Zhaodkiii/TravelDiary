@@ -1,7 +1,7 @@
 import Foundation
 
 /// SSE frames are assembled before decoding; no partial tool arguments leave the adapter.
-struct DiaryAIStreamDecoder {
+nonisolated struct DiaryAIStreamDecoder {
     private var dataLines: [String] = []
     private var bufferedBytes = 0
     private(set) var completed: Data?
@@ -46,4 +46,13 @@ enum DiaryAIRequestLimits {
     static let idleTimeout: TimeInterval = 120
     static let requestDeadline: TimeInterval = 240
     static let batchDeadline: TimeInterval = 600
+}
+
+/// JSON parsing of stream frames never executes on the UI actor.
+actor DiaryAIStreamParser {
+    private var decoder = DiaryAIStreamDecoder()
+    func accept(_ line: String) throws -> (event: Bool, completed: Data?) {
+        let event = try decoder.acceptNetworkLine(line)
+        return (event, decoder.completed)
+    }
 }

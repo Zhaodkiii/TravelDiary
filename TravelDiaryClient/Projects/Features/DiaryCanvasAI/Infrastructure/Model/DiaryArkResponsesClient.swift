@@ -128,7 +128,8 @@ import Foundation
                 guard (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")?.contains("text/event-stream") == true else {
                     throw DiaryAIError.invalid("接口未返回 SSE 流，未执行任何未提交操作。")
                 }
-                var decoder = DiaryAIStreamDecoder(), firstEvent = false
+                let parser = DiaryAIStreamParser()
+                var firstEvent = false
                 for try await line in bytes.lines {
                     try Task.checkCancellation()
                     guard Date().timeIntervalSince(started) < DiaryAIRequestLimits.requestDeadline else {
@@ -136,12 +137,12 @@ import Foundation
                     }
                     if line.hasPrefix("data:"), let payload = line.dropFirst(5).data(using: .utf8) { productionLog?.data("sse", payload) }
                     else if !line.isEmpty && !line.hasPrefix("event:") { productionLog?.record("sse", ["line": line]) }
-                    let completeEvent = try decoder.acceptNetworkLine(line)
-                    if completeEvent, !firstEvent {
+                    let parsed = try await parser.accept(line)
+                    if parsed.event, !firstEvent {
                         firstEvent = true
                         onTransportEvent?("已收到首个流式事件", String(format: "首事件耗时 %.2f 秒", Date().timeIntervalSince(started)))
                     }
-                    if let completed = decoder.completed { received = completed; break }
+                    if let completed = parsed.completed { received = completed; break }
                 }
                 guard received != nil else { throw DiaryAIError.invalid("流式连接中断，未收到完整结果。已提交批次保留；重试可能产生新请求和费用。") }
                 onTransportEvent?("模型输出完整接收", String(format: "本次耗时 %.2f 秒；工具参数现在才进入校验", Date().timeIntervalSince(started)))

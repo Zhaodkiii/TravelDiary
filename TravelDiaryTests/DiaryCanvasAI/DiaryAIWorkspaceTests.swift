@@ -6,6 +6,15 @@ import SwiftUI
 
 @Suite(.serialized)
 @MainActor struct DiaryAIWorkspaceTests {
+    @Test func compositionPreviewKeepsEveryPhotoInBounds() {
+        for layout in DiaryAILayout.allCases {
+            for count in [1, 2, 3, 5, 8, 9, 16, 30] {
+                let frames = DiaryAIDesignPreview.photoFrames(count: count, layout: layout)
+                #expect(frames.count == count)
+                #expect(frames.allSatisfy { $0.minX >= 0 && $0.minY >= 0 && $0.maxX <= 1 && $0.maxY <= 1 && $0.width > 0 && $0.height > 0 })
+            }
+        }
+    }
     private func fixture(count: Int = 3, size: CGSize = CGSize(width: 1000, height: 800)) async throws -> (DiaryEditorSession, URL) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         var document = DiaryDocument(); document.objects[document.rootContentID]?.referenceSize = size
@@ -72,6 +81,24 @@ import SwiftUI
             host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
         }
         try image.pngData()?.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("travel-style-deck.png"))
+    }
+    @Test func studioRemovalRollbackAndLayoutAdjustment() async throws {
+        let (session, root) = try await fixture(count: 9)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = DiaryAIWorkspace(session: session, model: WorkspaceModel(), root: root)
+        await workspace.enter(.defaults(.relayout))
+        let id = try #require(workspace.pending.first)
+        await workspace.removePendingMaterial(id)
+        #expect(workspace.pending.count == 8 && workspace.objects.count == 8)
+        await workspace.rollback()
+        #expect(workspace.pending.count == 9 && workspace.objects.count == 9)
+        await workspace.prepareLayoutAdjustment()
+        #expect(workspace.pending.count == 9)
+        let host = UIHostingController(rootView: DiaryAIInlinePanel(workspace: workspace, controller: session.canvasAI))
+        host.view.frame = CGRect(x: 0, y: 0, width: 393, height: 330)
+        host.view.layoutIfNeeded()
+        let image = UIGraphicsImageRenderer(size: host.view.bounds.size).image { _ in host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true) }
+        try image.pngData()?.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("travel-studio.png"))
     }
     @Test func emptyCanvasDoesNotStartPaidModelWork() async throws {
         let (session, root) = try await fixture(count: 0); defer { try? FileManager.default.removeItem(at: root) }

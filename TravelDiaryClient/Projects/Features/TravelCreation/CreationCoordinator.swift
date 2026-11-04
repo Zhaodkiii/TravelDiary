@@ -102,6 +102,25 @@ final class CreationCoordinator: ObservableObject {
             return session
         } catch { self.error = error.localizedDescription; return nil }
     }
+    func discardForNewPage() async throws {
+        guard !busy, let session = activeSession,
+              !session.busy, !session.aiWorkspace.addingMaterials else {
+            throw DiaryAIError.invalid("正在处理素材，请稍后新建页。")
+        }
+        await session.aiWorkspace.discardForNewPage()
+        await session.canvasAI.stopForDiscard()
+        await session.discardCreationSession()
+        activeSession = nil
+        lease = nil
+        do { try await store.remove(draft.id) }
+        catch {
+            lease = StorageActivity.shared.acquire(store.directory(draft.id))
+            activeSession = session
+            session.resumeAfterFailedDiscard()
+            throw error
+        }
+    }
+
     func claimLaunch() async throws -> Bool {
         guard !draft.launchClaimed else { return false }
         draft.launchClaimed = true

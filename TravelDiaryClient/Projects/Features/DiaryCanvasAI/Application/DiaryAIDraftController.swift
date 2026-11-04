@@ -59,6 +59,15 @@ import Combine
         if let action = runningAction { status[action] = reason }
         runningAction = nil; stage = reason; persist()
     }
+    func stopForDiscard() async {
+        generation = UUID()
+        let previous = task
+        previous?.cancel(); timeoutTask?.cancel(); formSaveTask?.cancel()
+        task = nil; timeoutTask = nil; formSaveTask = nil
+        await previous?.value
+        await restoreTask?.value
+        runningAction = nil
+    }
     func suspend() { if running { cancel(reason: "生成已中断，可返回重试；完成的草稿已保留。") } }
     func discard(_ action: DiaryAIAction) {
         guard !running else { return }

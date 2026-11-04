@@ -10,13 +10,18 @@ struct DiaryEditorScreen: View {
     var entranceOnRightPage = false
     var creationRequest: DiaryAIRequest? = nil
     var creationAutoStart = false
+    var onNewPage: (() async throws -> Void)? = nil
+    @State private var confirmsNewPage = false
+    @State private var creatingNewPage = false
     @State private var creationEntered = false
+    @State private var enteringCreation = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var showsSpreadShell = true
     @State private var childEditor: DiaryEditorSession?
     @State private var showPhotos = false
     @State private var aiPhotos: [PhotosPickerItem] = []
+    @State private var confirmsSaveAIWork = false
     @State private var showAIPhotos = false
     @State private var showAIStickers = false
     @State private var showCamera = false
@@ -30,6 +35,7 @@ struct DiaryEditorScreen: View {
     @State private var showStickers = false
     @State private var selectionViewportRect: CGRect?
 
+    @State private var studioDesign: DiaryAIDesignSelection?
     @State private var aiMode = false
     @State private var aiCompare = false
     @State private var aiDisplaySession: DiaryEditorSession?
@@ -39,7 +45,7 @@ struct DiaryEditorScreen: View {
     var body: some View {
         NavigationStack {
             editorContent
-            .disabled(session.busy || importingCameraPhotos || session.aiWorkspace.addingMaterials)
+            .disabled(creatingNewPage || session.busy || importingCameraPhotos || session.aiWorkspace.addingMaterials || session.aiWorkspace.saving)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { editorToolbar }
@@ -51,6 +57,16 @@ struct DiaryEditorScreen: View {
                         .padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
             }
+            .confirmationDialog("保存当前作品？", isPresented: $confirmsSaveAIWork, titleVisibility: .visible) {
+                Button("保存已完成部分") { Task { _ = await session.aiWorkspace.save() } }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("还有待排素材。保存当前画布后，待排素材会保留在项目中，但不会显示在作品和导出中。")
+            }
+            .confirmationDialog("删除当前草稿并新建？", isPresented: $confirmsNewPage, titleVisibility: .visible) {
+                Button("删除当前草稿并新建", role: .destructive) { newPage() }
+                Button("取消", role: .cancel) {}
+            } message: { Text("当前待处理素材和未保存的制作内容将删除，已保存的正式作品会保留。") }
             .onReceive(session.aiWorkspace.$displaySession) { aiDisplaySession = $0 }
             .onChange(of: session.aiWorkspacePresented) { _, presented in
                 if !presented { withAnimation(.smooth(duration: 0.4)) { aiMode = false } }
@@ -114,8 +130,12 @@ struct DiaryEditorScreen: View {
             .task(id: session.id) {
                 if let creationRequest, !creationEntered {
                     creationEntered = true
+                    session.canvasAI.setForm(creationRequest)
+                    studioDesign = creationRequest.design
                     aiMode = true
+                    enteringCreation = true
                     await session.aiWorkspace.enter(creationRequest)
+                    enteringCreation = false
                     if creationAutoStart && session.aiWorkspace.active { session.aiWorkspace.processAll() }
                 }
                 if MaterialCatalogRepository.shared.pendingLibrary != nil { showStickers = true }
@@ -151,7 +171,7 @@ struct DiaryEditorScreen: View {
         ToolbarItem(placement: .topBarLeading) {
             HStack {
                 if aiMode {
-                    Button("退出") { Task { await session.aiWorkspace.keepForLater(); withAnimation { aiMode = false } } }
+                    Button("关闭") { Task { await session.aiWorkspace.keepForLater(); withAnimation { aiMode = false } } }
                 } else { Button("完成") { Task { if await session.commitToParent() { dismiss() } } }
                 if !session.isRoot { Button("取消") { Task { await session.cancelEditor(); dismiss() } } }
                 }
@@ -159,9 +179,28 @@ struct DiaryEditorScreen: View {
             .disabled(session.busy || importingCameraPhotos || session.aiWorkspace.addingMaterials)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
+            if onNewPage != nil {
+                Button(creatingNewPage ? "新建中…" : "新建页", systemImage: "plus.square") {
+                    if session.document.root.layers.isEmpty && session.document.assets.isEmpty && session.document.root.drawing.isEmpty && session.document.root.background == nil && session.aiWorkspace.objects.isEmpty {
+                        newPage()
+                    } else { confirmsNewPage = true }
+                }
+                .disabled(enteringCreation || !creationEntered || creatingNewPage || session.busy || importingCameraPhotos || session.aiWorkspace.addingMaterials)
+            }
             if aiMode {
-                Button { aiCompare.toggle() } label: { Image(systemName: "rectangle.on.rectangle") }.accessibilityLabel("对比原版")
-                Button("保存") { Task { if await session.aiWorkspace.save() { withAnimation { aiMode = false } } } }.disabled(session.aiWorkspace.running || session.aiWorkspace.addingMaterials)
+                Button(session.aiWorkspace.saving ? "保存中…" : "保存作品") {
+                    if session.aiWorkspace.pending.isEmpty { Task { _ = await session.aiWorkspace.save() } }
+                    else { confirmsSaveAIWork = true }
+                }
+                .disabled(!session.aiWorkspace.canSaveWork || importingCameraPhotos)
+                .accessibilityIdentifier("diary.ai.save-work")
+                if session.aiWorkspace.version > 0 && session.aiWorkspace.pending.isEmpty {
+                    Button { aiCompare.toggle() } label: { Image(systemName: "rectangle.on.rectangle") }.accessibilityLabel("对比原版")
+                }
+                Menu {
+                    Button("保存草稿并关闭") { Task { await session.aiWorkspace.keepForLater(); aiMode = false } }
+                } label: { Image(systemName: "ellipsis") }.accessibilityLabel("更多操作")
+                    .disabled(session.aiWorkspace.running || session.aiWorkspace.addingMaterials)
             } else {
             if supportsSpreadPreview {
                 Button { session.finishInteraction(); showsSpreadShell.toggle() } label: { Image(systemName: showsSpreadShell ? "eye.fill" : "eye") }
@@ -174,6 +213,16 @@ struct DiaryEditorScreen: View {
                 .disabled(session.redoStack.isEmpty || session.busy || importingCameraPhotos).accessibilityLabel("重做")
 
             }
+        }
+    }
+
+    private func newPage() {
+        guard !creatingNewPage, let onNewPage else { return }
+        creatingNewPage = true
+        Task {
+            defer { creatingNewPage = false }
+            do { try await onNewPage() }
+            catch { session.errorMessage = "新建页失败：" + error.localizedDescription }
         }
     }
 
@@ -206,7 +255,25 @@ struct DiaryEditorScreen: View {
                             else if layer.isContentPhoto { showCrop = true }
                             else if layer.kind == .sticker { childEditor = session.openSelectedStickerObject() }
                         })
+                            .allowsHitTesting(!aiMode)
                             .frame(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)
+                        if aiMode && !aiCompare && !session.aiWorkspace.running && session.aiWorkspace.backgroundPreview == nil && (session.aiWorkspace.objects.isEmpty || session.aiWorkspace.pending.count == session.aiWorkspace.objects.count) {
+                            ZStack {
+                                Color(red: 0.97, green: 0.96, blue: 0.92)
+                                if session.aiWorkspace.objects.contains(where: { $0.role == "photo" }) {
+                                    DiaryAIDesignPreview(design: studioDesign ?? session.canvasAI.form(.relayout).design ?? .init(), photos: session.aiWorkspace.objects.filter { $0.role == "photo" }.compactMap { session.aiWorkspace.thumbnails[$0.id] })
+                                } else {
+                                    VStack(spacing: 12) {
+                                        Text("从照片开始记录").font(.headline)
+                                        HStack {
+                                            Button("添加照片", systemImage: "photo.badge.plus") { showAIPhotos = true }
+                                            Button("拍摄", systemImage: "camera") { capturedPhotos = []; showCamera = true }
+                                        }.buttonStyle(.bordered).disabled(session.aiWorkspace.addingMaterials)
+                                    }
+                                }
+                            }.frame(width: size.width * scale, height: size.height * scale)
+                                .clipped().offset(x: margin, y: margin)
+                        }
                         if supportsSpreadPreview && showsSpreadShell {
                             LinearGradient(colors: [.clear, .black.opacity(0.16), .clear], startPoint: .leading, endPoint: .trailing)
                                 .frame(width: max(2, size.width * scale * 0.018), height: size.height * scale)
@@ -217,21 +284,7 @@ struct DiaryEditorScreen: View {
                       .frame(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)
                     }
                     .padding(.horizontal, aiMode ? 16 : 0)
-                    .allowsHitTesting(!aiMode)
                     .clipped()
-                    .overlay(alignment: .top) {
-                        if aiMode {
-                            let materialTop = max(size.height * scale + margin * 2 + 12, geometry.size.height * 0.62)
-                            VStack(spacing: 0) {
-                                Color.clear.frame(height: materialTop)
-                                DiaryAIMaterialRows(workspace: session.aiWorkspace,
-                                    onPhotos: { showAIPhotos = true },
-                                    onCamera: { capturedPhotos = []; showCamera = true },
-                                    onStickers: { showAIStickers = true })
-                                    .frame(height: max(0, geometry.size.height - materialTop))
-                            }
-                        }
-                    }
                     .overlay(alignment: .topLeading) {
                         if !toolOpen, session.selected != nil, let rect = selectionViewportRect {
                             let width = min(geometry.size.width - 24, CGFloat(session.contextActions.count) * 56 + 32)
@@ -242,12 +295,17 @@ struct DiaryEditorScreen: View {
                         }
                     }
                 }
+                .modifier(DiaryAIViewportAspectRatio(enabled: aiMode, ratio: session.canvasBounds.size.width / max(1, session.canvasBounds.size.height)))
                 // 画布可延伸至 Home 指示器区域；外层工具栏仍按安全区定位。
                 .ignoresSafeArea(.container, edges: toolOpen ? [] : .bottom)
                 .background(DiaryLibraryStyle.background)
                 if aiMode {
-                    DiaryAIInlinePanel(workspace: session.aiWorkspace, controller: session.canvasAI)
-                        .frame(height: 200)
+                    DiaryAIInlinePanel(workspace: session.aiWorkspace, controller: session.canvasAI,
+                        onPhotos: { showAIPhotos = true },
+                        onCamera: { capturedPhotos = []; showCamera = true },
+                        onStickers: { showAIStickers = true },
+                        onDesign: { studioDesign = $0 })
+                        .frame(maxHeight: .infinity)
                 } else if showStickers {
                     // Reserve the compact native sheet's space so the existing tool
                     // viewport fits the artwork above it and keeps the canvas at the top.
@@ -407,6 +465,21 @@ private struct DiaryLiveSpreadShell: View {
                 }
                 .offset(x: -rim, y: -rim)
                 .shadow(color: .black.opacity(0.18), radius: 5, y: 3)
+        }
+    }
+}
+
+/// A nil aspect ratio still constrains layout; ordinary editing must bypass the modifier entirely.
+private struct DiaryAIViewportAspectRatio: ViewModifier {
+    let enabled: Bool
+    let ratio: CGFloat
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.aspectRatio(ratio, contentMode: .fit)
+        } else {
+            content
         }
     }
 }

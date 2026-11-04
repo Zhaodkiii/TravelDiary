@@ -28,7 +28,7 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     private var closing = false
     private let parentStateBeforeOpen: Snapshot?
     let store: DiaryDocumentStore
-    private let storageLease: StorageActivity.Lease
+    private var storageLease: StorageActivity.Lease?
     @Published private(set) var document: DiaryDocument {
         didSet { renderGeneration &+= 1; selectedIndex = nil }
     }
@@ -413,6 +413,21 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             saveStatus = "保存失败"; throw error
         }
     }
+    /// Ends a disposable creation session without publishing or scheduling another save.
+    func discardCreationSession() async {
+        closing = true
+        saveTask?.cancel(); imageTask?.cancel()
+        if let saveTask { await saveTask.value }
+        if let imageTask { await imageTask.value }
+        saveTask = nil; imageTask = nil
+        storageLease = nil
+    }
+
+    func resumeAfterFailedDiscard() {
+        storageLease = StorageActivity.shared.acquire(store.storageRoot)
+        closing = false
+    }
+
     func close() async -> Bool {
         guard !closing, !busy else { return false }
         busy = true

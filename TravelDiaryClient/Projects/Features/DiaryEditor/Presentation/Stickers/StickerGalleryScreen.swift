@@ -224,6 +224,11 @@ struct StickerGalleryScreen: View {
                         ForEach(packs) { pack in
                             if managing {
                                 Button { toggle(pack.id) } label: { packCell(pack).overlay(alignment: .topTrailing) { Image(systemName: selection.contains(pack.id) ? "checkmark.circle.fill" : "circle") } }
+                            } else if let onUse {
+                                Button { onUse(pack) } label: { packCell(pack) }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("选择贴纸包：" + pack.title)
+                                    .accessibilityHint("打开包内贴纸，点击单张即可添加")
                             } else {
                                 ZoomNavigationLink { StickerPackDetailScreen(library: pack, onUse: onUse, onUseItem: onUseItem) } label: { packCell(pack) }
                             }

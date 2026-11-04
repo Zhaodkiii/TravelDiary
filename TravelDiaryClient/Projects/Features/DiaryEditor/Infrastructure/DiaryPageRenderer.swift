@@ -107,11 +107,29 @@ enum DiaryPageRenderer {
     }
 
     /// 印制导出按图层让出主线程，让滚动、点击和预览在页面生成期间继续响应。
-    static func drawForPrinting(_ document: DiaryDocument, images: [UUID: UIImage], in context: CGContext) async throws {
+    static func drawForPrinting(_ document: DiaryDocument, images: [UUID: UIImage], in context: CGContext, contentID: UUID? = nil) async throws {
+        guard let content = document.objects[contentID ?? document.rootContentID] else { return }
         context.saveGState()
         defer { context.restoreGState() }
-        context.clip(to: CGRect(origin: .zero, size: document.root.referenceSize))
-        try await drawPrintContent(document.root, document: document, images: images, in: context)
+        context.clip(to: CGRect(origin: .zero, size: content.referenceSize))
+        try await drawPrintContent(content, document: document, images: images, in: context)
+    }
+
+    /// AI previews share print geometry but yield between nested layers before background encoding.
+    static func aiPreview(_ document: DiaryDocument, contentID: UUID, images: [UUID: UIImage], size: CGSize) async throws -> UIImage {
+        let ratio = min(1, 1536 / max(size.width, size.height))
+        let width = max(1, Int(ceil(size.width * ratio))), height = max(1, Int(ceil(size.height * ratio)))
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { throw DiaryAIError.invalid("预览创建失败") }
+        context.setFillColor(UIColor.systemBackground.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: ratio, y: -ratio)
+        try await drawForPrinting(document, images: images, in: context, contentID: contentID)
+        try Task.checkCancellation()
+        guard let image = context.makeImage() else { throw DiaryAIError.invalid("预览创建失败") }
+        return UIImage(cgImage: image)
     }
 
     private static func drawPrintContent(_ content: DiaryObjectContent, document: DiaryDocument, images: [UUID: UIImage], in context: CGContext) async throws {

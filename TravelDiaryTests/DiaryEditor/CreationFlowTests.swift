@@ -27,6 +27,29 @@ import SwiftUI
         #expect(second.document.root.layers.isEmpty)
         #expect(try await DiaryDocumentStore(ownerID: owner).listBooks().isEmpty)
     }
+    @Test func newPageDeletesOldWorkspaceWithoutRecreatingItOnSave() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = StoragePaths(support: root, caches: root.appendingPathComponent("Cache"), temporary: root.appendingPathComponent("Temp"))
+        let store = CreationDraftStore(owner: "new-page-test", paths: paths)
+        let previous = CreationCoordinator(owner: "new-page-test", store: store)
+        previous.draft.styleEntry = true
+        await previous.add(try bytes(), name: "旧照片")
+        let oldSession = try #require(await previous.prepare(allowEmpty: true))
+        await oldSession.aiWorkspace.enter(previous.draft.request())
+        let oldDirectory = store.directory(previous.draft.id)
+        #expect(StorageActivity.shared.isInUse(oldDirectory))
+        try await previous.discardForNewPage()
+        #expect(!FileManager.default.fileExists(atPath: oldDirectory.path))
+        try await oldSession.save()
+        #expect(!FileManager.default.fileExists(atPath: oldDirectory.path))
+        let next = CreationCoordinator(owner: "new-page-test", store: store)
+        let newSession = try #require(await next.prepare(allowEmpty: true))
+        #expect(newSession.document.id != oldSession.document.id)
+        #expect(newSession.document.root.layers.isEmpty)
+        #expect(next.draft.assets.isEmpty)
+    }
+
     @Test func durableDraftRetainsOriginalNotesAndAccountScope() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

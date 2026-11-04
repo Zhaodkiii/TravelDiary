@@ -217,6 +217,7 @@ struct MaterialLibraryBrowser: View {
          type: String = "sticker", keepsOpenAfterAdding: Bool = false, startsInGallery: Bool = false, initialLibrary: CloudMaterialLibrary? = nil,
          onSelectForCreation: ((Data, String, DiaryMaterialSource?) async -> Void)? = nil) {
         _galleryLanding = State(initialValue: startsInGallery)
+        _sheetDetent = State(initialValue: startsInGallery || initialLibrary != nil ? .large : Self.compactDetent)
         self.session = session
         self.onSelectForCreation = onSelectForCreation
         self.replacingID = replacingID
@@ -257,7 +258,7 @@ struct MaterialLibraryBrowser: View {
             if galleryLanding {
                 NavigationStack {
                     StickerGalleryScreen(onUse: { lib in
-                        selectedLibrary = lib; source = "我的"; kind = ""; galleryLanding = false
+                        selectPack(lib); galleryLanding = false
                     }, onUseItem: { item in
                         selectedGalleryItem = item; galleryLanding = false
                     })
@@ -272,7 +273,8 @@ struct MaterialLibraryBrowser: View {
             if isStickerPicker {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(replacingID == nil ? "添加贴纸" : "替换贴纸").font(.headline)
+                        Text(replacingID == nil ? (selectedLibrary?.title ?? "添加贴纸") : "替换贴纸")
+                            .font(.headline).lineLimit(1)
                         if !isCompact {
                             Text(lastAddedName.map { "已添加 · " + $0 } ?? "点击贴纸即可添加")
                                 .font(.caption2).foregroundStyle(DiaryLibraryStyle.secondary).lineLimit(1)
@@ -481,10 +483,10 @@ struct MaterialLibraryBrowser: View {
             }
         }
         .sheet(isPresented: $showGallery, onDismiss: useSelectedGalleryItem) {
-            NavigationStack { StickerGalleryScreen(onUse: { lib in selectedLibrary = lib; source = "我的"; kind = ""; showGallery = false }, onUseItem: { item in selectedGalleryItem = item; showGallery = false }, initialQuery:query, initialMode:query.isEmpty ? "包" : "单张").toolbar { ToolbarItem(placement:.topBarLeading) { Button("返回编辑器") { showGallery=false } } } }
+            NavigationStack { StickerGalleryScreen(onUse: { lib in selectPack(lib); showGallery = false }, onUseItem: { item in selectedGalleryItem = item; showGallery = false }, initialQuery:query, initialMode:query.isEmpty ? "包" : "单张").toolbar { ToolbarItem(placement:.topBarLeading) { Button("返回编辑器") { showGallery=false } } } }
         }
         .sheet(isPresented: $showAllPacks, onDismiss: useSelectedGalleryItem) {
-            NavigationStack { StickerGalleryScreen(mine: true, onUse: { lib in selectedLibrary = lib; kind = ""; showAllPacks = false }, onUseItem: { item in selectedGalleryItem = item; showAllPacks = false }).toolbar { ToolbarItem(placement:.topBarLeading) { Button("返回编辑器") { showAllPacks=false } } } }
+            NavigationStack { StickerGalleryScreen(mine: true, onUse: { lib in selectPack(lib); showAllPacks = false }, onUseItem: { item in selectedGalleryItem = item; showAllPacks = false }).toolbar { ToolbarItem(placement:.topBarLeading) { Button("返回编辑器") { showAllPacks=false } } } }
         }
         .onDisappear {
             generation = UUID(); addition?.cancel()
@@ -608,7 +610,8 @@ struct MaterialLibraryBrowser: View {
                 currentLibraries = current.items
             }
             if !refresh {
-                if let initialLibrary { selectedLibrary = initialLibrary; source = "我的" }
+                if selectedLibrary != nil { source = "我的" }
+                else if let initialLibrary { selectedLibrary = initialLibrary; source = "我的" }
                 else if let pending = catalog.pendingLibrary { source = "我的"; selectedLibrary = pending; catalog.pendingLibrary = nil }
                 else if let session, let saved=catalog.pickerStates[session.id] {
                     source=saved.source;selectedLibrary=saved.library;query=saved.query;kind=saved.kind;subcategory=saved.subcategory;scrollID=saved.scrollID
@@ -708,11 +711,15 @@ struct MaterialLibraryBrowser: View {
         UserDefaults.standard.set(localFavorites, forKey: session.store.stickerPreferenceKey + ".favorites")
         UserDefaults.standard.set(localRecent, forKey: session.store.stickerPreferenceKey + ".recent")
     }
+    private func selectPack(_ library: CloudMaterialLibrary) {
+        selectedLibrary = library
+        source = "我的"; kind = ""; subcategory = ""; query = ""; searchScope = "本包"
+        sheetDetent = .large
+    }
+
     private func finishAdding(id: String, name: String) {
         lastAddedID = id; lastAddedName = name; additionFeedback += 1; searchFocused = false
-        if keepsOpenAfterAdding {
-            withAnimation { sheetDetent = Self.compactDetent }
-        } else { dismiss() }
+        if !keepsOpenAfterAdding { dismiss() }
     }
     private func useSelectedGalleryItem() {
         guard let item = selectedGalleryItem else { return }
@@ -740,7 +747,7 @@ struct MaterialLibraryBrowser: View {
     }
     private func add(_ item: CloudMaterial) async {
         if let onSelectForCreation, !adding {
-            adding = true; error = nil
+            adding = true; error = nil; progress = 0; pausedItem = item
             let owner = catalog.owner
             defer { adding = false }
             do {

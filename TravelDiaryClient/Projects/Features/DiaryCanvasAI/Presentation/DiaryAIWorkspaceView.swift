@@ -107,7 +107,7 @@ struct DiaryAIWorkspaceView: View {
                                 if let image = workspace.thumbnails[id] { Image(uiImage: image).resizable().scaledToFit().padding(4) }
                                 else { Image(systemName: object?.role == "text" ? "textformat" : "square.3.layers.3d").padding() }
                                 if workspace.processing.contains(id) { ProgressView().padding(4) }
-                                else if workspace.selected.contains(id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(.white, Color.accentColor) }
+                                else if workspace.selected.contains(id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(.white, Color(red: 0.24, green: 0.39, blue: 0.34)) }
                             }.frame(width: 72, height: 64)
                             Text(object?.shortID ?? "素材").font(.caption2)
                         }.contentShape(Rectangle()).onTapGesture { workspace.toggle(id) }
@@ -236,98 +236,132 @@ struct DiaryAIInlinePanel: View {
     @State private var showingDetails = false
     @State private var action = DiaryAIAction.relayout
     @State private var design = DiaryAIDesignSelection()
-    @State private var choosingDesign = false
-    @State private var designTab = 0
+    var onPhotos: () -> Void = {}
+    var onCamera: () -> Void = {}
+    var onStickers: () -> Void = {}
+    var onDesign: (DiaryAIDesignSelection) -> Void = { _ in }
+    @State private var tab = 2
+    @State private var inspecting: UUID?
     @State private var instruction = ""
+    @State private var photoNote = ""
     @State private var started = false
+    private var photos: [DiaryAIObject] { workspace.objects.filter { $0.role == "photo" } }
+    private var stickers: [DiaryAIObject] { workspace.objects.filter { ["decoration", "group", "textImage"].contains($0.role) } }
+    private var materialPhotos: [DiaryAIObject] {
+        photos.filter { !(started || workspace.running) || workspace.pending.contains($0.id) }
+    }
+    private var materialStickers: [DiaryAIObject] {
+        stickers.filter { !(started || workspace.running) || workspace.pending.contains($0.id) }
+    }
+    private var complete: Bool { started && !workspace.running && workspace.pending.isEmpty && !workspace.needsTextCompletion && workspace.error == nil && (!workspace.hasBackgroundRequest || workspace.backgroundPreview != nil) }
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 10) {
             if started || workspace.running {
-                VStack(spacing: 14) {
-                    HStack {
-                        if workspace.running { ProgressView() }
-                        Text(workspace.stage).font(.headline)
-                        Spacer()
-                        Button("详情") { showingDetails = true }
-                            .accessibilityIdentifier("diary.ai.details")
-                    }
-                    Text("待处理 \(workspace.pending.count) 项").font(.caption).foregroundStyle(.secondary)
-                    if let error = workspace.error { Text(error).font(.caption).foregroundStyle(.orange) }
+              VStack(spacing: 0) {
+                materialPage
+                Spacer(minLength: 24)
+                VStack(spacing: 16) {
+                    HStack { Text(workspace.stage).font(.headline); Spacer(); Button("详情") { showingDetails = true }.accessibilityIdentifier("diary.ai.details") }
+                    if workspace.running { ProgressView() }
+                    Text("已放入画布 \(max(0, workspace.objects.count - workspace.pending.count)) 项 · 待处理 \(workspace.pending.count) 项").font(.caption).foregroundStyle(.secondary)
+                    if let error = workspace.error { Text(error).font(.caption).foregroundStyle(.orange).lineLimit(3) }
                     HStack {
                         Button("回退上一批") { Task { await workspace.rollback() } }.disabled(!workspace.canRollback)
                         Spacer()
-                        if workspace.running { Button("暂停") { workspace.pause() } }
-                        else { Button("继续") { workspace.processAll() } }
-                    }
-                }.padding(20)
+                        if complete { Button("调整排版") { Task { await workspace.prepareLayoutAdjustment(); started = false } }; Button("重新生成背景") { workspace.generateBackground(regenerate: true) }.disabled(!workspace.hasBackgroundRequest) }
+                    }.font(.caption)
+                }.padding(.bottom, 20)
+              }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             } else {
-                HStack(spacing: 12) {
-                    Button { choosingDesign = !choosingDesign || designTab != 0; designTab = 0 } label: {
-                        Label("排版 · \(design.layout.name)", systemImage: "rectangle.3.group")
+                ScrollView(.vertical, showsIndicators: false) {
+                  VStack(spacing: 10) {
+                    materialPage
+                    HStack(spacing: 8) {
+                        designToggle("排版 · " + design.layout.name, symbol: "rectangle.3.group", value: 1)
+                        designToggle("风格 · " + design.style.name, symbol: "paintpalette", value: 2)
                     }
-                    Button { choosingDesign = !choosingDesign || designTab != 1; designTab = 1 } label: {
-                        Label("风格 · \(design.style.name)", systemImage: "paintpalette")
-                    }
-                }.buttonStyle(.bordered).font(.subheadline).padding(.horizontal, 16)
-                if choosingDesign {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            if designTab == 0 {
+                    if tab != 0 {
+                      ScrollViewReader { reader in
+                        ScrollView(.horizontal, showsIndicators: false) {
+                          LazyHStack(spacing: 10) {
+                            if tab == 1 {
                                 ForEach(DiaryAILayout.allCases) { item in
-                                    Button { design.layout = item } label: {
-                                        Text(item.name).font(.subheadline.weight(design.layout == item ? .semibold : .regular))
-                                            .padding(.horizontal, 16).padding(.vertical, 12)
-                                            .background(design.layout == item ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08), in: Capsule())
-                                    }.accessibilityAddTraits(design.layout == item ? [.isSelected] : [])
+                                    choice(item.name, selected: design.layout == item, action: { design.layout = item }) {
+                                        Image("TravelLayout-" + item.rawValue).resizable().scaledToFit()
+                                    }.id(item.rawValue)
                                 }
                             } else {
                                 ForEach(DiaryAIPageStyle.allCases) { item in
-                                    Button { design.style = item } label: {
-                                        VStack(spacing: 5) {
-                                            TravelStyleArtwork(style: item).frame(width: 92, height: 100).clipShape(RoundedRectangle(cornerRadius: 12))
-                                            Text(item.name).font(.caption)
-                                        }.padding(5).background(design.style == item ? Color.accentColor.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 16))
-                                    }.accessibilityAddTraits(design.style == item ? [.isSelected] : [])
+                                    choice(item.name, selected: design.style == item, action: { design.style = item }) {
+                                        Image("TravelStyle-" + item.rawValue).resizable().scaledToFill().frame(width: 152, height: 108).clipped()
+                                    }.id(item.rawValue)
                                 }
                             }
-                        }.padding(.horizontal, 20)
-                    }
-                }
-                Text(controller.form(action).background == nil ? "保留现有背景 · 按所选排版与风格制作" : "自动生成背景 · 按所选排版与风格制作标题及旁注")
-                    .font(.caption).foregroundStyle(.secondary)
-                HStack {
-                    Menu {
-                        Picker("选择功能", selection: $action) {
-                            ForEach(DiaryAIAction.allCases) { Text($0.rawValue).tag($0) }
+                          }.padding(2)
+                        }.frame(height: 148)
+                        .onAppear { reader.scrollTo(tab == 1 ? design.layout.rawValue : design.style.rawValue, anchor: .center) }
+                        .onChange(of: tab) { _, value in
+                            reader.scrollTo(value == 1 ? design.layout.rawValue : design.style.rawValue, anchor: .center)
                         }
-                    } label: {
-                        VStack(spacing: 4) { Image(systemName: action.symbol); Text(action.rawValue).font(.caption) }
+                        .onChange(of: design) { _, value in
+                            reader.scrollTo(tab == 1 ? value.layout.rawValue : value.style.rawValue, anchor: .center)
+                        }
+                      }
                     }
-                    Spacer()
-                    Button {
-                        var request = controller.form(action)
-                        request.design = design; request = request.coordinated(); request.selectedOnly = false
-                        if !instruction.isEmpty { request.instruction = instruction }
-                        controller.setForm(request); customizing = true
-                    } label: { VStack(spacing: 4) { Image(systemName: "slider.horizontal.3"); Text("更多").font(.caption) } }
-                    Spacer()
-                    Button(action.submitTitle) {
-                        var request = controller.form(action)
-                        request.design = design; request = request.coordinated(); request.selectedOnly = false
-                        if !instruction.isEmpty { request.instruction = instruction }
-                        started = true; workspace.configureAndStart(request)
-                    }.buttonStyle(.borderedProminent).controlSize(.large)
-                        .disabled(!workspace.active || (action == .custom && instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && controller.form(action).instruction.isEmpty))
-                }.padding(.horizontal, 20)
+                  }.padding(.bottom, 2)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            Spacer(minLength: 0)
-        }.padding(.top, 12).background(DiaryLibraryStyle.background)
+            HStack {
+                Button("写点故事", systemImage: "slider.horizontal.3") { customizing = true }
+                    .font(.subheadline).disabled(workspace.running)
+                Spacer()
+                Button(workspace.running ? "暂停" : complete ? "保存作品" : photos.isEmpty && !started ? "添加照片" : started ? (workspace.error == nil ? "继续制作" : "重试本步") : "开始制作") {
+                    if workspace.running { workspace.pause() }
+                    else if complete { Task { _ = await workspace.save() } }
+                    else if photos.isEmpty && !started { onPhotos() }
+                    else if started { workspace.processAll() }
+                    else {
+                        var request = controller.form(action); request.design = design; request.selectedOnly = false
+                        if let notes = request.creationNotes {
+                            let valid = Set(photos.map { $0.id.uuidString })
+                            let lines = notes.filter { valid.contains($0.key) && !$0.value.isEmpty }.sorted { $0.key < $1.key }.map { "照片\($0.key)：\($0.value)" }
+                            if !lines.isEmpty { request.instruction += "\n用户逐照片说明：\n" + lines.joined(separator: "\n") }
+                        }
+                        started = true; workspace.configureAndStart(request)
+                    }
+                }.buttonStyle(.borderedProminent).controlSize(.large)
+                .disabled(!workspace.active || workspace.addingMaterials)
+            }
+        }.padding(16).frame(maxWidth: .infinity).background(DiaryLibraryStyle.background)
             .tint(Color(red: 0.24, green: 0.39, blue: 0.34))
-            .onAppear { design = controller.form(action).design ?? .init() }
-            .onChange(of: action) { _, value in design = controller.form(value).design ?? .init() }
+            .onAppear {
+                design = controller.form(action).design ?? workspace.currentDesign ?? .init()
+                onDesign(design)
+                started = workspace.running || workspace.version > 0 && workspace.pending.isEmpty
+            }
             .onChange(of: design) { _, value in
-                var request = controller.form(action); request.design = value
-                controller.setForm(request.coordinated())
+                var request = controller.form(action); request.design = value; controller.setForm(request.coordinated()); onDesign(value)
+            }
+            .sheet(isPresented: Binding(get: { inspecting != nil }, set: { if !$0 { inspecting = nil } })) {
+                NavigationStack {
+                    VStack(spacing: 20) {
+                        if let id = inspecting, let image = workspace.thumbnails[id] { Image(uiImage: image).resizable().scaledToFit().padding() }
+                        if let id = inspecting {
+                            Button(controller.form(action).heroID == id ? "已设为主照片" : "设为主照片", systemImage: "star") {
+                                var request = controller.form(action); request.heroID = id; controller.setForm(request)
+                            }
+                            TextField("为这张照片补充说明", text: $photoNote, axis: .vertical).textFieldStyle(.roundedBorder).padding(.horizontal)
+                            Button("保存说明") {
+                                var request = controller.form(action)
+                                var notes = request.creationNotes ?? [:]; notes[id.uuidString] = photoNote
+                                request.creationNotes = notes; controller.setForm(request); inspecting = nil
+                            }
+                        }
+                        if let id = inspecting, workspace.pending.contains(id) {
+                            Button("从待排区移除", role: .destructive) { Task { await workspace.removePendingMaterial(id); inspecting = nil } }
+                        }
+                    }.navigationTitle("照片").toolbar { Button("完成") { inspecting = nil } }
+                }.presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $showingDetails) {
                 DiaryAIProgressPanel(workspace: workspace, onCloseDetails: { showingDetails = false })
@@ -341,6 +375,85 @@ struct DiaryAIInlinePanel: View {
                 })
             }
     }
+    private var materialPage: some View {
+        VStack(spacing: 8) {
+            HStack { Text(started || workspace.running ? "待排素材" : "本页素材").fontWeight(.semibold); Spacer(); Button("照片", systemImage: "plus", action: onPhotos); Button("拍摄", systemImage: "camera", action: onCamera) }.font(.caption)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 8) {
+                    ForEach(materialPhotos) { photo in
+                        if let image = workspace.thumbnails[photo.id] {
+                            Button {
+                                photoNote = controller.form(action).creationNotes?[photo.id.uuidString] ?? ""
+                                inspecting = photo.id
+                            } label: {
+                                Image(uiImage: image).resizable().scaledToFit()
+                                    .frame(width: 88, height: 76)
+                                    .background(.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+                                    .overlay(alignment: .topTrailing) {
+                                        if controller.form(action).heroID == photo.id {
+                                            Image(systemName: "star.fill").font(.caption2).foregroundStyle(.orange)
+                                        }
+                                    }
+                            }.accessibilityLabel("查看照片")
+                        }
+                    }
+                    if materialPhotos.isEmpty && (started || workspace.running) {
+                        Text("照片已全部放入画布").font(.caption).foregroundStyle(.secondary).frame(height: 76)
+                    }
+                    if !started && !workspace.running {
+                      Button(action: onPhotos) {
+                        Image(systemName: "plus").foregroundStyle(.secondary)
+                            .frame(width: 64, height: 76)
+                            .background(.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+                      }.accessibilityLabel("添加照片")
+                    }
+                }
+            }.frame(height: 76)
+            HStack {
+                Label(materialStickers.isEmpty ? "贴纸 · 可选" : "贴纸 · \(materialStickers.count)", systemImage: "face.smiling")
+                Spacer()
+                Button("贴纸库", systemImage: "chevron.right", action: onStickers)
+            }.font(.caption)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 12) {
+                    ForEach(materialStickers) { item in
+                        if let image = workspace.thumbnails[item.id] {
+                            Button(action: onStickers) {
+                                Image(uiImage: image).resizable().scaledToFit().frame(width: 64, height: 64)
+                            }.accessibilityLabel("查看贴纸库")
+                        }
+                    }
+                    if materialStickers.isEmpty && (started || workspace.running) {
+                        Text(stickers.isEmpty ? "未添加贴纸" : "贴纸已全部放入画布").font(.caption).foregroundStyle(.secondary).frame(height: 64)
+                    }
+                    if !started && !workspace.running {
+                      Button(action: onStickers) {
+                        Image(systemName: "plus").font(.title3)
+                            .frame(width: 64, height: 64)
+                            .background(.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+                      }.accessibilityLabel("添加贴纸")
+                    }
+                }
+            }.frame(height: 64)
+        }.disabled(workspace.running || workspace.addingMaterials)
+    }
+    private func designToggle(_ title: String, symbol: String, value: Int) -> some View {
+        Button { tab = value } label: {
+            Label(title, systemImage: symbol).font(.caption).lineLimit(1).minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity, minHeight: 36)
+                .background(Color(red: 0.24, green: 0.39, blue: 0.34).opacity(tab == value ? 0.18 : 0.08), in: Capsule())
+        }.buttonStyle(.plain).accessibilityAddTraits(tab == value ? .isSelected : [])
+    }
+    private func choice<Content: View>(_ title: String, selected: Bool, action: @escaping () -> Void, @ViewBuilder content: () -> Content) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                content().frame(width: 152, height: 108).clipShape(RoundedRectangle(cornerRadius: 8))
+                HStack(spacing: 3) { Text(title).font(.caption).lineLimit(1).minimumScaleFactor(0.8); if selected { Image(systemName: "checkmark.circle.fill").font(.caption) } }
+            }.padding(8).frame(width: 168).background(selected ? Color(red: 0.24, green: 0.39, blue: 0.34).opacity(0.12) : Color.secondary.opacity(0.04), in: RoundedRectangle(cornerRadius: 11))
+                .overlay(RoundedRectangle(cornerRadius: 11).stroke(selected ? Color(red: 0.24, green: 0.39, blue: 0.34) : .clear, lineWidth: 1.5))
+        }.buttonStyle(.plain).accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
+
 }
 
 /// Pending materials sit below the artwork, independently of the bottom controls.
@@ -405,22 +518,45 @@ struct DiaryAIDesignPreview: View {
         }
     }
     private var frames: [CGRect] {
+        if !photos.isEmpty {
+            return Self.photoFrames(count: photos.count, layout: design.layout)
+        }
+        return sampleFrames
+    }
+    static func photoFrames(count: Int, layout: DiaryAILayout) -> [CGRect] {
+        guard count > 0 else { return [] }
+        let top = layout == .headline ? 0.36 : 0.20
+        let hero = layout == .hero && count > 1
+        var result: [CGRect] = hero ? [CGRect(x: 0.04, y: top, width: 0.55, height: 0.90 - top)] : []
+        let remaining = count - result.count
+        let columns = hero ? (remaining > 4 ? 2 : 1) : (count <= 2 ? count : (count <= 8 ? 3 : 4))
+        let rows = Int(ceil(Double(remaining) / Double(max(1, columns))))
+        let x = hero ? 0.63 : 0.04, width = hero ? 0.33 : 0.92
+        let w = width / Double(max(1, columns)), h = (0.90 - top) / Double(max(1, rows))
+        for index in 0..<remaining {
+            result.append(CGRect(x: x + Double(index % columns) * w, y: top + Double(index / columns) * h,
+                                 width: w * 0.92, height: h * 0.90))
+        }
+        return result
+    }
+    private var sampleFrames: [CGRect] {
         switch design.layout {
         case .hero: [CGRect(x: 0.06, y: 0.26, width: 0.53, height: 0.58), CGRect(x: 0.64, y: 0.27, width: 0.27, height: 0.26), CGRect(x: 0.64, y: 0.57, width: 0.27, height: 0.26)]
         case .headline: [CGRect(x: 0.08, y: 0.48, width: 0.44, height: 0.41), CGRect(x: 0.57, y: 0.49, width: 0.34, height: 0.25), CGRect(x: 0.70, y: 0.76, width: 0.21, height: 0.16)]
         case .collage: [CGRect(x: 0.07, y: 0.24, width: 0.41, height: 0.53), CGRect(x: 0.50, y: 0.37, width: 0.35, height: 0.37), CGRect(x: 0.24, y: 0.69, width: 0.30, height: 0.24)]
         case .editorial: [CGRect(x: 0.07, y: 0.27, width: 0.43, height: 0.30), CGRect(x: 0.07, y: 0.62, width: 0.43, height: 0.29), CGRect(x: 0.58, y: 0.59, width: 0.33, height: 0.23)]
-        case .automatic, .story: [CGRect(x: 0.07, y: 0.28, width: 0.39, height: 0.43), CGRect(x: 0.55, y: 0.30, width: 0.35, height: 0.27), CGRect(x: 0.57, y: 0.65, width: 0.33, height: 0.26)]
+        case .story: [CGRect(x: 0.06, y: 0.27, width: 0.34, height: 0.48), CGRect(x: 0.43, y: 0.36, width: 0.24, height: 0.31), CGRect(x: 0.71, y: 0.49, width: 0.24, height: 0.34)]
+        case .automatic: [CGRect(x: 0.07, y: 0.28, width: 0.39, height: 0.43), CGRect(x: 0.55, y: 0.30, width: 0.35, height: 0.27), CGRect(x: 0.57, y: 0.65, width: 0.33, height: 0.26)]
         }
     }
     var body: some View {
         GeometryReader { proxy in
             let size = proxy.size
             ZStack(alignment: .topLeading) {
-                Color(uiColor: .secondarySystemGroupedBackground)
+                Color(red: 0.97, green: 0.96, blue: 0.92)
                 Ellipse().fill(ink.opacity(0.10)).frame(width: size.width * 0.75, height: size.height * 0.7).offset(x: size.width * 0.4, y: size.height * 0.5)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(design.layout == .headline ? "把这一刻\n留在手帐里" : "把日子收藏").font(.system(size: size.width * (design.layout == .headline ? 0.085 : 0.064), weight: .bold, design: .serif))
+                    Text(design.layout == .headline ? "标题区域" : "照片与故事").font(.system(size: size.width * (design.layout == .headline ? 0.085 : 0.064), weight: .bold, design: .serif))
                     if design.layout != .headline { Text("照片与故事 · 留下此刻").font(.system(size: size.width * 0.027)) }
                 }.foregroundStyle(ink).offset(x: size.width * 0.07, y: size.height * 0.05)
                 ForEach(Array(frames.enumerated()), id: \.offset) { index, rect in
@@ -429,7 +565,18 @@ struct DiaryAIDesignPreview: View {
                         if photos.indices.contains(index) {
                             Image(uiImage: photos[index]).resizable().scaledToFit().padding(3)
                         } else {
-                            Image(systemName: "photo").resizable().scaledToFit().foregroundStyle(ink.opacity(0.4)).padding(10)
+                            Canvas { context, canvas in
+                                context.fill(Path(CGRect(origin: .zero, size: canvas)), with: .color(ink.opacity(0.12)))
+                                let mountains = Path { path in
+                                    path.move(to: CGPoint(x: 0, y: canvas.height))
+                                    path.addLine(to: CGPoint(x: canvas.width * 0.36, y: canvas.height * 0.3))
+                                    path.addLine(to: CGPoint(x: canvas.width * 0.62, y: canvas.height * 0.68))
+                                    path.addLine(to: CGPoint(x: canvas.width * 0.79, y: canvas.height * 0.46))
+                                    path.addLine(to: CGPoint(x: canvas.width, y: canvas.height)); path.closeSubpath()
+                                }
+                                context.fill(mountains, with: .color(ink.opacity(0.65)))
+                                context.fill(Path(ellipseIn: CGRect(x: canvas.width * 0.72, y: canvas.height * 0.12, width: canvas.width * 0.12, height: canvas.width * 0.12)), with: .color(.white))
+                            }.padding(3)
                         }
                     }.frame(width: size.width * rect.width, height: size.height * rect.height)
                         .rotationEffect(.degrees(design.layout == .collage ? (index == 1 ? 5 : -4) : 0))
@@ -482,8 +629,8 @@ struct DiaryAIDesignChooser: View {
                 HStack { Text(title).font(.subheadline.weight(.semibold)); Spacer(); if selected { Image(systemName: "checkmark.circle.fill") } }
                 Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2).frame(height: 32, alignment: .topLeading)
             }.padding(10).frame(width: 190)
-                .background(selected ? Color.accentColor.opacity(0.10) : Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(selected ? Color.accentColor : .clear, lineWidth: 2))
+                .background(selected ? Color(red: 0.24, green: 0.39, blue: 0.34).opacity(0.10) : Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(selected ? Color(red: 0.24, green: 0.39, blue: 0.34) : .clear, lineWidth: 2))
         }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

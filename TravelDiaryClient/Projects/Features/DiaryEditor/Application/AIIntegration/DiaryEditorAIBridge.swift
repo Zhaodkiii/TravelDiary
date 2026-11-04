@@ -32,8 +32,8 @@ import CoreText
         guard let session else { return [] }
         return describe(session.document, contentID: session.contentID, selected: nil)
     }
-    static func hash(_ bytes: Data) -> String { SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() }
-    static func digest(_ document: DiaryDocument) throws -> String {
+    nonisolated static func hash(_ bytes: Data) -> String { SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() }
+    nonisolated static func digest(_ document: DiaryDocument) throws -> String {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         var bytes = Data("\(document.id)|\(document.bookID?.uuidString ?? "")|\(document.rootContentID)|\(document.title)".utf8)
         for key in document.assets.keys.sorted(by: { $0.uuidString < $1.uuidString }) { bytes += try encoder.encode(document.assets[key]!) }
@@ -91,7 +91,8 @@ import CoreText
         try Task.checkCancellation()
         let fonts = refs.filter { catalog.available($0) }.map { DiaryAIFont(id: $0.id, version: $0.version, name: catalog.entry($0)?.displayName ?? $0.id) }
         let size = source.objects[session.contentID]!.referenceSize
-        let value = DiaryAIContext(id: UUID(), digest: try Self.digest(source), contentID: session.contentID, size: size,
+        let digest = try await DiaryAIImageWork.run { try Self.digest(source) }
+        let value = DiaryAIContext(id: UUID(), digest: digest, contentID: session.contentID, size: size,
             spineX: abs(size.width / size.height - 4370.0 / 3130.0) < 0.001 ? size.width / 2 : nil, objects: objects, fonts: fonts)
         base = source; context = value; self.request = request; images = session.images
         candidate = nil; draft = nil; newImages = [:]; createdIDs = [:]
@@ -110,30 +111,28 @@ import CoreText
         while gesturesActive { try await Task.sleep(for: .milliseconds(80)) }
         try Task.checkCancellation()
     }
-    private func jpeg(size: CGSize, draw: (CGContext) -> Void) throws -> Data {
+    private func jpeg(size: CGSize, draw: (CGContext) -> Void) async throws -> Data {
         guard size.width > 0, size.height > 0 else { throw DiaryAIError.invalid("预览尺寸无效") }
-        return try autoreleasepool {
+        let image = autoreleasepool {
             let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
             let image = UIGraphicsImageRenderer(size: size, format: format).image { output in
                 UIColor.systemBackground.setFill(); output.fill(CGRect(origin: .zero, size: size)); draw(output.cgContext)
             }
-            guard let bytes = image.jpegData(compressionQuality: 0.82) else { throw DiaryAIError.invalid("预览编码失败") }
-            return bytes
+            return image
         }
+        return try await DiaryAIImageWork.jpeg(image)
     }
 
     private func pageImage(_ document: DiaryDocument) async throws -> Data {
         guard let context else { throw DiaryAIError.invalid("页面快照缺失") }
         await Task.yield(); try await waitForViewport()
-        let key = try Self.digest(document) + "-1536-v1-" + excludedRenderIDs.map(\.uuidString).sorted().joined()
+        let excluded = excludedRenderIDs
+        let key = try await DiaryAIImageWork.run { try Self.digest(document) } + "-1536-v2-" + excluded.map(\.uuidString).sorted().joined()
         if let cached = imageCache[key] { return cached }
-        let ratio = min(1, 1536 / max(context.size.width, context.size.height))
-        let bytes = try jpeg(size: CGSize(width: context.size.width * ratio, height: context.size.height * ratio)) { output in
-            output.scaleBy(x: ratio, y: ratio)
-            var visibleDocument = document
-            visibleDocument.objects[context.contentID]?.layers.removeAll { excludedRenderIDs.contains($0.id) || $0.frameTargetID.map(excludedRenderIDs.contains) == true }
-            DiaryPageRenderer.draw(visibleDocument, contentID: context.contentID, images: images, in: output, cacheObjects: false)
-        }
+        var visibleDocument = document
+        visibleDocument.objects[context.contentID]?.layers.removeAll { excluded.contains($0.id) || $0.frameTargetID.map(excluded.contains) == true }
+        let image = try await DiaryPageRenderer.aiPreview(visibleDocument, contentID: context.contentID, images: images, size: context.size)
+        let bytes = try await DiaryAIImageWork.jpeg(image)
         if imageCache.count > 16 { imageCache.removeAll() }
         imageCache[key] = bytes
         return bytes
@@ -151,7 +150,7 @@ import CoreText
             for start in stride(from: 0, to: min(photos.count, 18), by: 9) {
                 try await waitForViewport(); await Task.yield()
                 let group = Array(photos[start..<min(start + 9, photos.count)])
-                let bytes = try jpeg(size: CGSize(width: 1200, height: ceil(Double(group.count) / 3) * 440)) { output in
+                let bytes = try await jpeg(size: CGSize(width: 1200, height: ceil(Double(group.count) / 3) * 440)) { output in
                     for (i, object) in group.enumerated() {
                         let rect = CGRect(x: (i % 3) * 400 + 8, y: (i / 3) * 440 + 8, width: 384, height: 384)
                         if let outer = base.layer(object.id), let asset = primary(outer, in: base).assetID, let image = images[asset] {
@@ -177,12 +176,12 @@ import CoreText
             if arguments.view == "fullAsset", let asset = primary(layer, in: base).assetID, let image = images[asset] {
                 let ratio = min(1, 1024 / max(image.size.width, image.size.height))
                 let size = CGSize(width: image.size.width * ratio, height: image.size.height * ratio)
-                bytes = try jpeg(size: size) { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+                bytes = try await jpeg(size: size) { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
             } else {
                 let rect = object.bounds.insetBy(dx: -24, dy: -24).intersection(CGRect(origin: .zero, size: context.size))
                 guard !rect.isNull, rect.width > 0, rect.height > 0 else { throw DiaryAIError.invalid("对象不在可见画布内") }
                 let ratio = min(1, 1024 / max(rect.width, rect.height))
-                bytes = try jpeg(size: CGSize(width: rect.width * ratio, height: rect.height * ratio)) { output in
+                bytes = try await jpeg(size: CGSize(width: rect.width * ratio, height: rect.height * ratio)) { output in
                     output.scaleBy(x: ratio, y: ratio); output.translateBy(x: -rect.minX, y: -rect.minY)
                     if arguments.view == "currentCrop" {
                         DiaryPageRenderer.drawHitLayer(layer, document: base, siblings: base.objects[context.contentID]!.layers, images: images, in: output)
@@ -398,7 +397,11 @@ import CoreText
                 guard let owner = copy.objects.values.first(where: { $0.layers.contains { $0.id == leaf.id } })?.id else { throw DiaryAIError.invalid("相框所属对象丢失") }
                 let item = DiaryPhotoFrameCatalog.generated(style: index, ratio: leaf.size.width / leaf.size.height)
                 try await waitForViewport()
-                guard let image = item.image, let bytes = image.pngData() else { throw DiaryAIError.invalid("相框生成失败") }
+                guard let image = item.image else { throw DiaryAIError.invalid("相框生成失败") }
+                let bytes = try await DiaryAIImageWork.run {
+                    guard let data = image.pngData() else { throw DiaryAIError.invalid("相框生成失败") }
+                    return data
+                }
                 let (asset, decoded) = try await session.store.importImage(bytes, documentID: base.id)
                 images[asset.id] = decoded; localNew[asset.id] = bytes; copy.assets[asset.id] = asset
                 copy.objects[owner]?.layers.removeAll { $0.frameTargetID == leaf.id }
@@ -543,7 +546,8 @@ import CoreText
         _ = try DiaryDocumentStore.validate(copy)
         let preview = try await pageImage(copy)
         let revision = (draft?.revision ?? 0) + 1
-        let archive = try JSONEncoder().encode(Archive(base: base, candidate: copy, drawings: base.objects.mapValues(\.drawing), request: request, context: context, revision: revision, summary: plan.summary, warnings: warnings, newImages: localNew))
+        let archiveValue = Archive(base: base, candidate: copy, drawings: base.objects.mapValues(\.drawing), request: request, context: context, revision: revision, summary: plan.summary, warnings: warnings, newImages: localNew)
+        let archive = try await DiaryAIImageWork.run { try JSONEncoder().encode(archiveValue) }
         let value = DiaryAIDraft(id: draft?.id ?? UUID(), revision: revision, preview: preview, archive: archive, summary: plan.summary, warnings: warnings)
         candidate = copy; draft = value; newImages = localNew
         return value
@@ -560,7 +564,7 @@ import CoreText
         let values = try JSONSerialization.jsonObject(with: JSONEncoder().encode(operation)) as! [String: Any]
         try require(Set(values.keys).isSubset(of: common.union(allowed)), "操作包含无关参数")
     }
-    private struct Archive: Codable {
+    private nonisolated struct Archive: Codable, Sendable {
         var base: DiaryDocument; var candidate: DiaryDocument; var drawings: [UUID: Data]
         var request: DiaryAIRequest; var context: DiaryAIContext; var revision: Int
         var summary: String; var warnings: [String]; var newImages: [UUID: Data]
