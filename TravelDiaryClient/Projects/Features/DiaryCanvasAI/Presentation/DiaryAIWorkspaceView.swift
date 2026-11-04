@@ -315,7 +315,7 @@ struct DiaryAIInlinePanel: View {
                 Button("写点故事", systemImage: "slider.horizontal.3") { customizing = true }
                     .font(.subheadline).disabled(workspace.running)
                 Spacer()
-                Button(workspace.running ? "暂停" : complete ? "保存作品" : photos.isEmpty && !started ? "添加照片" : started ? (workspace.error == nil ? "继续制作" : "重试本步") : "开始制作") {
+                Button(!workspace.preparingPhotos.isEmpty ? "照片准备中" : workspace.running ? "暂停" : complete ? "保存作品" : photos.isEmpty && !started ? "添加照片" : started ? (workspace.error == nil ? "继续制作" : "重试本步") : "开始制作") {
                     if workspace.running { workspace.pause() }
                     else if complete { Task { _ = await workspace.save() } }
                     else if photos.isEmpty && !started { onPhotos() }
@@ -330,7 +330,7 @@ struct DiaryAIInlinePanel: View {
                         started = true; workspace.configureAndStart(request)
                     }
                 }.buttonStyle(.borderedProminent).controlSize(.large)
-                .disabled(!workspace.active || workspace.addingMaterials)
+                .disabled(!workspace.active || workspace.addingMaterials || !workspace.preparingPhotos.isEmpty)
             }
         }.padding(16).frame(maxWidth: .infinity).background(DiaryLibraryStyle.background)
             .tint(Color(red: 0.24, green: 0.39, blue: 0.34))
@@ -380,6 +380,14 @@ struct DiaryAIInlinePanel: View {
             HStack { Text(started || workspace.running ? "待排素材" : "本页素材").fontWeight(.semibold); Spacer(); Button("照片", systemImage: "plus", action: onPhotos); Button("拍摄", systemImage: "camera", action: onCamera) }.font(.caption)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 8) {
+                    ForEach(workspace.preparingPhotos, id: \.self) { _ in
+                        VStack(spacing: 6) {
+                            ProgressView()
+                            Text("准备中").font(.caption2).foregroundStyle(.secondary)
+                        }.frame(width: 88, height: 76)
+                            .background(.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+                            .accessibilityLabel("照片准备中")
+                    }
                     ForEach(materialPhotos) { photo in
                         if let image = workspace.thumbnails[photo.id] {
                             Button {
@@ -410,17 +418,35 @@ struct DiaryAIInlinePanel: View {
                 }
             }.frame(height: 76)
             HStack {
-                Label(materialStickers.isEmpty ? "贴纸 · 可选" : "贴纸 · \(materialStickers.count)", systemImage: "face.smiling")
+                Label("贴纸 · \(workspace.stickerCount)/8", systemImage: "face.smiling")
+                let selectedStickers = materialStickers.filter { workspace.selected.contains($0.id) }
+                if !selectedStickers.isEmpty {
+                    Button("移除所选（\(selectedStickers.count)）", role: .destructive) {
+                        Task { for item in selectedStickers { await workspace.removePendingMaterial(item.id) } }
+                    }
+                }
                 Spacer()
                 Button("贴纸库", systemImage: "chevron.right", action: onStickers)
+                    .disabled(!workspace.canAddSticker)
             }.font(.caption)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
                     ForEach(materialStickers) { item in
                         if let image = workspace.thumbnails[item.id] {
-                            Button(action: onStickers) {
-                                Image(uiImage: image).resizable().scaledToFit().frame(width: 64, height: 64)
-                            }.accessibilityLabel("查看贴纸库")
+                            Button { workspace.toggle(item.id) } label: {
+                                Image(uiImage: image).resizable().scaledToFit().frame(width: 56, height: 56)
+                                    .padding(4)
+                                    .background(workspace.selected.contains(item.id) ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 10))
+                                    .overlay(alignment: .topTrailing) {
+                                        Image(systemName: workspace.selected.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                                            .foregroundStyle(workspace.selected.contains(item.id) ? Color.accentColor : Color.secondary)
+                                    }
+                            }.accessibilityLabel("选择贴纸：" + item.name)
+                                .contextMenu {
+                                    Button("移除贴纸", systemImage: "trash", role: .destructive) {
+                                        Task { await workspace.removePendingMaterial(item.id) }
+                                    }
+                                }
                         }
                     }
                     if materialStickers.isEmpty && (started || workspace.running) {
@@ -431,11 +457,11 @@ struct DiaryAIInlinePanel: View {
                         Image(systemName: "plus").font(.title3)
                             .frame(width: 64, height: 64)
                             .background(.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
-                      }.accessibilityLabel("添加贴纸")
+                      }.accessibilityLabel("添加贴纸").disabled(!workspace.canAddSticker)
                     }
                 }
             }.frame(height: 64)
-        }.disabled(workspace.running || workspace.addingMaterials)
+        }.disabled(workspace.running)
     }
     private func designToggle(_ title: String, symbol: String, value: Int) -> some View {
         Button { tab = value } label: {
@@ -484,7 +510,7 @@ struct DiaryAIMaterialRows: View {
                     if let onPhotos { Button("添加照片", systemImage: "photo.badge.plus", action: onPhotos) }
                     if let onCamera { Button("拍摄", systemImage: "camera", action: onCamera) }
                 } else if let onStickers { Button("贴纸库", systemImage: "plus.circle", action: onStickers) }
-            }.font(.caption).disabled(workspace.running || workspace.addingMaterials)
+            }.font(.caption).disabled(workspace.running)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
                     ForEach(ids, id: \.self) { id in

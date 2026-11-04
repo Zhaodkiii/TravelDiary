@@ -126,7 +126,7 @@ import SwiftUI
     @Test(arguments: Array(0..<14)) func liveDesignFlow(_ index: Int) async throws {
         guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-design-flow-enabled") else { return }
         let selectedCase = try String(contentsOfFile: "/tmp/traveldiary-design-flow-enabled", encoding: .utf8)
-        guard selectedCase == "all" || selectedCase == String(index) else { return }
+        guard selectedCase == "all" || selectedCase.split(separator: ",").contains(Substring(String(index))) else { return }
         let layouts: [DiaryAILayout] = [.hero, .story, .headline, .collage, .editorial, .automatic]
         let datasets = ["archive-city", "archive-family", "archive-food", "archive-nature", "archive-portrait", "archive-mixed"]
         let designIndex = index >= 8 ? index - 8 : index % 6
@@ -424,6 +424,11 @@ import SwiftUI
         let workspace = DiaryAIWorkspace(session: session, root: root, backgroundProvider: provider, albumSaver: album)
         await workspace.enter(request()); workspace.processAll(); try await wait(workspace)
         #expect(workspace.error == nil)
+        // Album delivery is independent of canvas completion; await its durable terminal state.
+        for _ in 0..<200 where workspace.backgroundRecord?.albumState != "saved" {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(workspace.backgroundRecord?.albumState == "saved")
         #expect(provider.generations == 1 && provider.downloads == 1 && provider.validations == 1 && album.saves == 1)
         #expect(session.document == before)
         workspace.processAll(); try await wait(workspace)

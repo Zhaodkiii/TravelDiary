@@ -149,24 +149,9 @@ extension DiaryPageRenderer {
         let path: UIBezierPath
         switch paper.kind {
         case .torn:
-            path = UIBezierPath()
-            let corners = [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
-                           CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
-            for edge in 0..<4 {
-                let a = corners[edge], b = corners[(edge+1)%4]
-                let length = max(1, hypot(b.x-a.x, b.y-a.y))
-                let count = max(2, Int(length / 4))
-                for i in 0..<count {
-                    let t = CGFloat(i)/CGFloat(count)
-                    let phase = Double(i) + Double(paper.seed % 10000)*1.37 + Double(edge)*71
-                    let noise = sin(phase*0.23)*0.55 + sin(phase*1.71)*0.3 + sin(phase*2.93)*0.15
-                    let displacement = CGFloat(noise * paper.roughness) * min(12, r.height * 0.08) * sin(.pi*t)
-                    let point = CGPoint(x: a.x+(b.x-a.x)*t-(b.y-a.y)/length*displacement,
-                                        y: a.y+(b.y-a.y)*t+(b.x-a.x)/length*displacement)
-                    if edge == 0 && i == 0 { path.move(to: point) } else { path.addLine(to: point) }
-                }
-            }
-            path.close()
+            path = DiaryPaperRenderer.path(rect: r, roughness: CGFloat(paper.roughness), seed: paper.seed, decoration: true)
+            DiaryPaperRenderer.draw(path, rect: r, color: color(paper.color), shadow: CGFloat(paper.shadow), seed: paper.seed, in: context)
+            return
         case .tape:
             path = UIBezierPath()
             let cut = min(14, r.width * 0.05)

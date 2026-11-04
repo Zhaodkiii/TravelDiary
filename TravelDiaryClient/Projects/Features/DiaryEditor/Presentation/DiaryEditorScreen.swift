@@ -45,14 +45,14 @@ struct DiaryEditorScreen: View {
     var body: some View {
         NavigationStack {
             editorContent
-            .disabled(creatingNewPage || session.busy || importingCameraPhotos || session.aiWorkspace.addingMaterials || session.aiWorkspace.saving)
+            .disabled(creatingNewPage || session.busy || (!aiMode && importingCameraPhotos) || session.aiWorkspace.saving)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { editorToolbar }
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar(toolOpen && !aiMode ? .hidden : .visible, for: .navigationBar)
             .overlay {
-                if session.busy || importingCameraPhotos {
+                if session.busy || (!aiMode && importingCameraPhotos) {
                     ProgressView(importingCameraPhotos ? "正在添加拍摄照片…" : "正在处理…")
                         .padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
@@ -77,22 +77,26 @@ struct DiaryEditorScreen: View {
             .photosPicker(isPresented: $showAIPhotos, selection: $aiPhotos, maxSelectionCount: 30, selectionBehavior: .ordered, matching: .images)
             .onChange(of: aiPhotos) { _, items in
                 guard !items.isEmpty else { return }
+                aiPhotos = []
+                let workspace = session.aiWorkspace
+                let loadingIDs = workspace.beginPreparingPhotos(items.count)
                 Task {
-                    importingCameraPhotos = true
-                    defer { importingCameraPhotos = false; aiPhotos = [] }
+                    defer { workspace.finishPreparingPhotos(loadingIDs) }
                     do {
                         var bytes: [Data] = []
                         for item in items {
                             guard let data = try await item.loadTransferable(type: Data.self) else { throw DiaryEditorError.invalidImage }
                             bytes.append(data)
                         }
-                        _ = await session.aiWorkspace.addMaterials(bytes)
+                        _ = await workspace.addMaterials(bytes)
                     } catch { session.errorMessage = "照片读取失败，请重新选择。" }
                 }
             }
+
             .sheet(isPresented: $showAIStickers) {
                 MaterialLibraryBrowser(keepsOpenAfterAdding: true, startsInGallery: true, onSelectForCreation: { bytes, name, material in
-                    _ = await session.aiWorkspace.addMaterials([bytes], sticker: true, name: name, material: material)
+                    let added = await session.aiWorkspace.addMaterials([bytes], sticker: true, name: name, material: material)
+                    if added && session.aiWorkspace.stickerCount >= DiaryAIWorkspace.maximumStickers { showAIStickers = false }
                 })
             }
             .sheet(isPresented: $showPhotos) { DiaryPhotoManagerSheet(session: session) }
@@ -179,7 +183,7 @@ struct DiaryEditorScreen: View {
             .disabled(session.busy || importingCameraPhotos || session.aiWorkspace.addingMaterials)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
-            if onNewPage != nil {
+            if onNewPage != nil && !aiMode {
                 Button(creatingNewPage ? "新建中…" : "新建页", systemImage: "plus.square") {
                     if session.document.root.layers.isEmpty && session.document.assets.isEmpty && session.document.root.drawing.isEmpty && session.document.root.background == nil && session.aiWorkspace.objects.isEmpty {
                         newPage()
@@ -188,19 +192,23 @@ struct DiaryEditorScreen: View {
                 .disabled(enteringCreation || !creationEntered || creatingNewPage || session.busy || importingCameraPhotos || session.aiWorkspace.addingMaterials)
             }
             if aiMode {
-                Button(session.aiWorkspace.saving ? "保存中…" : "保存作品") {
-                    if session.aiWorkspace.pending.isEmpty { Task { _ = await session.aiWorkspace.save() } }
-                    else { confirmsSaveAIWork = true }
-                }
-                .disabled(!session.aiWorkspace.canSaveWork || importingCameraPhotos)
-                .accessibilityIdentifier("diary.ai.save-work")
-                if session.aiWorkspace.version > 0 && session.aiWorkspace.pending.isEmpty {
-                    Button { aiCompare.toggle() } label: { Image(systemName: "rectangle.on.rectangle") }.accessibilityLabel("对比原版")
-                }
                 Menu {
-                    Button("保存草稿并关闭") { Task { await session.aiWorkspace.keepForLater(); aiMode = false } }
-                } label: { Image(systemName: "ellipsis") }.accessibilityLabel("更多操作")
-                    .disabled(session.aiWorkspace.running || session.aiWorkspace.addingMaterials)
+                    if session.aiWorkspace.version > 0 && session.aiWorkspace.pending.isEmpty {
+                        Button(aiCompare ? "查看当前作品" : "对比原版", systemImage: "rectangle.on.rectangle") { aiCompare.toggle() }
+                    }
+                    if onNewPage != nil {
+                        Button("新建页", systemImage: "plus.square") {
+                            if session.document.root.layers.isEmpty && session.document.assets.isEmpty && session.document.root.drawing.isEmpty && session.document.root.background == nil && session.aiWorkspace.objects.isEmpty { newPage() }
+                            else { confirmsNewPage = true }
+                        }
+                        .disabled(enteringCreation || !creationEntered || creatingNewPage || session.busy || importingCameraPhotos)
+                    }
+                    Button("保存草稿并关闭", systemImage: "square.and.arrow.down") {
+                        Task { await session.aiWorkspace.keepForLater(); aiMode = false }
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .accessibilityLabel("更多操作")
+                .disabled(session.aiWorkspace.running || session.aiWorkspace.addingMaterials || session.aiWorkspace.saving)
             } else {
             if supportsSpreadPreview {
                 Button { session.finishInteraction(); showsSpreadShell.toggle() } label: { Image(systemName: showsSpreadShell ? "eye.fill" : "eye") }
@@ -350,14 +358,16 @@ struct DiaryEditorScreen: View {
         guard !capturedPhotos.isEmpty else { return }
         let images = capturedPhotos
         capturedPhotos = []
+        let importingIntoAI = aiMode
+        let loadingIDs = importingIntoAI ? session.aiWorkspace.beginPreparingPhotos(images.count) : []
         importingCameraPhotos = true
         Task { @MainActor in
-            defer { importingCameraPhotos = false }
-            let data = images.compactMap { $0.jpegData(compressionQuality: 0.95) }
+            defer { importingCameraPhotos = false; session.aiWorkspace.finishPreparingPhotos(loadingIDs) }
+            let data = (try? await DiaryAIImageWork.run { images.compactMap { $0.jpegData(compressionQuality: 0.95) } }) ?? []
             guard data.count == images.count else {
                 session.errorMessage = "无法读取拍摄照片，请重试。"; return
             }
-            if aiMode { _ = await session.aiWorkspace.addMaterials(data) }
+            if importingIntoAI { _ = await session.aiWorkspace.addMaterials(data) }
             else { await session.importPhotos(data) }
         }
     }

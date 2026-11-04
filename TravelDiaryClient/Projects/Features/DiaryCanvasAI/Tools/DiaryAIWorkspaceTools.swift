@@ -13,6 +13,7 @@ enum DiaryAIWorkspaceTools {
 
     static let operationNames = ["place_layer": "setPlacement", "set_photo_crop": "setPhotoCrop", "set_photo_frame": "setFrameStyle", "create_text": "createText", "update_text": "updateText", "attach_decoration": "setPlacement", "set_decoration_visibility": "setDecorationVisibility"]
     static let descriptions: [String: String] = [
+        "report_photo_orientations": "仅检查原照片像素的正立方向；逐张返回objectID和最终绝对纠正角度，不修改构图。",
         "plan_composition": "仅用于整体规划。summary 用80～160字说明主照片、分区和文字留白；重新排版可同时提供regions指定照片与文字预留区域（设计单位）。不输出图层JSON或文件。调用一次即可。",
         "get_workspace": "查询当前工作版本、可处理图层和状态。初始输入已包含上下文，只有信息缺失或版本冲突时调用。只读。",
         "get_canvas_image": "查看最新已提交画布。commit_batch已返回相同预览时无需重复调用。只读。",
@@ -71,7 +72,8 @@ enum DiaryAIWorkspaceTools {
         let string: [String: Any] = ["type": "string"]
         let number: [String: Any] = ["type": "number"]
         var definitions: [(String, [String: Any], [String])] = [
-            ("plan_composition", ["heroID": string, "summary": string, "regions": ["type": "array", "maxItems": 20, "items": ["type": "object", "additionalProperties": false, "properties": ["role": ["type": "string", "enum": ["photo", "text"]], "objectID": string, "x": number, "y": number, "width": number, "height": number], "required": ["role", "x", "y", "width", "height"]]]], ["summary"]),
+            ("plan_composition", ["heroID": string, "summary": string, "regions": ["type": "array", "maxItems": 20, "items": ["type": "object", "additionalProperties": false, "properties": ["role": ["type": "string", "enum": ["photo", "text"]], "objectID": string, "rotation": ["type": "number", "enum": [-90, 0, 90, 180]], "x": number, "y": number, "width": number, "height": number], "required": ["role", "rotation", "x", "y", "width", "height"]]]], ["summary"]),
+            ("report_photo_orientations", ["rotations": ["type": "array", "items": ["type": "object", "additionalProperties": false, "properties": ["objectID": string, "angle": ["type": "number", "enum": [-90, 0, 90, 180]]], "required": ["objectID", "angle"]]]], ["rotations"]),
             ("request_batch_revision", ["objectIDs": ["type": "array", "items": string, "minItems": 1, "maxItems": DiaryAIWorkspace.maximumBatchLayers], "reason": string], ["objectIDs", "reason"]),
             ("get_workspace", [:], []), ("get_canvas_image", [:], []), ("list_fonts", [:], []),
             ("list_frame_styles", [:], []),
@@ -132,8 +134,11 @@ enum DiaryAIWorkspaceTools {
                   let object = context.objects.first(where: { $0.id == id }), let width = raw["width"] as? Double,
                   width.isFinite, width > 0, object.bounds.width > 0 else { throw DiaryAIError.invalid("图层或可见宽度无效") }
             guard let center = raw["center"] as? [String: Any], let x = center["x"] as? Double, let y = center["y"] as? Double, x.isFinite, y.isFinite else { throw DiaryAIError.invalid("center必须包含有限数字x、y，本项未暂存") }
-            let angle = raw["angle"] as? Double ?? object.angle
-            guard angle.isFinite, abs(angle) <= 180 else { throw DiaryAIError.invalid("angle必须在-180至180度之间，本项未暂存") }
+            let requestedAngle = raw["angle"] as? Double ?? object.angle
+            guard requestedAngle.isFinite, abs(requestedAngle) <= 3600 else { throw DiaryAIError.invalid("angle必须为合理的有限角度，本项未暂存") }
+            // Absolute rotations such as 270 degrees are equivalent to -90, not a reason for a paid repair round.
+            let wrapped = requestedAngle.truncatingRemainder(dividingBy: 360)
+            let angle = wrapped > 180 ? wrapped - 360 : wrapped < -180 ? wrapped + 360 : wrapped
             guard x >= 0, y >= 0, x <= context.size.width, y <= context.size.height else { throw DiaryAIError.invalid("center在画布外。保留原素材；不允许通过移出画布隐藏贴纸，应贴近照片组边缘。") }
             let scale = object.scale * width / object.bounds.width
             guard (0.05...20).contains(scale) else { throw DiaryAIError.invalid("宽度导致无效缩放。不能把素材缩成零来隐藏；保持可见大小并摆放到照片组边缘。") }

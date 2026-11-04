@@ -136,7 +136,7 @@ nonisolated enum DiaryAIBackgroundImaging {
         return bytes
     }
     /// Spatial conditioning only. Original photography is sent to the design/review model, not baked into the image-editing input.
-    static func occupancyGuide(canvas: CGSize, objects: [DiaryAIObject]) throws -> Data {
+    static func occupancyGuide(canvas: CGSize, objects: [DiaryAIObject], textRegions: [CGRect] = []) throws -> Data {
         let scale = min(1, 1536 / max(canvas.width, canvas.height))
         let output = CGSize(width: canvas.width * scale, height: canvas.height * scale)
         let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
@@ -144,10 +144,11 @@ nonisolated enum DiaryAIBackgroundImaging {
             UIColor(red: 0.98, green: 0.975, blue: 0.96, alpha: 1).setFill()
             context.fill(CGRect(origin: .zero, size: output))
             context.cgContext.scaleBy(x: scale, y: scale)
-            for object in objects where object.visible && object.role != "background" {
-                // Bounds already include native transforms; use conservative exclusion margins for text and frames.
-                let margin = min(canvas.width, canvas.height) * (object.role == "text" ? 0.018 : 0.01)
-                let rect = object.bounds.insetBy(dx: -margin, dy: -margin).intersection(CGRect(origin: .zero, size: canvas))
+            let fields = objects.filter { $0.visible && $0.role != "background" }.map { ($0.bounds, $0.role == "text") } + textRegions.map { ($0, true) }
+            for (bounds, isText) in fields {
+                // Include planned text before foreground creation, using the same soft exclusion field.
+                let margin = min(canvas.width, canvas.height) * (isText ? 0.018 : 0.01)
+                let rect = bounds.insetBy(dx: -margin, dy: -margin).intersection(CGRect(origin: .zero, size: canvas))
                 guard !rect.isNull else { continue }
                 // Soft occupancy fields avoid teaching the image model to reproduce rectangular placeholders.
                 let cg = context.cgContext

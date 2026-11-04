@@ -36,6 +36,30 @@ import SwiftUI
         let deadline = Date().addingTimeInterval(15)
         while workspace.running && Date() < deadline { try await Task.sleep(for: .milliseconds(30)) }
     }
+    @Test func preparingPhotosBlocksProductionAndConcurrentImportsAreRetained() async throws {
+        let (session, root) = try await fixture(count: 0)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = DiaryAIWorkspace(session: session, model: WorkspaceModel(), root: root)
+        let request = DiaryAIRequest.defaults(.relayout)
+        await workspace.enter(request)
+        let ids = workspace.beginPreparingPhotos(2)
+        workspace.configureAndStart(request)
+        #expect(!workspace.running)
+        let bytes = try #require(UIGraphicsImageRenderer(size: CGSize(width: 100, height: 150)).image { c in
+            UIColor.orange.setFill(); c.fill(CGRect(x: 0, y: 0, width: 100, height: 150))
+        }.pngData())
+        let photos = Task { await workspace.addMaterials([bytes]) }
+        while !workspace.addingMaterials { await Task.yield() }
+        #expect(workspace.canAddSticker)
+        let sticker = Task { await workspace.addMaterials([bytes], sticker: true, name: "并发贴纸") }
+        #expect(await photos.value)
+        #expect(await sticker.value)
+        #expect(workspace.objects.contains { $0.role == "photo" })
+        #expect(workspace.pending.count == 2)
+        workspace.finishPreparingPhotos(ids)
+        #expect(workspace.preparingPhotos.isEmpty)
+    }
+
     @Test func addMaterialsToEmptyStyleCanvasSurvivesResumeAndPublishes() async throws {
         let (session, root) = try await fixture(count: 0)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -215,6 +239,43 @@ import SwiftUI
         #expect(DiaryAIWorkspace.toolsForBatchStage(base: base, hasOperations: true, committed: true) == ["finish_batch"])
         #expect(!DiaryAIWorkspace.toolsForBatchStage(base: base, hasOperations: false, committed: false).contains("finish_batch"))
         #expect(!DiaryAIWorkspace.toolsForBatchStage(base: base, hasOperations: true, committed: false).contains("inspect_layers"))
+    }
+    @Test func equivalentFullTurnAngleDoesNotRequireModelRepair() async throws {
+        let (session, root) = try await fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bridge = DiaryEditorAIBridge(session)
+        let context = try await bridge.capture(.defaults(.relayout))
+        let id = try #require(context.objects.first?.id)
+        let call = try scriptedCall("place_layer", ["expectedVersion": 7, "objectID": id.uuidString, "width": 180, "angle": 270, "center": ["x": 300, "y": 300]])
+        let parsed = try DiaryAIWorkspaceTools.parse(call, version: 7, context: context)
+        let operation = try #require(parsed)
+        #expect(operation.angle == -90)
+    }
+    @Test func wholePageReviewCanRepairDifferentObjectsAcrossRounds() async throws {
+        let (session, root) = try await fixture(count: 2)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ids = session.scopeLayers.map(\.id)
+        let model = ScriptedWorkspaceModel { round, _, _, _, _ in
+            switch round {
+            case 1:
+                return try ids.enumerated().map { index, id in
+                    try scriptedCall("place_layer", ["expectedVersion": 0, "objectID": id.uuidString, "width": 180, "angle": 0, "center": ["x": 200 + index * 300, "y": 300]])
+                }
+            case 2, 4:
+                return [try scriptedCall("request_batch_revision", ["expectedVersion": round / 2, "objectIDs": [ids[round == 2 ? 0 : 1].uuidString], "reason": "照片方向需局部修复"])]
+            case 3, 5:
+                let index = round == 3 ? 0 : 1
+                return [try scriptedCall("place_layer", ["expectedVersion": (round - 1) / 2, "objectID": ids[index].uuidString, "width": 180, "angle": 0, "center": ["x": 200 + index * 300, "y": 320]])]
+            default:
+                return [try scriptedCall("finish_batch", ["expectedVersion": 3])]
+            }
+        }
+        let workspace = DiaryAIWorkspace(session: session, model: model, root: root, efficientExecution: true, parallelExecution: true)
+        await workspace.enter(.defaults(.relayout)); workspace.processAll(); try await wait(workspace)
+        #expect(workspace.error == nil)
+        #expect(workspace.version == 3)
+        #expect(workspace.events.filter { $0.kind == "revision" }.count == 2)
+        #expect(workspace.objects.filter { ids.contains($0.id) }.allSatisfy { $0.center.y == 320 })
     }
     @Test func efficientExecutionCommitsLocallyAndKeepsFinalVisualReview() async throws {
         let (session, root) = try await fixture(count: 1); defer { try? FileManager.default.removeItem(at: root) }

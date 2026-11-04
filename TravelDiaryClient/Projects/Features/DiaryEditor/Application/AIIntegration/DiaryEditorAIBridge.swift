@@ -309,15 +309,29 @@ import CoreText
             let textAreas = siblings.filter { $0.id != id && $0.visible && !excludedRenderIDs.contains($0.id) && role($0, in: document) == "text" }.map {
                 DiaryPageRenderer.bounds($0, document: document, siblings: siblings).applying(DiaryPageRenderer.matrix($0, siblings: siblings))
             }
+            // Keep stickers on photo edges; protect the central subject area even
+            // when the visual reviewer misses a face beneath a sticker.
+            let photoCores = siblings.filter { $0.visible && !excludedRenderIDs.contains($0.id) && role($0, in: document) == "photo" }.map { photo in
+                let rect = DiaryPageRenderer.bounds(photo, document: document, siblings: siblings).applying(DiaryPageRenderer.matrix(photo, siblings: siblings))
+                return rect.insetBy(dx: rect.width * 0.12, dy: rect.height * 0.12)
+            }
             func clear(_ rect: CGRect) -> Bool {
-                page.contains(rect) && !textAreas.contains(where: { $0.intersects(rect) }) && !blockers.contains { other in
+                page.contains(rect) && !photoCores.contains(where: { $0.intersects(rect) }) && !(context.spineX.map { rect.minX < $0 + 24 && rect.maxX > $0 - 24 } ?? false) && !textAreas.contains(where: { $0.intersects(rect) }) && !blockers.contains { other in
                     let overlap = rect.intersection(other)
                     return !overlap.isNull && overlap.width * overlap.height / max(1, min(rect.width * rect.height, other.width * other.height)) > 0.3
                 }
             }
             if !clear(bounds) {
                 var options = [CGRect]()
-                for other in blockers where bounds.intersects(other) {
+                // Preserve size and rotation; repair small edge overflow before another model round.
+                if bounds.width <= page.width && bounds.height <= page.height {
+                    let dx = min(max(bounds.minX, page.minX), page.maxX - bounds.width) - bounds.minX
+                    let dy = min(max(bounds.minY, page.minY), page.maxY - bounds.height) - bounds.minY
+                    if hypot(dx, dy) <= min(page.width, page.height) * 0.03 {
+                        options.append(bounds.offsetBy(dx: dx, dy: dy))
+                    }
+                }
+                for other in blockers + textAreas + photoCores where bounds.intersects(other) {
                     options += [bounds.offsetBy(dx: other.maxX + 12 - bounds.minX, dy: 0), bounds.offsetBy(dx: other.minX - 12 - bounds.maxX, dy: 0), bounds.offsetBy(dx: 0, dy: other.maxY + 12 - bounds.minY), bounds.offsetBy(dx: 0, dy: other.minY - 12 - bounds.maxY)]
                 }
                 if let nearest = options.filter(clear).min(by: { hypot($0.midX - bounds.midX, $0.midY - bounds.midY) < hypot($1.midX - bounds.midX, $1.midY - bounds.midY) }) {
@@ -487,6 +501,16 @@ import CoreText
                 copy.update(id) { $0.transform.position.x += dx; $0.transform.position.y += dy }
                 autoPositionedText.insert(id)
                 warnings.append("文字纸卡按真实尺寸移入预留区，字体、字号与纸卡保持不变")
+            }
+        }
+        if autoFitPhotoRegions {
+            for id in changed.sorted(by: { $0.uuidString < $1.uuidString }) {
+                guard let layer = copy.layer(id), role(layer, in: copy) == "decoration",
+                      let placement = operations.last(where: { $0.objectID == id && $0.type == "setPlacement" }) else { continue }
+                // Resolve again after native text measurement, without reapplying scale/rotation.
+                var resolved = placement
+                resolved.scale = nil; resolved.width = nil; resolved.angle = nil; resolved.center = nil
+                try place(resolved, id: id, document: &copy, context: context)
             }
         }
         let siblings = copy.objects[context.contentID]!.layers

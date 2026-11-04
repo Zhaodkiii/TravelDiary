@@ -7,6 +7,7 @@ from pathlib import Path
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--design-case', type=int, choices=range(14), help='Rerun a single design case, requires --design-flow')
+parser.add_argument('--design-cases', help='Comma-separated case indices, e.g. 0,1,2,3,4,5')
 parser.add_argument('--design-flow', action='store_true', help='Run six real coordinated layout/style flows (paid calls)')
 parser.add_argument('--regression', action='store_true', help='Run all eight retained AI/editor regression suites without paid API calls')
 parser.add_argument('--full-flow', action='store_true', help='Run real relayout, text and background benchmark (paid calls)')
@@ -44,7 +45,7 @@ if args.live or args.full_flow:
     subprocess.run(['xcrun', 'simctl', 'privacy', args.device, 'grant', 'photos-add', 'cn.zhaodk.TravelDiary'], check=True)
     marker.touch()
     if args.design_flow:
-        Path("/tmp/traveldiary-design-flow-enabled").write_text(str(args.design_case) if args.design_case is not None else "all")
+        Path("/tmp/traveldiary-design-flow-enabled").write_text(str(args.design_case) if args.design_case is not None else (args.design_cases or "0,1,2,3,4,5"))
 else:
     marker.unlink(missing_ok=True)
 try:
@@ -57,4 +58,6 @@ finally:
         for item in artifacts.iterdir():
             if item.is_file():
                 shutil.copy2(item, args.output / item.name)
+            elif item.name.startswith('design-'):
+                shutil.copytree(item, args.output / item.name, dirs_exist_ok=True)
 raise SystemExit(result.returncode)

@@ -35,6 +35,7 @@ nonisolated struct DiaryAIContext: Codable, Sendable {
 nonisolated struct DiaryAILayoutRegion: Codable, Sendable {
     var role: String
     var objectID: String?
+    var rotation: Double? = nil
     var x: Double
     var y: Double
     var width: Double
