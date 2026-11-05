@@ -23,6 +23,11 @@ struct DiaryEditorScreen: View {
     @State private var aiPhotos: [PhotosPickerItem] = []
     @State private var confirmsSaveAIWork = false
     @State private var showAIPhotos = false
+    @State private var creationFlow: DiaryAICreationFlow?
+    @State private var showCreationFlow = false
+    @State private var showCreationPicker = false
+    @State private var creationPickerResults: [PHPickerResult] = []
+    @State private var startPreparedCreation = false
     @State private var showAIStickers = false
     @State private var showCamera = false
     @State private var capturedPhotos: [UIImage] = []
@@ -95,6 +100,32 @@ struct DiaryEditorScreen: View {
                 }
             }
 
+            .sheet(isPresented: $showCreationPicker, onDismiss: {
+                let results = creationPickerResults
+                creationPickerResults = []
+                guard !results.isEmpty, let creationFlow else { return }
+                showCreationFlow = true
+                creationFlow.importProviders(results.map(\.itemProvider))
+            }) {
+                DiaryCreationSystemPicker(limit: max(1, 30 - (creationFlow?.draft.photos.count ?? 0))) { results in
+                    creationPickerResults = results
+                    showCreationPicker = false
+                }.ignoresSafeArea()
+            }
+            .sheet(isPresented: $showCreationFlow, onDismiss: {
+                if startPreparedCreation {
+                    startPreparedCreation = false
+                    session.aiWorkspace.processAll()
+                }
+            }) {
+                if let creationFlow {
+                    DiaryAICreationSheet(flow: creationFlow) {
+                        studioDesign = creationFlow.design
+                        startPreparedCreation = true
+                        showCreationFlow = false
+                    }
+                }
+            }
             .sheet(isPresented: $showAIStickers) {
                 MaterialLibraryBrowser(keepsOpenAfterAdding: true, startsInGallery: true, onSelectForCreation: { bytes, name, material in
                     let added = await session.aiWorkspace.addMaterials([bytes], sticker: true, name: name, material: material)
@@ -142,6 +173,10 @@ struct DiaryEditorScreen: View {
                     aiMode = true
                     enteringCreation = true
                     await session.aiWorkspace.enter(creationRequest)
+                    if session.aiWorkspace.submittedCreationID != nil {
+                        session.canvasAI.setForm(session.aiWorkspace.currentRequest)
+                        studioDesign = session.aiWorkspace.currentDesign
+                    }
                     enteringCreation = false
                     if creationAutoStart && session.aiWorkspace.active { session.aiWorkspace.processAll() }
                 }
@@ -265,7 +300,13 @@ struct DiaryEditorScreen: View {
         creatingNewPage = true
         Task {
             defer { creatingNewPage = false }
-            do { try await onNewPage() }
+            do {
+                let oldDraftDirectory = creationFlow?.directory
+                try await onNewPage()
+                creationFlow?.cancelOperation()
+                if let oldDraftDirectory { try? FileManager.default.removeItem(at: oldDraftDirectory) }
+                creationFlow = nil
+            }
             catch { session.errorMessage = "新建页失败：" + error.localizedDescription }
         }
     }
@@ -346,6 +387,7 @@ struct DiaryEditorScreen: View {
                 if aiMode {
                     DiaryAIInlinePanel(workspace: session.aiWorkspace, controller: session.canvasAI,
                         onPhotos: { showAIPhotos = true },
+                        onBeginCreation: openAIPhotos,
                         onCamera: { capturedPhotos = []; showCamera = true },
                         onStickers: { showAIStickers = true },
                         onDesign: { studioDesign = $0 })
@@ -395,6 +437,22 @@ struct DiaryEditorScreen: View {
             onTransform: { session.beginFreeTransform(); if session.transformDraft != nil { activeTool = .transform } },
             selectionToolsOnly: selectionToolsOnly)
     }
+    private func prepareCreationFlow() {
+        if let creationFlow, creationFlow.draft.submitted, session.aiWorkspace.objects.isEmpty { creationFlow.discardDraft() }
+        guard creationFlow == nil else { return }
+        do { creationFlow = try DiaryAICreationFlow(session: session) }
+        catch { session.errorMessage = "无法读取制作草稿：" + error.localizedDescription }
+    }
+    private func openAIPhotos() {
+        guard session.aiWorkspace.active, !session.aiWorkspace.running else { return }
+        if session.aiWorkspace.objects.isEmpty {
+            prepareCreationFlow()
+            guard let creationFlow else { return }
+            if creationFlow.draft.photos.count >= 30 { showCreationFlow = true }
+            else { showCreationPicker = true }
+        } else { showAIPhotos = true }
+    }
+
     private func importCapturedPhotos() {
         guard !capturedPhotos.isEmpty else { return }
         let images = capturedPhotos

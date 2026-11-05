@@ -169,16 +169,17 @@ import SwiftUI
         guard selectedCase == "all" || selectedCase.split(separator: ",").contains(Substring(String(index))) else { return }
         let layouts: [DiaryAILayout] = [.hero, .story, .headline, .collage, .editorial, .automatic]
         let datasets = ["archive-city", "archive-family", "archive-food", "archive-nature", "archive-portrait", "archive-mixed"]
+        let parallel = !FileManager.default.fileExists(atPath: "/tmp/traveldiary-design-flow-serial")
         if index >= 26 {
             let combination = index >= 62 ? index - 62 : index - 26
             let layoutIndex = combination / DiaryAIPageStyle.allCases.count
             let styleIndex = combination % DiaryAIPageStyle.allCases.count
-            try await runFullFlow(true,
+            try await runFullFlow(parallel,
                                   design: .init(layout: layouts[layoutIndex], style: DiaryAIPageStyle.allCases[styleIndex]),
                                   dataset: index >= 62 ? "regression-36-\(combination)" : "cross-scene-\(combination)", mode: "guided")
         } else {
             let designIndex = index >= 8 ? (index - 8) % 6 : index % 6
-            try await runFullFlow(true, design: .init(layout: layouts[designIndex], style: DiaryAIPageStyle.allCases[designIndex]), dataset: index >= 8 ? datasets[designIndex] : index >= 6 ? (index == 6 ? "wedding" : "coast") : nil, mode: (14..<20).contains(index) ? "textOnly" : "guided")
+            try await runFullFlow(parallel, design: .init(layout: layouts[designIndex], style: DiaryAIPageStyle.allCases[designIndex]), dataset: index >= 8 ? datasets[designIndex] : index >= 6 ? (index == 6 ? "wedding" : "coast") : nil, mode: (14..<20).contains(index) ? "textOnly" : "guided")
         }
     }
     private func runFullFlow(_ parallel: Bool, design: DiaryAIDesignSelection? = nil, dataset: String? = nil, mode: String = "guided", storyCase: Int? = nil) async throws {
@@ -269,7 +270,10 @@ import SwiftUI
         if let diagnostics = try? await w.exportProductionLog() {
             try FileManager.default.copyItem(at: diagnostics, to: runFolder.appendingPathComponent("production-log.zip"))
         }
-        try JSONSerialization.data(withJSONObject: ["finalModelReview": false, "mode": mode, "dataset": dataset ?? "book8", "layout": design?.layout.rawValue ?? "legacy", "style": design?.style.rawValue ?? "legacy", "elapsed": Date().timeIntervalSince(measuredStart), "error": w.error ?? "", "backgroundRetries": backgroundRetries], options: [.prettyPrinted, .sortedKeys]).write(to: runFolder.appendingPathComponent("metrics.json"))
+        try JSONSerialization.data(withJSONObject: ["execution": parallel ? "parallel" : "serial", "finalModelReview": false, "mode": mode, "dataset": dataset ?? "book8", "layout": design?.layout.rawValue ?? "legacy", "style": design?.style.rawValue ?? "legacy", "elapsed": Date().timeIntervalSince(measuredStart), "error": w.error ?? "", "backgroundRetries": backgroundRetries], options: [.prettyPrinted, .sortedKeys]).write(to: runFolder.appendingPathComponent("metrics.json"))
+        if !parallel {
+            #expect(!w.events.contains { $0.title == "背景与图层排版同时开始" || $0.title == "文字与贴纸并行生成提案" })
+        }
         #expect(!w.events.contains { $0.title == "最终整页验收开始" })
         #expect(!w.running && w.backgroundRecord?.layerID != nil)
         #expect(w.error == nil)

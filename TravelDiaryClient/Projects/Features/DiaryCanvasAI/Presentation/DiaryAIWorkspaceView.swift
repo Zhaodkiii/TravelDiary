@@ -238,6 +238,7 @@ struct DiaryAIInlinePanel: View {
     @State private var action = DiaryAIAction.relayout
     @State private var design = DiaryAIDesignSelection()
     var onPhotos: () -> Void = {}
+    var onBeginCreation: () -> Void = {}
     var onCamera: () -> Void = {}
     var onStickers: () -> Void = {}
     var onDesign: (DiaryAIDesignSelection) -> Void = { _ in }
@@ -324,7 +325,7 @@ struct DiaryAIInlinePanel: View {
                         }
                     }
                     else if complete { Task { _ = await workspace.save() } }
-                    else if photos.isEmpty && !started { onPhotos() }
+                    else if photos.isEmpty && !started { onBeginCreation() }
                     else if started { workspace.processAll() }
                     else {
                         var request = controller.form(action); request.design = design; request.selectedOnly = false
@@ -350,6 +351,9 @@ struct DiaryAIInlinePanel: View {
             }
             .onChange(of: workspace.active) { _, active in
                 if active { started = workspace.hasStartedWork }
+            }
+            .onChange(of: workspace.running) { _, running in
+                if running { started = true }
             }
             .onChange(of: controller.restored) { _, restored in
                 if restored { design = controller.form(action).design ?? workspace.currentDesign ?? .init() }

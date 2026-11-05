@@ -23,6 +23,7 @@ nonisolated struct DiaryAIWorkspaceCheckpoint: Codable, Sendable {
     }
 }
 nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
+    var creationSubmissionID: UUID? = nil
     var parallelExecution: Bool? = nil
     var awaitingConfirmation: Bool? = nil
     var logSession: String? = nil
@@ -85,7 +86,10 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private var bridge: DiaryEditorAIBridge?
     private var baseline: DiaryAIWorkspaceCheckpoint?
     private var checkpoints: [DiaryAIWorkspaceCheckpoint] = []
+    private var creationSubmissionID: UUID?
     private var request = DiaryAIRequest.defaults(.relayout)
+    var currentRequest: DiaryAIRequest { request }
+    var submittedCreationID: UUID? { creationSubmissionID }
     var currentCreationBrief: CreationBrief? { request.creationBrief }
     var currentDesign: DiaryAIDesignSelection? { request.design }
     private var composition = ""
@@ -177,6 +181,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             if let saved, saved.schema == 1, let last = saved.checkpoints.last,
                try DiaryEditorAIBridge.digest(saved.baseline.restoredDocument) == DiaryEditorAIBridge.digest(source.document) {
                 enteredFromDraft = true
+                creationSubmissionID = saved.creationSubmissionID
                 parallelExecution = saved.parallelExecution ?? false
                 awaitingConfirmation = saved.awaitingConfirmation ?? false
                 layoutRegions = saved.layoutRegions ?? []; visualRevision = saved.visualRevision; confirmationScope = saved.confirmationScope
@@ -184,7 +189,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 backgroundRecord = saved.background
                 baseline = saved.baseline; checkpoints = saved.checkpoints; pending = last.pending
                 self.request = saved.request.coordinated(); events = saved.events; composition = saved.composition; version = saved.version; textDone = saved.textDone ?? false
-                if request.action == saved.request.action && request.selectedOnly == saved.request.selectedOnly {
+                if saved.creationSubmissionID == nil && request.action == saved.request.action && request.selectedOnly == saved.request.selectedOnly {
                     self.request = request.coordinated()
                     if request.canCreateText && !saved.request.canCreateText { textDone = false }
                     if request.background != saved.request.background && backgroundRecord?.layerID == nil { backgroundRecord = nil }
@@ -195,6 +200,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 try await setup(last.restoredDocument)
                 log("restore", "已恢复上次工作版本", "没有自动发起模型请求。")
             } else {
+                creationSubmissionID = nil
                 backgroundRecord = nil; backgroundPreview = nil
                 layoutRegions = []; visualRevision = nil; confirmationScope = nil
                 baseline = .init(source.document, pending: [])
@@ -262,6 +268,60 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             displaySession = display
         }
     }
+    /// Prepare every material in an isolated candidate, then durably publish one checkpoint.
+    /// A restored submission ID prevents duplicate imports after an interrupted UI handoff.
+    func commitCreation(id: UUID, photos: [Data], stickers: [(Data, String, DiaryMaterialSource?)], heroIndex: Int, photoNotes: [String] = [], request value: DiaryAIRequest) async -> Bool {
+        guard active else { error = "制作会话已关闭，请重新打开。"; return false }
+        if creationSubmissionID == id { return true }
+        guard active, !running, !addingMaterials, !saving, let working,
+              objects.isEmpty, (1...30).contains(photos.count), stickers.count <= Self.maximumStickers else {
+            error = "当前画布已有素材或任务正在处理，请返回后继续原任务。"; return false
+        }
+        addingMaterials = true
+        defer { addingMaterials = false }
+        let capturedOwner = MaterialCatalogRepository.shared.owner
+        let sourceDigest = source.flatMap { try? DiaryEditorAIBridge.digest($0.document) }
+        let candidate = DiaryEditorSession(document: working.document, images: working.images, store: working.store, contentID: working.contentID)
+        candidate.aiTransientSession = true
+        var photoIDs: [UUID] = []
+        for bytes in photos {
+            let before = Set(DiaryEditorAIBridge(candidate).objectChoices.map(\.id))
+            guard await candidate.importPhotos([bytes]) else { error = candidate.errorMessage; return false }
+            photoIDs += DiaryEditorAIBridge(candidate).objectChoices.filter { $0.role == "photo" && !before.contains($0.id) }.map(\.id)
+        }
+        for (bytes, name, material) in stickers {
+            guard await candidate.importPhoto(bytes, asSticker: true, stickerName: name, materialSource: material) else { error = candidate.errorMessage; return false }
+        }
+        guard !Task.isCancelled, active, self.working === working,
+              MaterialCatalogRepository.shared.owner == capturedOwner,
+              source.flatMap({ try? DiaryEditorAIBridge.digest($0.document) }) == sourceDigest else {
+            error = "页面或账号已改变，未提交制作素材。"; return false
+        }
+        let oldCheckpoints = checkpoints, oldPending = pending, oldRequest = request
+        let oldVersion = version
+        do {
+            request = value.coordinated()
+            if photoIDs.indices.contains(heroIndex) { request.heroID = photoIDs[heroIndex] }
+            let notes = Dictionary(uniqueKeysWithValues: zip(photoIDs, photoNotes).filter { !$0.1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map { ($0.0.uuidString, $0.1) })
+            if !notes.isEmpty {
+                request.creationNotes = notes
+                request.instruction += "\n用户逐照片说明：\n" + photoIDs.compactMap { id in notes[id.uuidString].map { "照片\(id.uuidString)：" + $0 } }.joined(separator: "\n")
+            }
+            pending = DiaryEditorAIBridge(candidate).objectChoices.filter { $0.role != "background" }.map(\.id)
+            checkpoints.append(.init(candidate.document, pending: pending)); version += 1
+            creationSubmissionID = id
+            try await setup(candidate.document)
+            try await refresh()
+            try await persist()
+            error = nil
+            return true
+        } catch {
+            creationSubmissionID = nil; checkpoints = oldCheckpoints; pending = oldPending; request = oldRequest; version = oldVersion
+            try? await setup(working.document); try? await refresh()
+            self.error = error.localizedDescription; return false
+        }
+    }
+
     /// Add to the working version so save/restore and pending masks stay coherent.
     @discardableResult
     func addMaterials(_ data: [Data], sticker: Bool = false, name: String = "贴纸", material: DiaryMaterialSource? = nil) async -> Bool {
@@ -414,6 +474,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             awaitingConfirmation = false; visualRevision = nil; confirmationScope = nil
             pending = previous.pending; version += 1
             try await setup(previous.restoredDocument)
+            if objects.isEmpty { creationSubmissionID = nil }
             if let id = backgroundRecord?.layerID, previous.restoredDocument.layer(id) == nil { backgroundRecord = nil; backgroundPreview = nil }
             try await persist(); try await refresh()
             log("rollback", "已回退上一批")
@@ -466,7 +527,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         try await productionLog.flush()
         guard !discarded, let baseline else { return }
         storageSequence += 1
-        let value = DiaryAIWorkspaceArchive(parallelExecution: parallelExecution, awaitingConfirmation: awaitingConfirmation, logSession: productionLog.directory.lastPathComponent, baseline: baseline, checkpoints: checkpoints, request: request, events: events, composition: composition, version: version, textDone: textDone, background: backgroundRecord, layoutRegions: layoutRegions, visualRevision: visualRevision, confirmationScope: confirmationScope)
+        let value = DiaryAIWorkspaceArchive(creationSubmissionID: creationSubmissionID, parallelExecution: parallelExecution, awaitingConfirmation: awaitingConfirmation, logSession: productionLog.directory.lastPathComponent, baseline: baseline, checkpoints: checkpoints, request: request, events: events, composition: composition, version: version, textDone: textDone, background: backgroundRecord, layoutRegions: layoutRegions, visualRevision: visualRevision, confirmationScope: confirmationScope)
         try await storage.save(value, sequence: storageSequence)
     }
     private func removeArchive() async throws {
@@ -504,7 +565,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                         log("plan", "进入文字处理", "跳过整页构图规划，直接创建或修改可编辑文字。")
                     } else { try await plan(token: token) }
                 }
-                if autoAll && request.background != nil && !isBackgroundOnly { try await startBackgroundBranch(token: token) }
+                if parallelExecution && autoAll && request.background != nil && !isBackgroundOnly { try await startBackgroundBranch(token: token) }
                 if model is DiaryArkResponsesClient && request.action == .relayout && pending.filter({ id in objects.first(where: { $0.id == id })?.role == "photo" }).count > Self.maximumBatchLayers {
                     try await verifySourceOrientations(token: token)
                 }
@@ -531,7 +592,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                             ids = Array(objects.filter { $0.editable && $0.role != "background" && (!request.selectedOnly || $0.id == source?.selectedID) && (request.action != .writing || $0.role == "text") }.prefix(Self.maximumBatchLayers).map(\.id))
                         } else if !(request.canCreateText && !textDone && pending.allSatisfy { id in objects.first { $0.id == id }?.role != "photo" }) { break }
                     }
-                    if efficientExecution && autoAll && request.action == .relayout && needsTextCompletion && ids.isEmpty && model is DiaryArkResponsesClient {
+                    if parallelExecution && efficientExecution && autoAll && request.action == .relayout && needsTextCompletion && ids.isEmpty && model is DiaryArkResponsesClient {
                         let decorations = pending.filter { id in objects.first { $0.id == id }?.role == "decoration" }
                         if !decorations.isEmpty {
                             do {
