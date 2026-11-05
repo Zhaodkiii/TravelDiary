@@ -32,6 +32,19 @@ import SwiftUI
             try #require(image.pngData()).write(to: output.appendingPathComponent(kind.rawValue + ".png"))
         }
     }
+    @Test func planningMinorOverflowTranslatesWithoutResizeOrNewCollision() async throws {
+        let (session, root) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = try await DiaryEditorAIBridge(session).capture(request())
+        let region = DiaryAILayoutRegion(role: "text", x: 10, y: 650, width: 100, height: 160)
+        let fitted = DiaryAIWorkspace.fitPlanningRegions([region], context: context)[0]
+        #expect(fitted.y == 640)
+        #expect(fitted.width == region.width && fitted.height == region.height)
+        let blocker = DiaryAILayoutRegion(role: "text", x: 10, y: 630, width: 100, height: 15)
+        #expect(DiaryAIWorkspace.fitPlanningRegions([region, blocker], context: context)[0].y == region.y)
+        let excessive = DiaryAILayoutRegion(role: "text", x: 10, y: 700, width: 100, height: 160)
+        #expect(DiaryAIWorkspace.fitPlanningRegions([excessive], context: context)[0].y == excessive.y)
+    }
     private func image(_ size: CGSize = CGSize(width: 1000, height: 800)) throws -> Data {
         let format = UIGraphicsImageRendererFormat(); format.scale = 1
         return try #require(UIGraphicsImageRenderer(size: size, format: format).image { ctx in
@@ -150,19 +163,19 @@ import SwiftUI
         guard !FileManager.default.fileExists(atPath: "/tmp/traveldiary-design-flow-enabled") else { return }
         try await runFullFlow(parallel)
     }
-    @Test(arguments: Array(0..<62)) func liveDesignFlow(_ index: Int) async throws {
+    @Test(arguments: Array(0..<98)) func liveDesignFlow(_ index: Int) async throws {
         guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-design-flow-enabled") else { return }
         let selectedCase = try String(contentsOfFile: "/tmp/traveldiary-design-flow-enabled", encoding: .utf8)
         guard selectedCase == "all" || selectedCase.split(separator: ",").contains(Substring(String(index))) else { return }
         let layouts: [DiaryAILayout] = [.hero, .story, .headline, .collage, .editorial, .automatic]
         let datasets = ["archive-city", "archive-family", "archive-food", "archive-nature", "archive-portrait", "archive-mixed"]
         if index >= 26 {
-            let combination = index - 26
+            let combination = index >= 62 ? index - 62 : index - 26
             let layoutIndex = combination / DiaryAIPageStyle.allCases.count
             let styleIndex = combination % DiaryAIPageStyle.allCases.count
             try await runFullFlow(true,
                                   design: .init(layout: layouts[layoutIndex], style: DiaryAIPageStyle.allCases[styleIndex]),
-                                  dataset: "cross-scene-\(combination)", mode: "guided")
+                                  dataset: index >= 62 ? "regression-36-\(combination)" : "cross-scene-\(combination)", mode: "guided")
         } else {
             let designIndex = index >= 8 ? (index - 8) % 6 : index % 6
             try await runFullFlow(true, design: .init(layout: layouts[designIndex], style: DiaryAIPageStyle.allCases[designIndex]), dataset: index >= 8 ? datasets[designIndex] : index >= 6 ? (index == 6 ? "wedding" : "coast") : nil, mode: (14..<20).contains(index) ? "textOnly" : "guided")
@@ -256,7 +269,8 @@ import SwiftUI
         if let diagnostics = try? await w.exportProductionLog() {
             try FileManager.default.copyItem(at: diagnostics, to: runFolder.appendingPathComponent("production-log.zip"))
         }
-        try JSONSerialization.data(withJSONObject: ["mode": mode, "dataset": dataset ?? "book8", "layout": design?.layout.rawValue ?? "legacy", "style": design?.style.rawValue ?? "legacy", "elapsed": Date().timeIntervalSince(measuredStart), "error": w.error ?? "", "backgroundRetries": backgroundRetries], options: [.prettyPrinted, .sortedKeys]).write(to: runFolder.appendingPathComponent("metrics.json"))
+        try JSONSerialization.data(withJSONObject: ["finalModelReview": false, "mode": mode, "dataset": dataset ?? "book8", "layout": design?.layout.rawValue ?? "legacy", "style": design?.style.rawValue ?? "legacy", "elapsed": Date().timeIntervalSince(measuredStart), "error": w.error ?? "", "backgroundRetries": backgroundRetries], options: [.prettyPrinted, .sortedKeys]).write(to: runFolder.appendingPathComponent("metrics.json"))
+        #expect(!w.events.contains { $0.title == "最终整页验收开始" })
         #expect(!w.running && w.backgroundRecord?.layerID != nil)
         #expect(w.error == nil)
         guard w.backgroundRecord?.layerID != nil else { return }

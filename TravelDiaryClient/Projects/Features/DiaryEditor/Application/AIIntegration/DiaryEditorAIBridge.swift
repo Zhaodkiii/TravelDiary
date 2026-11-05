@@ -311,12 +311,20 @@ import CoreText
             }
             // Keep stickers on photo edges; protect the central subject area even
             // when the visual reviewer misses a face beneath a sticker.
-            let photoCores = siblings.filter { $0.visible && !excludedRenderIDs.contains($0.id) && role($0, in: document) == "photo" }.map { photo in
-                let rect = DiaryPageRenderer.bounds(photo, document: document, siblings: siblings).applying(DiaryPageRenderer.matrix(photo, siblings: siblings))
-                return rect.insetBy(dx: rect.width * 0.12, dy: rect.height * 0.12)
+            let photoBounds = siblings.filter { $0.visible && !excludedRenderIDs.contains($0.id) && role($0, in: document) == "photo" }.map { photo in
+                DiaryPageRenderer.bounds(photo, document: document, siblings: siblings).applying(DiaryPageRenderer.matrix(photo, siblings: siblings))
             }
+            let photoCores = photoBounds.map { $0.insetBy(dx: $0.width * 0.12, dy: $0.height * 0.12) }
             func clear(_ rect: CGRect) -> Bool {
-                page.contains(rect) && !photoCores.contains(where: { $0.intersects(rect) }) && !(context.spineX.map { rect.minX < $0 + 24 && rect.maxX > $0 - 24 } ?? false) && !textAreas.contains(where: { $0.intersects(rect) }) && !blockers.contains { other in
+                let rowPeers = blockers.filter {
+                    abs($0.midY - rect.midY) < min($0.height, rect.height) * 0.45
+                        && abs($0.midX - rect.midX) < max($0.width, rect.width) * 3
+                }
+                let columnPeers = blockers.filter {
+                    abs($0.midX - rect.midX) < min($0.width, rect.width) * 0.45
+                        && abs($0.midY - rect.midY) < max($0.height, rect.height) * 3
+                }
+                return rowPeers.count < 2 && columnPeers.count < 2 && page.contains(rect) && !photoCores.contains(where: { $0.intersects(rect) }) && !(context.spineX.map { rect.minX < $0 + 24 && rect.maxX > $0 - 24 } ?? false) && !textAreas.contains(where: { $0.intersects(rect) }) && !blockers.contains { other in
                     let overlap = rect.intersection(other)
                     return !overlap.isNull && overlap.width * overlap.height / max(1, min(rect.width * rect.height, other.width * other.height)) > 0.3
                 }
@@ -333,6 +341,15 @@ import CoreText
                 }
                 for other in blockers + textAreas + photoCores where bounds.intersects(other) {
                     options += [bounds.offsetBy(dx: other.maxX + 12 - bounds.minX, dy: 0), bounds.offsetBy(dx: other.minX - 12 - bounds.maxX, dy: 0), bounds.offsetBy(dx: 0, dy: other.maxY + 12 - bounds.minY), bounds.offsetBy(dx: 0, dy: other.minY - 12 - bounds.maxY)]
+                }
+                if let associatedPhoto = photoBounds.min(by: {
+                    hypot($0.midX - bounds.midX, $0.midY - bounds.midY) < hypot($1.midX - bounds.midX, $1.midY - bounds.midY)
+                }) {
+                    let anchors = [CGPoint(x: associatedPhoto.minX, y: associatedPhoto.minY), CGPoint(x: associatedPhoto.midX, y: associatedPhoto.minY),
+                                   CGPoint(x: associatedPhoto.maxX, y: associatedPhoto.minY), CGPoint(x: associatedPhoto.minX, y: associatedPhoto.midY),
+                                   CGPoint(x: associatedPhoto.maxX, y: associatedPhoto.midY), CGPoint(x: associatedPhoto.minX, y: associatedPhoto.maxY),
+                                   CGPoint(x: associatedPhoto.midX, y: associatedPhoto.maxY), CGPoint(x: associatedPhoto.maxX, y: associatedPhoto.maxY)]
+                    options += anchors.map { bounds.offsetBy(dx: $0.x - bounds.midX, dy: $0.y - bounds.midY) }
                 }
                 if let nearest = options.filter(clear).min(by: { hypot($0.midX - bounds.midX, $0.midY - bounds.midY) < hypot($1.midX - bounds.midX, $1.midY - bounds.midY) }) {
                     layer.transform.position.x += nearest.midX - bounds.midX
@@ -471,7 +488,9 @@ import CoreText
             let newCard = operations.contains { $0.type == "createText" && $0.clientObjectKey.flatMap { createdIDs[$0] } == id }
             let fitCard = autoFitPhotoRegions || newCard
             guard fitCard || !candidates.isEmpty else { continue }
-            let safePages: [CGRect] = context.spineX.map { [CGRect(x: 0, y: 0, width: max(0, $0 - 24), height: canvas.height), CGRect(x: $0 + 24, y: 0, width: max(0, canvas.width - $0 - 24), height: canvas.height)] } ?? [canvas]
+            let pageAreas: [CGRect] = context.spineX.map { [CGRect(x: 0, y: 0, width: max(0, $0 - 24), height: canvas.height), CGRect(x: $0 + 24, y: 0, width: max(0, canvas.width - $0 - 24), height: canvas.height)] } ?? [canvas]
+            let textMargin = min(canvas.width, canvas.height) * 0.02
+            let safePages = pageAreas.map { $0.insetBy(dx: textMargin, dy: textMargin) }
             let expandedCandidates = fitCard ? candidates.map { rect -> CGRect in
                 let width = max(rect.width, bounds.width), height = max(rect.height, bounds.height)
                 return CGRect(x: min(rect.minX, canvas.maxX - width), y: min(rect.minY, canvas.maxY - height), width: width, height: height)

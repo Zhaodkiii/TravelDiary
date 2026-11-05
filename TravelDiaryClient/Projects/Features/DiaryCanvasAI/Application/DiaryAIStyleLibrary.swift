@@ -77,8 +77,8 @@ nonisolated enum DiaryAIPageStyle: String, Codable, CaseIterable, Identifiable, 
     case .illustrated: "以照片内已确认建筑、植物、山水作透明水彩与钢笔手绘；墨色标题、清楚手写正文，botanicalLine或coralUnderline少量承托，来源场景互相连接。保留一处轮廓清晰、颜色有层次的来源环境插画，集中在一侧并从纸边延伸，占可见画面约四分之一至三分之一；背景主要建筑或景物的可见体量小于主照片组，避免背景把同一建筑放大成全页最大重心；文字预留区轻淡，其余可露出的环境保持清晰，避免全页漂白和大块无主题淡色。"
     case .vintage: "暖纸和来源场景的复古印刷拼贴，深棕主墨与少量来源强调色；kraftStrip或titleParchment票根式文字，照片浅暖边框，避免蓝色胶带与现代荧光色。暖赭、旧纸棕和少量暗红形成统一色调；背景景物以细小复古印刷纹理托住照片，避免巨大餐具、单个食物或重色块与大标题争夺重心。"
     case .clean: "明亮纸面与来源色块，少量场景延展；清楚字号层级、深色墨与单一强调色，coralUnderline或none，照片边框简洁，不做泛黄旧纸。"
-    case .playful: "白纸上来源景物的小型涂鸦、黑色线条与少量明亮色点；标题有力度，短注轻快，pinkHeart或coralUnderline点题，不以重复贴纸填满。背景边缘形成明确的钴蓝与橙红局部撕纸色面，搭配有力度的蓝色圈线、橙色短划和少量黄色星形手绘，保留米白纸面与深色文字区，避免稀薄灰线导致风格不可辨认。"
-    case .gentle: "暖白纸、柔和来源场景、低对比水彩；温暖棕墨与柔和强调色，warmHeart或pinkWish承托短句，主标题与正文有层级，避免每张照片都加装饰。以暖米白、灰粉与鼠尾草绿为主色，局部粉色纸边、轻薄蕾丝纸纹与来源植物自然呼应；暖米白纸面占至少六成，灰粉撕纸在左上与右下局部出现，鼠尾草植物和细腻蕾丝纸纹形成柔和纪念层次。来源水面限制为边缘一处小范围低饱和延伸，避免青绿大色块贯穿全页，维持柔暖纪念感。"
+    case .playful: "白纸上来源景物的小型涂鸦、黑色线条与少量明亮色点；标题有力度，短注轻快，pinkHeart或coralUnderline点题，不以重复贴纸填满。用有力度、粗细变化的手绘线条和少量鲜明色面形成活力感，强调色从本页照片中提取，原色太暗时仅提高其明度与饱和度。根据照片组的方向和真实可露出空隙决定线条、局部纸片和记号位置；不固定蓝橙配色、角落纸片、星形或绕页弧线，不做四角边框或完整围边。线条与来源中的道路、波纹、器物轮廓等可见细节呼应，既清楚又有疏密。"
+    case .gentle: "暖白纸、柔和来源场景、低对比水彩；温暖棕墨与柔和强调色，warmHeart或pinkWish承托短句，主标题与正文有层级，避免每张照片都加装饰。暖米白纸面占至少六成，照片的主要颜色转为低饱和柔和色层，局部薄纸或轻细纹理承托记忆感。配色、意象和位置根据本页照片决定，不固定粉色对角纸边、蕾丝圈和植物；只有照片含植物时才延展相应植物，没有时使用已确认的器物、建筑局部或环境轮廓。低饱和来源色仅在局部自然延伸，避免大色块贯穿全页。"
     } }
 }
 
@@ -87,7 +87,7 @@ nonisolated struct DiaryAIDesignSelection: Codable, Equatable, Sendable {
     var style: DiaryAIPageStyle = .scenic
     var version = 1
     var brief: String {
-        "统一整页设计v\(version)：排版=\(layout.name)，风格=\(style.name)。\(layout.rules) \(style.rules) 用户明确指定及锁定内容优先于风格，风格优先于通用默认纸卡与字体。标题优先直接写在安静纸面，勿用大纸卡代替字形的视觉力量；正文横排每行约8至16字，旁注绑定sourceIDs，无事实依据只描述可见细节或明确祝愿。背景必须指定连接任务：来源线索从哪组照片延伸、沿哪组边缘连接、如何承托标题；主意象避开主照和标题，不另建竞争的视觉中心。贴纸各有主题/连接/固定/导读用途，不能仅按空白撒放；未授权隐藏时保留素材。规划一次确定主照ID、照片分组、阅读方向、文字角色与对应照片、来源场景、主墨色和强调色，并在共同构图中保持一致。照片数量自适应，不丢弃照片。背景重点在可露出区域丰富细节，文字区低对比，照片下面延续色彩纹理，不把预留区画成矩形空框；照片、文字、背景分支必须服从同一构图。标题按风格从已提供字体中选择：实景融纸与复古剪贴优先display.tsanger-heading（仓耳榜书），清新纸刊优先display.douyin-bold（抖音美好体），活力涂鸦优先display.zcool-kuaile（站酷快乐体）或display.smiley-sans（得意黑），温柔纪念与手绘旅行优先calligraphy.ma-shan-zheng。大字主题优先仓耳榜书、得意黑或抖音美好体，根据媒介选一种；新增展示字体仅用于4至10字短标题，正文继续使用清楚的文楷或小赖体。可选花园便签：gardenLavender薰衣草清单用于短清单，gardenStrawberry草莓便签用于温暖生活短记，gardenLily铃兰花笺用于温柔纪念，gardenLilyTag铃兰吊牌只用于短旁注，gardenClover三叶草标签和gardenBlueTicket蓝花票笺用于两三行短句。花园便签有较大插画边角，按客户端原生测量后的完整尺寸预留，文字不能盖住花叶与蝴蝶结。每页最多两种纸卡，禁止把全部正文都塞进装饰便签。最多两种字体、两种纸卡；文字数量按实际空间和角色确定，不能为了丰富反复写泛泛感想。"
+        "统一整页设计v\(version)：排版=\(layout.name)，风格=\(style.name)。\(layout.rules) \(style.rules) 用户明确指定及锁定内容优先于风格，风格优先于通用默认纸卡与字体。标题优先直接写在安静纸面，勿用大纸卡代替字形的视觉力量；正文横排每行约8至16字，旁注绑定sourceIDs，无事实依据只描述可见细节或明确祝愿。风格预设只定义笔触、纸张、色彩组织和媒介，不提供固定场景、物件、配色或角落位置。主题来源严格取role=photo的真实照片与用户明确故事，已有贴纸只用于前景摆放，不从泳圈、椰树等贴纸推断海边主题。同一风格的不同页面应有各自的来源意象、色彩与疏密组织，不重复四角模板。背景必须指定连接任务：来源线索从哪组照片延伸、沿哪组边缘连接、如何承托标题；主意象避开主照和标题，不另建竞争的视觉中心。贴纸各有主题/连接/固定/导读用途，不能仅按空白撒放；未授权隐藏时保留素材。规划一次确定主照ID、照片分组、阅读方向、文字角色与对应照片、来源场景、主墨色和强调色，并在共同构图中保持一致。照片数量自适应，不丢弃照片。背景重点在可露出区域丰富细节，文字区低对比，照片下面延续色彩纹理，不把预留区画成矩形空框；照片、文字、背景分支必须服从同一构图。标题按风格从已提供字体中选择：实景融纸与复古剪贴优先display.tsanger-heading（仓耳榜书），清新纸刊优先display.douyin-bold（抖音美好体），活力涂鸦优先display.zcool-kuaile（站酷快乐体）或display.smiley-sans（得意黑），温柔纪念与手绘旅行优先calligraphy.ma-shan-zheng。大字主题优先仓耳榜书、得意黑或抖音美好体，根据媒介选一种；新增展示字体仅用于4至10字短标题，正文继续使用清楚的文楷或小赖体。可选花园便签：gardenLavender薰衣草清单用于短清单，gardenStrawberry草莓便签用于温暖生活短记，gardenLily铃兰花笺用于温柔纪念，gardenLilyTag铃兰吊牌只用于短旁注，gardenClover三叶草标签和gardenBlueTicket蓝花票笺用于两三行短句。花园便签有较大插画边角，按客户端原生测量后的完整尺寸预留，文字不能盖住花叶与蝴蝶结。每页最多两种纸卡，禁止把全部正文都塞进装饰便签。最多两种字体、两种纸卡；文字数量按实际空间和角色确定，不能为了丰富反复写泛泛感想。"
     }
 }
 
@@ -104,18 +104,36 @@ extension DiaryAIDesignSelection {
             let count = photos.count / ranges.count + (pageIndex < photos.count % ranges.count ? 1 : 0)
             let group = Array(photos.dropFirst(offset).prefix(count)); offset += count
             guard !group.isEmpty else { continue }
-            let x = range.0 + (range.1 - range.0) * 0.06
-            let width = (range.1 - range.0) * 0.88
-            let top = h * (layout == .headline ? 0.33 : 0.24)
-            let height = h * (layout == .headline ? 0.53 : 0.62)
+            let pageWidth = range.1 - range.0
+            var x = range.0 + pageWidth * 0.06
+            var width = pageWidth * 0.88
+            var top = h * 0.06
+            var height = h * 0.88
             if allowsText {
-                result.append(.init(role: "text", x: x, y: h * 0.035, width: width, height: h * (layout == .headline ? 0.26 : 0.17)))
-                result.append(.init(role: "text", x: x, y: h * 0.88, width: width, height: h * 0.10))
+                if layout == .editorial || (layout == .story && pageIndex == 0) {
+                    // Give the photo group a neighboring reading column.
+                    let railWidth = width * 0.36
+                    let railOnLeft = pageIndex > 0
+                    let railX = railOnLeft ? x : x + width - railWidth
+                    result.append(.init(role: "text", x: railX, y: h * 0.18, width: railWidth, height: h * 0.26))
+                    result.append(.init(role: "text", x: railX, y: h * 0.51, width: railWidth, height: h * 0.32))
+                    if railOnLeft { x += width * 0.40 }
+                    width *= 0.60
+                } else if layout == .collage || (layout != .headline && pageIndex > 0) {
+                    height = h * 0.63
+                    result.append(.init(role: "text", x: x + width * 0.08, y: h * 0.72, width: width * 0.84, height: h * 0.22))
+                } else {
+                    let band = h * (layout == .headline ? 0.26 : 0.18)
+                    result.append(.init(role: "text", x: x, y: h * 0.04, width: width, height: band))
+                    top = band + h * 0.07
+                    height = h * 0.86 - top
+                    result.append(.init(role: "text", x: x + width * 0.12, y: h * 0.88, width: width * 0.76, height: h * 0.08))
+                }
             }
-            let hero = [.hero, .story, .automatic].contains(layout) && group.count > 1
+            let hero = [.hero, .story, .automatic, .collage].contains(layout) && group.count > 1
             let remaining = hero ? Array(group.dropFirst()) : group
             if hero {
-                result.append(.init(role: "photo", objectID: group[0].id.uuidString, x: x, y: top, width: width * 0.59, height: height))
+                result.append(.init(role: "photo", objectID: group[0].id.uuidString, x: x, y: top, width: width * 0.59, height: height * (layout == .collage && group.count > 2 ? 0.78 : 1)))
             }
             let columns = hero ? 1 : (layout == .editorial ? 1 : (group.count == 1 ? 1 : 2))
             let rows = max(1, Int(ceil(Double(remaining.count) / Double(columns))))
@@ -127,8 +145,8 @@ extension DiaryAIDesignSelection {
                 let inset = layout == .collage && index % 2 == 1 ? 0.12 : 0.02
                 result.append(.init(role: "photo", objectID: photo.id.uuidString,
                     x: areaX + Double(col) * cellW + cellW * inset,
-                    y: top + Double(row) * cellH + cellH * (layout == .collage && col == 1 ? 0.14 : 0.02),
-                    width: cellW * (1 - inset - 0.04), height: cellH * (layout == .collage ? 0.80 : 0.92)))
+                    y: top + Double(row) * cellH + cellH * (layout == .collage && index % 2 == 1 ? 0.10 : 0.02),
+                    width: cellW * (1 - inset - 0.04), height: cellH * (layout == .collage && group.count > 1 ? 0.80 : 0.92)))
             }
         }
         return result
