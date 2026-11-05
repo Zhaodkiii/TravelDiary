@@ -23,6 +23,7 @@ nonisolated struct DiaryAIWorkspaceCheckpoint: Codable, Sendable {
     }
 }
 nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
+    var restartCheckpoint: DiaryAIWorkspaceCheckpoint? = nil
     var creationSubmissionID: UUID? = nil
     var parallelExecution: Bool? = nil
     var awaitingConfirmation: Bool? = nil
@@ -86,6 +87,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private var bridge: DiaryEditorAIBridge?
     private var baseline: DiaryAIWorkspaceCheckpoint?
     private var checkpoints: [DiaryAIWorkspaceCheckpoint] = []
+    private var restartCheckpoint: DiaryAIWorkspaceCheckpoint?
     private var creationSubmissionID: UUID?
     private var request = DiaryAIRequest.defaults(.relayout)
     var currentRequest: DiaryAIRequest { request }
@@ -181,6 +183,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             if let saved, saved.schema == 1, let last = saved.checkpoints.last,
                try DiaryEditorAIBridge.digest(saved.baseline.restoredDocument) == DiaryEditorAIBridge.digest(source.document) {
                 enteredFromDraft = true
+                restartCheckpoint = saved.restartCheckpoint
                 creationSubmissionID = saved.creationSubmissionID
                 parallelExecution = saved.parallelExecution ?? false
                 awaitingConfirmation = saved.awaitingConfirmation ?? false
@@ -440,6 +443,44 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         }
         if !running { run(all: false) }
     }
+    /// Restore exactly the inputs present before this production run, including imported materials.
+    func restartProduction() async {
+        guard active, !addingMaterials, !saving, preparingPhotos.isEmpty,
+              let checkpoint = restartCheckpoint else { return }
+        running = true
+        defer { running = false }
+        let previousTask = task
+        let previousBackground = backgroundTask
+        let previousAlbum = albumTask
+        generation = UUID()
+        previousTask?.cancel()
+        previousBackground?.cancel()
+        previousAlbum?.cancel()
+        watchdog?.cancel()
+        _ = await previousTask?.value
+        _ = try? await previousBackground?.value
+        await previousAlbum?.value
+        task = nil; backgroundTask = nil; albumTask = nil; watchdog = nil
+        do {
+            try await setup(checkpoint.restoredDocument)
+            pending = checkpoint.pending
+            queue = []; selected = []; processing = []
+            composition = ""; layoutRegions = []; textDone = false
+            visualRevision = nil; confirmationScope = nil; awaitingConfirmation = false
+            backgroundRecord = nil; backgroundPreview = nil
+            checkpoints = [checkpoint]
+            version += 1
+            error = nil
+            stage = "已恢复制作前素材，点击开始制作"
+            try await refresh()
+            log("restart", "已重新开始制作", "本轮文字、布局和背景已重置，等待用户点击开始。")
+            try await persist()
+        } catch {
+            self.error = error.localizedDescription
+            stage = "重新开始未完成，请重试"
+        }
+    }
+    var canRestartProduction: Bool { active && restartCheckpoint != nil && !running && !addingMaterials && !saving }
     func processAll() { run(all: true) }
     func processSelected() { enqueue(Array(selected)) }
     func pause() {
@@ -527,7 +568,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         try await productionLog.flush()
         guard !discarded, let baseline else { return }
         storageSequence += 1
-        let value = DiaryAIWorkspaceArchive(creationSubmissionID: creationSubmissionID, parallelExecution: parallelExecution, awaitingConfirmation: awaitingConfirmation, logSession: productionLog.directory.lastPathComponent, baseline: baseline, checkpoints: checkpoints, request: request, events: events, composition: composition, version: version, textDone: textDone, background: backgroundRecord, layoutRegions: layoutRegions, visualRevision: visualRevision, confirmationScope: confirmationScope)
+        let value = DiaryAIWorkspaceArchive(restartCheckpoint: restartCheckpoint, creationSubmissionID: creationSubmissionID, parallelExecution: parallelExecution, awaitingConfirmation: awaitingConfirmation, logSession: productionLog.directory.lastPathComponent, baseline: baseline, checkpoints: checkpoints, request: request, events: events, composition: composition, version: version, textDone: textDone, background: backgroundRecord, layoutRegions: layoutRegions, visualRevision: visualRevision, confirmationScope: confirmationScope)
         try await storage.save(value, sequence: storageSequence)
     }
     private func removeArchive() async throws {
@@ -559,6 +600,10 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             defer { if generation == token { running = false; processing = []; backgroundTask?.cancel(); backgroundTask = nil; watchdog?.cancel() } }
             do {
                 if awaitingConfirmation { try await finishConfirmation() }
+                if restartCheckpoint == nil, let working {
+                    restartCheckpoint = .init(working.document, pending: pending)
+                    try await persist()
+                }
                 if composition.isEmpty {
                     if request.action == .writing {
                         composition = "仅处理文字，按用户指定的文字形式、字体、颜色和位置执行；保留所有照片、贴纸和背景。优先空白区域，不做整页重排。"
@@ -600,7 +645,10 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                                 queue.removeAll { decorations.contains($0) }; batches += 1
                                 continue
                             } catch is CancellationError { throw CancellationError() }
-                            catch { log("recovery", "并行提案未提交，按原批次继续", error.localizedDescription) }
+                            catch {
+                                log("recovery", "提案失败，等待手动继续", error.localizedDescription)
+                                throw error
+                            }
                         }
                     }
                     if efficientExecution && autoAll && revisionFreePhotoBatch(ids),
@@ -651,7 +699,14 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         let token = UUID(); generation = token
         task = Task {
             defer { if generation == token { running = false; watchdog?.cancel() } }
-            do { try await createBackground(token: token); stage = "背景已完成，可以保存" }
+            do {
+                if restartCheckpoint == nil, let working {
+                    restartCheckpoint = .init(working.document, pending: pending)
+                    try await persist()
+                }
+                try await createBackground(token: token)
+                stage = "背景已完成，可以保存"
+            }
             catch is CancellationError {} catch {
                 if generation == token { self.error = error.localizedDescription; log("error", "背景尚未完成，排版已保留", error.localizedDescription); try? await persist() }
             }
@@ -808,6 +863,11 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             }
             try check()
             backgroundRecord?.filename = rawName; try await persist(); bytes = downloaded
+        }
+        guard UIImage(data: bytes) != nil else {
+            backgroundRecord?.filename = nil
+            try await persist()
+            throw DiaryAIError.invalid("背景文件损坏，已暂停。点击重试将重新下载原图片，不重复生图。")
         }
         let downloadedBytes = bytes
         let filename = "\(recordID).png"
@@ -1215,10 +1275,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             保留全部贴纸，不遮照片主体、不越画布或书脊，不排成素材清单。
             保持原素材尺寸比例；只提供最终center、width、angle，不改其他对象。
             """
-            var correction = ""
-            for attempt in 0..<2 {
-                do {
-                let reply = try await client.respond(prompt: shared + direction + correction, images: [.init(id: "frozen-canvas", caption: "同一冻结画布", data: canvas)] + (text ? [] : assets), continuation: nil, results: [])
+                let reply = try await client.respond(prompt: shared + direction, images: [.init(id: "frozen-canvas", caption: "同一冻结画布", data: canvas)] + (text ? [] : assets), continuation: nil, results: [])
                 try Task.checkCancellation()
                 guard generation == token else { throw CancellationError() }
                 var operations: [DiaryAIOperation] = []
@@ -1245,15 +1302,8 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 guard !operations.isEmpty, operations.count <= 30 else { throw DiaryAIError.invalid("提案为空或过多") }
                 log("parallel-proposal", text ? "文字提案完成" : "贴纸提案完成", "planID=\(planID)，操作\(operations.count)项，用时\(String(format: "%.2f", Date().timeIntervalSince(started)))秒")
                 return .init(runID: token, planID: planID, baseVersion: baseVersion, operations: operations)
-                } catch is CancellationError { throw CancellationError() }
-                catch {
-                    guard attempt == 0 else { throw error }
-                    correction = "\n上次本分支提案校验失败：\(error.localizedDescription)。保留共同构图，只重新输出本分支的完整有效操作；不要重复未确认事实。"
-                    log("repair", text ? "仅重试文字提案" : "仅重试贴纸提案", error.localizedDescription)
-                }
-            }
-            throw DiaryAIError.invalid("分支提案校验未通过")
         }
+
         log("parallel", "文字与贴纸并行生成提案", "runID=\(token)，planID=\(planID)，baseVersion=\(baseVersion)；两路使用同一照片画布。")
         let textBranch = Task { @MainActor in try await propose(text: true) }
         let decorationBranch = Task { @MainActor in try await propose(text: false) }
@@ -1281,6 +1331,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         try Task.checkCancellation()
         guard generation == token, version == baseVersion, self.working?.document == expected else { throw CancellationError() }
         let oldPending = pending, oldTextDone = textDone, oldScope = confirmationScope, oldConfirmation = awaitingConfirmation
+        var backgroundFailure: Error?
         if let backgroundTask {
             do { try await backgroundTask.value }
             catch is CancellationError { throw CancellationError() }
@@ -1288,6 +1339,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 try Task.checkCancellation()
                 guard generation == token else { throw CancellationError() }
                 self.backgroundTask = nil
+                backgroundFailure = error
                 log("recovery", "保留已完成前景提案，背景单独恢复", error.localizedDescription)
             }
         }
@@ -1323,7 +1375,8 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         if request.background?.saveToAlbum == true, backgroundRecord?.layerID != nil {
             albumTask = Task { [weak self] in await self?.writeBackgroundAlbum(token: token) }
         }
-        log("commit", "文字、贴纸与已验证背景统一提交", "版本\(version)；原生测量与几何校验通过。")
+        log("commit", backgroundRecord?.layerID == nil ? "文字与贴纸已提交，背景待完成" : "文字、贴纸与已验证背景统一提交", "版本\(version)；原生测量与几何校验通过。")
+        if let backgroundFailure { throw backgroundFailure }
     }
 
     private func revisionFreePhotoBatch(_ ids: [UUID]) -> Bool {

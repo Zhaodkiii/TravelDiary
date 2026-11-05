@@ -6,6 +6,79 @@ import SwiftUI
 
 @Suite(.serialized)
 @MainActor struct DiaryAIWorkspaceTests {
+    @Test(arguments: [URLError.Code.timedOut, .notConnectedToInternet, .networkConnectionLost])
+    func modelTransportFailurePausesUntilManualRetry(_ code: URLError.Code) async throws {
+        let (session, root) = try await fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = ScriptedWorkspaceModel { _, _, _, _, _ in throw URLError(code) }
+        let workspace = DiaryAIWorkspace(session: session, model: model, root: root)
+        await workspace.enter(.defaults(.relayout))
+        let original = session.document
+        workspace.processAll(); try await wait(workspace)
+        #expect(!workspace.running && workspace.error != nil)
+        #expect(workspace.pending.count == 1 && workspace.version == 0)
+        let requests = workspace.events.filter { $0.title == "正在发送本轮输入" }.count
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(workspace.events.filter { $0.title == "正在发送本轮输入" }.count == requests)
+        #expect(session.document == original)
+        workspace.processAll(); try await wait(workspace)
+        #expect(workspace.events.filter { $0.title == "正在发送本轮输入" }.count > requests)
+        await workspace.restartProduction()
+        #expect(!workspace.running && workspace.error == nil && workspace.pending.count == 1)
+    }
+    @Test func restartKeepsMaterialsImportedBeforeFailedRun() async throws {
+        let (session, root) = try await fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = ScriptedWorkspaceModel { _, _, _, _, _ in throw URLError(.timedOut) }
+        let workspace = DiaryAIWorkspace(session: session, model: model, root: root)
+        await workspace.enter(.defaults(.relayout))
+        let bytes = try #require(UIGraphicsImageRenderer(size: CGSize(width: 50, height: 60)).image { ctx in
+            UIColor.red.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 50, height: 60))
+        }.pngData())
+        #expect(await workspace.addMaterials([bytes]))
+        let inputs = Set(workspace.pending)
+        workspace.processAll(); try await wait(workspace)
+        await workspace.restartProduction()
+        #expect(Set(workspace.pending) == inputs && inputs.count == 2)
+        #expect(session.scopeLayers.count == 1)
+        await workspace.keepForLater()
+        let restored = DiaryAIWorkspace(session: session, model: model, root: root)
+        await restored.enter(.defaults(.relayout))
+        #expect(restored.canRestartProduction && Set(restored.pending) == inputs)
+    }
+    @Test func failedModelCanResumeSuccessfullyAfterManualClick() async throws {
+        let (session, root) = try await fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = InterruptibleWorkspaceModel()
+        let w = DiaryAIWorkspace(session: session, model: model, root: root)
+        await w.enter(.defaults(.relayout))
+        w.processAll(); try await wait(w)
+        #expect(w.error != nil && w.pending.count == 1)
+        let calls = model.calls
+        model.fails = false
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.calls == calls)
+        w.processAll(); try await wait(w)
+        #expect(w.error == nil && w.pending.isEmpty && w.version > 0)
+        #expect(session.scopeLayers.count == 1)
+    }
+    @Test func checkpointWriteFailurePausesBeforeModelAndCanRetry() async throws {
+        let (session, root) = try await fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = InterruptibleWorkspaceModel(); model.fails = false
+        let w = DiaryAIWorkspace(session: session, model: model, root: root)
+        await w.enter(.defaults(.relayout))
+        let archive = root.appendingPathComponent("DiaryCanvasAI/Workspaces/" + DiaryEditorAIBridge(session).storageKey + ".json")
+        let backup = archive.appendingPathExtension("failure-backup")
+        try FileManager.default.moveItem(at: archive, to: backup)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: false)
+        w.processAll(); try await wait(w)
+        #expect(w.error != nil && !w.running && model.calls == 0 && w.pending.count == 1)
+        try FileManager.default.removeItem(at: archive)
+        try FileManager.default.moveItem(at: backup, to: archive)
+        w.processAll(); try await wait(w)
+        #expect(w.error == nil && w.pending.isEmpty)
+    }
     @Test func compositionPreviewKeepsEveryPhotoInBounds() {
         for layout in DiaryAILayout.allCases {
             for count in [1, 2, 3, 5, 8, 9, 16, 30] {
@@ -728,5 +801,17 @@ import SwiftUI
             calls = try response(round, prompt, images, continuation, results)
         }
         return .init(calls: calls, text: "", continuation: Data([1]), inputTokens: 100, outputTokens: 100)
+    }
+}
+
+
+@MainActor private final class InterruptibleWorkspaceModel: DiaryAIModelClient {
+    var fails = true
+    var calls = 0
+    private let delegate = WorkspaceModel()
+    func respond(prompt: String?, images: [DiaryAIImage], continuation: Data?, results: [DiaryAIToolResult]) async throws -> DiaryAIModelReply {
+        calls += 1
+        if fails { throw URLError(.networkConnectionLost) }
+        return try await delegate.respond(prompt: prompt, images: images, continuation: continuation, results: results)
     }
 }

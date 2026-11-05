@@ -270,6 +270,8 @@ struct DiaryAIInlinePanel: View {
                     HStack {
                         Button("回退上一批") { Task { await workspace.rollback() } }.disabled(!workspace.canRollback)
                         Spacer()
+                        Button("重新开始制作") { Task { await workspace.restartProduction(); started = false } }
+                            .disabled(!workspace.canRestartProduction)
                         if complete { Button("调整排版") { Task { await workspace.prepareLayoutAdjustment(); started = false } }; Button("重新生成背景") { workspace.generateBackground(regenerate: true) }.disabled(!workspace.hasBackgroundRequest) }
                     }.font(.caption)
                 }.padding(.bottom, 20)

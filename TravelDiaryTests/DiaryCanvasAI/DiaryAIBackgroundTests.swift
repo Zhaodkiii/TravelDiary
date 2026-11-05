@@ -550,12 +550,76 @@ import SwiftUI
         await resumed.rollback()
         #expect(resumed.backgroundRecord == nil)
     }
+    @Test(arguments: ["generation", "download", "quality", "invalidImage"])
+    func injectedBackgroundFailureWaitsForManualContinue(_ failure: String) async throws {
+        let (session, root) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let valid = try image()
+        let provider = BackgroundFake(failure == "invalidImage" ? Data([0, 1, 2]) : valid)
+        provider.failGeneration = failure == "generation"
+        provider.failDownload = failure == "download"
+        provider.failQuality = failure == "quality"
+        let workspace = DiaryAIWorkspace(session: session, root: root, backgroundProvider: provider, albumSaver: BackgroundAlbumFake())
+        var r = request(); r.background?.saveToAlbum = false
+        await workspace.enter(r)
+        workspace.processAll()
+        try await wait(workspace)
+        #expect(workspace.error != nil && workspace.backgroundRecord?.layerID == nil)
+        let counts = [provider.generations, provider.downloads, provider.validations]
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(counts == [provider.generations, provider.downloads, provider.validations])
+        provider.failGeneration = false; provider.failQuality = false; provider.data = valid
+        workspace.processAll()
+        try await wait(workspace)
+        #expect(workspace.error == nil && workspace.backgroundRecord?.layerID != nil)
+        #expect(provider.generations == (failure == "generation" ? 2 : 1))
+    }
+    @Test func restartAfterFailureRestoresInputsAndWaitsForStart() async throws {
+        let (session, root) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let provider = BackgroundFake(try image()); provider.failGeneration = true
+        let workspace = DiaryAIWorkspace(session: session, root: root, backgroundProvider: provider, albumSaver: BackgroundAlbumFake())
+        await workspace.enter(request()); workspace.processAll(); try await wait(workspace)
+        #expect(workspace.error != nil && workspace.canRestartProduction)
+        await workspace.restartProduction()
+        #expect(workspace.error == nil && workspace.backgroundRecord == nil && !workspace.running)
+        let attempts = provider.generations
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(provider.generations == attempts)
+        provider.failGeneration = false
+        workspace.processAll(); try await wait(workspace)
+        #expect(workspace.error == nil && workspace.backgroundRecord?.layerID != nil)
+    }
+    @Test func restartRejectsLateBackgroundAndRetainsInputs() async throws {
+        let (session, root) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let provider = BackgroundFake(try image()); provider.delay = true
+        let album = BackgroundAlbumFake()
+        let w = DiaryAIWorkspace(session: session, root: root, backgroundProvider: provider, albumSaver: album)
+        await w.enter(request())
+        let ids = Set(w.objects.map(\.id))
+        w.processAll()
+        for _ in 0..<200 where provider.generations == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(provider.generations > 0)
+        await w.restartProduction()
+        #expect(!w.running && w.backgroundRecord == nil && w.error == nil)
+        #expect(Set(w.objects.map(\.id)) == ids)
+        #expect(album.saves == 0)
+        await w.keepForLater()
+        let restored = DiaryAIWorkspace(session: session, root: root, backgroundProvider: provider, albumSaver: album)
+        await restored.enter(request())
+        #expect(restored.canRestartProduction && Set(restored.objects.map(\.id)) == ids)
+        let count = provider.generations
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(provider.generations == count && restored.backgroundRecord == nil)
+    }
     @Test func cancellationCannotApplyLateGeneration() async throws {
         let (session, root) = try await fixture(); defer { try? FileManager.default.removeItem(at: root) }
         let before = session.document, provider = BackgroundFake(try image()), album = BackgroundAlbumFake(); provider.delay = true
         let w = DiaryAIWorkspace(session: session, root: root, backgroundProvider: provider, albumSaver: album)
         await w.enter(request()); w.processAll()
-        while provider.generations == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        for _ in 0..<200 where provider.generations == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(provider.generations > 0)
         w.pause(); try await Task.sleep(for: .milliseconds(250))
         #expect(w.backgroundRecord?.layerID == nil && album.saves == 0 && session.document == before)
     }
@@ -564,10 +628,12 @@ import SwiftUI
 @MainActor final class BackgroundFake: DiaryAIBackgroundProvider {
     var data: Data; var generations = 0; var downloads = 0; var validations = 0
     var checkedStyle: String?; var generatedPrompt: String?
+    var failGeneration = false
     var failDownload = false; var failQuality = false; var delay = false
     init(_ data: Data) { self.data = data }
     func generate(reference: Data, prompt: String) async throws -> URL {
         generations += 1; generatedPrompt = prompt
+        if failGeneration { throw URLError(.timedOut) }
         if delay { try? await Task.sleep(for: .milliseconds(200)) }
         return URL(string: "https://example.com/background.png")!
     }
