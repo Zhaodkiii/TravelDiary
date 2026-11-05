@@ -102,6 +102,23 @@ final class CreationCoordinator: ObservableObject {
             return session
         } catch { self.error = error.localizedDescription; return nil }
     }
+    func discardIfEmpty(_ session: DiaryEditorSession) async throws -> Bool {
+        guard session === activeSession else { throw DiaryEditorError.invalidDocument }
+        if let brief = session.canvasAI.form(.relayout).creationBrief, brief != draft.brief {
+            var updated = draft
+            updated.brief = brief
+            try await store.save(updated)
+            draft = updated
+        }
+        let root = session.document.root
+        guard draft.publishedDigest == nil, draft.assets.isEmpty, draft.brief == CreationBrief(),
+              session.aiWorkspace.objects.isEmpty, root.layers.isEmpty, root.drawing.isEmpty,
+              root.background == nil, (session.aiWorkspace.currentCreationBrief ?? CreationBrief()) == CreationBrief()
+        else { return false }
+        try await discardForNewPage()
+        return true
+    }
+
     func discardForNewPage() async throws {
         guard !busy, let session = activeSession,
               !session.busy, !session.aiWorkspace.addingMaterials else {
@@ -131,7 +148,8 @@ final class CreationCoordinator: ObservableObject {
         .init(draftID: draft.id, brief: draft.brief, design: draft.design, assetObjects: draft.mapping, photoNotes: draft.request().creationNotes ?? [:])
     }
     private func publish(_ session: DiaryEditorSession) async throws {
-        guard !session.document.root.layers.isEmpty else { return }
+        let root = session.document.root
+        guard !root.layers.isEmpty || !root.drawing.isEmpty || root.background != nil else { return }
         if destination == nil {
             if draft.targetBookID == nil {
                 let book = try await DiaryDocumentStore(ownerID: draft.owner).createBook(title: "旅行随记", preset: .spread)

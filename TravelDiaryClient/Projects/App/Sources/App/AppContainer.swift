@@ -56,6 +56,7 @@ final class AppContainer {
         PrintOrderService.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
         #endif
         HelpFeedbackService.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
+        DiaryProductionService.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
         CustomizationService.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
         CloudFontRepository.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
         BillingStore.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)

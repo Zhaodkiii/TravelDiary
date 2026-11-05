@@ -11,6 +11,8 @@ struct DiaryEditorScreen: View {
     var creationRequest: DiaryAIRequest? = nil
     var creationAutoStart = false
     var onNewPage: (() async throws -> Void)? = nil
+    var discardEmptyDraft: (() async throws -> Bool)? = nil
+    var onFinished: (() async throws -> Void)? = nil
     @State private var confirmsNewPage = false
     @State private var creatingNewPage = false
     @State private var creationEntered = false
@@ -215,7 +217,7 @@ struct DiaryEditorScreen: View {
                 if aiMode {
                     Button("关闭", action: closeAIEditor)
                         .disabled(enteringCreation || !session.aiWorkspace.preparingPhotos.isEmpty)
-                } else { Button("完成") { Task { if await session.commitToParent() { dismiss() } } }
+                } else { Button("完成") { Task { await finishEditor() } }
                 if !session.isRoot { Button("取消") { Task { await session.cancelEditor(); dismiss() } } }
                 }
             }
@@ -271,12 +273,25 @@ struct DiaryEditorScreen: View {
         }
     }
 
+    @MainActor private func finishEditor() async {
+        guard !closingAIEditor else { return }
+        closingAIEditor = true
+        defer { closingAIEditor = false }
+        do {
+            if try await discardEmptyDraft?() == true { dismiss(); return }
+            if await session.commitToParent(beforeClosing: onFinished) {
+                dismiss()
+            }
+        } catch { session.errorMessage = error.localizedDescription }
+    }
+
     private func closeAIEditor() {
         guard !closingAIEditor, !enteringCreation else { return }
         closingAIEditor = true
         Task {
             defer { closingAIEditor = false }
             do {
+                if openedDirectlyInAI, try await discardEmptyDraft?() == true { dismiss(); return }
                 if openedDirectlyInAI && session.isRoot { try await session.save() }
                 guard await session.aiWorkspace.keepForLater() else { return }
                 if !openedDirectlyInAI {

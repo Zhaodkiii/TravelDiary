@@ -153,9 +153,9 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
     }
 
     /// 子页面完成才提交为父页面的一次修改，外部位置、缩放和角度保持原样。
-    func commitToParent() async -> Bool {
+    func commitToParent(beforeClosing: (() async throws -> Void)? = nil) async -> Bool {
         guard !closing, !busy else { return false }
-        guard let parent else { return await close() }
+        guard let parent else { return await close(beforeClosing: beforeClosing) }
         busy = true
         defer { busy = false }
         finishInteraction()
@@ -428,13 +428,13 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         closing = false
     }
 
-    func close() async -> Bool {
+    func close(beforeClosing: (() async throws -> Void)? = nil) async -> Bool {
         guard !closing, !busy else { return false }
         busy = true
         defer { busy = false }
         finishInteraction()
         saveTask?.cancel()
-        do { try await save(); try await creationPublish?(); closing = true; return true }
+        do { try await save(); try await creationPublish?(); try await beforeClosing?(); closing = true; return true }
         catch { errorMessage = error.localizedDescription; return false }
     }
 

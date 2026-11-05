@@ -43,11 +43,19 @@ struct DiaryPhysicalBookScreen: View {
         return max(size.width, 1) / max(size.height, 1)
     }
 
-    init(book: DiaryBook, store: DiaryDocumentStore, onShowList: (() -> Void)? = nil) {
+    init(book: DiaryBook, store: DiaryDocumentStore, initialPageID: UUID? = nil, onShowList: (() -> Void)? = nil) {
         _book = State(initialValue: book)
         self.store = store
         self.onShowList = onShowList
-        _opened = State(initialValue: book.shell == nil)
+        let index = initialPageID.flatMap { id in book.contentPages.firstIndex { $0.id == id } }
+        let position: Int
+        if let index, DiaryCanvasLayout.infer(from: book.defaultPageSize) == .spread {
+            position = (DiaryReadingLeaf.project(book.contentPages).firstIndex { $0.page?.id == book.contentPages[index].id } ?? 0) / 2
+        } else {
+            position = index.map { ($0 + 1) / 2 } ?? 0
+        }
+        _spread = State(initialValue: position)
+        _opened = State(initialValue: index != nil || book.shell == nil)
     }
 
     var body: some View {

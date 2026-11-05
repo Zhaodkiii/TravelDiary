@@ -99,6 +99,7 @@ private struct DiaryAIMakingSettingsView: View {
     @AppStorage("DiaryCanvasAI.backgroundMode") private var mode = "guided"
     var body: some View {
         Form {
+            DiaryProductionQuotaSection()
             Section("运行方式") {
                 Toggle("并行制作", isOn: $parallel)
                 Text("背景与图层排版同时进行，对新打开的任务生效。").font(.caption).foregroundStyle(.secondary)

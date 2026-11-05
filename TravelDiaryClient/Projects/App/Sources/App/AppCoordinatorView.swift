@@ -130,6 +130,8 @@ struct SupportMainCoordinatorView: View {
     @State private var selectedTab: SupportRootTab = .diaryEditor
     @Namespace private var bookshelfTransition
     @State private var path = NavigationPath()
+    @State private var stylePresentation: TravelStyleEditorPresentation?
+    @State private var preparedReaderBook: DiaryBook?
 
     init(session: UserSession, dependencies: AppCoordinatorDependencies, onHomeReady: @escaping () -> Void = {}) {
         self.session = session
@@ -151,6 +153,13 @@ struct SupportMainCoordinatorView: View {
                         NotificationCenter.default.post(name: Notification.Name("DiaryDebugImportCompleted"), object: nil)
                     }))
                 #endif
+        }
+        .fullScreenCover(item: $stylePresentation) { presentation in
+            DiaryEditorScreen(session: presentation.session, creationRequest: presentation.request,
+                onNewPage: presentation.newPage,
+                discardEmptyDraft: { try await presentation.coordinator.discardIfEmpty(presentation.session) },
+                onFinished: { try await openPublishedPage(presentation.coordinator.draft) })
+                .id(presentation.id)
         }
         .environment(\.accountLoginContext, AccountLoginContext(
             isDeviceAccount: session.isDeviceAccount, viewModel: upgradeLoginViewModel))
@@ -191,27 +200,51 @@ struct SupportMainCoordinatorView: View {
         }
     }
 
+    private func openPublishedPage(_ draft: CreationDraft) async throws {
+        guard draft.publishedDigest != nil else { return }
+        guard draft.owner == String(session.accountID), let bookID = draft.targetBookID else {
+            throw DiaryEditorError.invalidDocument
+        }
+        let store = DiaryDocumentStore(ownerID: draft.owner, bookID: bookID)
+        let book = try await store.loadBook()
+        guard let page = book.contentPages.first(where: { $0.id == draft.documentID }) else {
+            throw DiaryAIError.invalid("找不到刚保存的页面，请重试。")
+        }
+        _ = try await DiaryPreviewService.image(page: page, store: store, large: true)
+        try Task.checkCancellation()
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            preparedReaderBook = book
+            selectedTab = .diaryEditor
+            path = NavigationPath([DiaryBookRoute(bookID: bookID, pageID: page.id)])
+        }
+    }
+
     /// TabView is the shared stack's root. Pushed pages replace the entire tab
     /// container, so the tab bar needs no visibility modifiers.
     private var tabContent: some View {
         TabView(selection: $selectedTab) {
+            Tab("随记", systemImage: "sparkles", value: SupportRootTab.travelCapture) {
+                TravelCaptureHomeView(ownerID: String(session.accountID)) { stylePresentation = $0 }
+                    .id(session.accountID)
+            }
+
             Tab("手帐", systemImage: "book.pages", value: SupportRootTab.diaryEditor) {
                 DiaryEditorHomeView(ownerID: String(session.accountID), path: $path,
                     creating: $showsCreateDiaryBookForm, bookTransition: bookshelfTransition,
                     onBrowseTemplates: { selectedTab = .diaryPresets }, onInitialLoad: onHomeReady)
                     .id(session.accountID)
             }
-            Tab("随记", systemImage: "camera", value: SupportRootTab.travelCapture) {
-                TravelCaptureHomeView(ownerID: String(session.accountID)).id(session.accountID)
-            }
+
             Tab("素材", systemImage: "books.vertical", value: SupportRootTab.diaryPresets) {
                 DiaryPresetLibraryScreen(ownerID: String(session.accountID), toolbarState: materialToolbar)
                     .id(session.accountID)
             }
-            Tab("定制", systemImage: "sparkles", value: SupportRootTab.customization) {
-                CustomizationHomeView(owner: String(session.accountID))
-                    .id(session.accountID)
-            }.badge(customizations.unread)
+//            Tab("定制", systemImage: "sparkles", value: SupportRootTab.customization) {
+//                CustomizationHomeView(owner: String(session.accountID))
+//                    .id(session.accountID)
+//            }.badge(customizations.unread)
             Tab(L10n.tr("tab.settings", fallback: "设置"), systemImage: "gearshape", value: SupportRootTab.settings) {
                 SettingsView(accountManagementViewModel: accountViewModel,
                     session: session,
@@ -228,7 +261,7 @@ struct SupportMainCoordinatorView: View {
             content()
                 .navigationBarTitleDisplayMode(.inline)
                 .navigationDestination(for: DiaryBookRoute.self) { route in
-                    DiaryBookDestination(ownerID: String(session.accountID), bookID: route.bookID, managePages: route.managePages)
+                    DiaryBookDestination(ownerID: String(session.accountID), bookID: route.bookID, pageID: route.pageID, managePages: route.managePages, preparedBook: route.pageID == nil ? nil : preparedReaderBook)
                         .id(route.bookID)
                         .contentZoomTransition(sourceID: route.bookID, in: route.zoomFromShelf ? bookshelfTransition : nil)
                 }

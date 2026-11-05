@@ -6,6 +6,39 @@ import SwiftUI
 
 @Suite(.serialized)
 @MainActor struct DiaryAIWorkspaceTests {
+    @Test func completedProductionAutomaticallySavesAndReturnsToCanvas() async throws {
+        let (session, root) = try await fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var published = 0
+        session.creationPublish = { published += 1 }
+        let w = DiaryAIWorkspace(session: session, model: WorkspaceModel(), root: root,
+                                 automaticallySavesCompletedProduction: true)
+        await w.enter(.defaults(.relayout))
+        w.processAll()
+        try await wait(w)
+        for _ in 0..<300 where w.saving { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(w.error == nil && !w.active && !session.aiWorkspacePresented)
+        #expect(published == 1)
+        #expect(session.saveStatus == "已保存")
+    }
+
+    @Test func automaticSaveFailureRetainsResultAndManualRetryWorks() async throws {
+        let (session, root) = try await fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        session.creationPublish = { throw URLError(.cannotWriteToFile) }
+        let w = DiaryAIWorkspace(session: session, model: WorkspaceModel(), root: root,
+                                 automaticallySavesCompletedProduction: true)
+        await w.enter(.defaults(.relayout))
+        w.processAll()
+        try await wait(w)
+        for _ in 0..<300 where w.saving { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(w.active && session.aiWorkspacePresented && w.error != nil && w.needsSaveRetry)
+        #expect(w.pending.isEmpty && w.version > 0)
+        session.creationPublish = nil
+        #expect(await w.save())
+        #expect(!w.active && !session.aiWorkspacePresented)
+    }
+
     @Test(arguments: [URLError.Code.timedOut, .notConnectedToInternet, .networkConnectionLost])
     func modelTransportFailurePausesUntilManualRetry(_ code: URLError.Code) async throws {
         let (session, root) = try await fixture(count: 1)

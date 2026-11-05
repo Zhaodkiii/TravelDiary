@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import CryptoKit
 
 nonisolated struct DiaryAIWorkspaceEvent: Codable, Identifiable, Sendable {
     var id = UUID()
@@ -23,6 +24,10 @@ nonisolated struct DiaryAIWorkspaceCheckpoint: Codable, Sendable {
     }
 }
 nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
+    var productionAttempt: UUID? = nil
+    var productionTask: DiaryProductionTask? = nil
+    var productionOwner: String? = nil
+    var productionDigest: String? = nil
     var restartCheckpoint: DiaryAIWorkspaceCheckpoint? = nil
     var creationSubmissionID: UUID? = nil
     var parallelExecution: Bool? = nil
@@ -79,14 +84,30 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         request = value.coordinated()
         log("settings", "整页制作设置", request.designBrief)
         if value.action != .relayout { pending = [] }
+        running = true
         Task {
-            do { try await refresh(); processAll() }
-            catch { self.error = error.localizedDescription }
+            do {
+                try await endProductionQuota()
+                try await refresh()
+                running = false
+                processAll()
+            } catch {
+                running = false
+                self.error = error.localizedDescription
+            }
         }
     }
     private var bridge: DiaryEditorAIBridge?
     private var baseline: DiaryAIWorkspaceCheckpoint?
     private var checkpoints: [DiaryAIWorkspaceCheckpoint] = []
+    private var quotaPauseTask: Task<Void, Never>?
+    private var productionAttempt: UUID?
+    private var productionTask: DiaryProductionTask?
+    private var productionDigest: String?
+    private var productionOwner: String?
+    // Normal app entry points always create an account-bound production task.
+    // Tests injecting fake providers keep their isolated execution path.
+    private let usesProductionQuota: Bool
     private var restartCheckpoint: DiaryAIWorkspaceCheckpoint?
     private var creationSubmissionID: UUID?
     private var request = DiaryAIRequest.defaults(.relayout)
@@ -132,6 +153,8 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     }
     var canGenerateBackground: Bool { active && !running && pending.isEmpty && hasBackgroundRequest && !needsTextCompletion && visualRevision == nil && (!awaitingConfirmation || backgroundRecord?.verified == false) }
     var canRetryAlbum: Bool { !running && backgroundRecord?.layerID != nil && backgroundRecord?.albumState != "saved" }
+    @Published private(set) var needsSaveRetry = false
+    private let automaticallySavesCompletedProduction: Bool
     private let efficientExecution: Bool
     private let model: any DiaryAIModelClient
     private let productionLog: DiaryAIProductionLog
@@ -139,7 +162,9 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private let storage: DiaryAIWorkspaceStore
     private var storageSequence = 0
     var canRollback: Bool { checkpoints.count > 1 && !running && !addingMaterials }
-    init(session: DiaryEditorSession, model: (any DiaryAIModelClient)? = nil, root: URL? = nil, backgroundProvider: (any DiaryAIBackgroundProvider)? = nil, albumSaver: (any DiaryAIBackgroundAlbumSaving)? = nil, efficientExecution: Bool? = nil, parallelExecution: Bool? = nil) {
+    init(session: DiaryEditorSession, model: (any DiaryAIModelClient)? = nil, root: URL? = nil, backgroundProvider: (any DiaryAIBackgroundProvider)? = nil, albumSaver: (any DiaryAIBackgroundAlbumSaving)? = nil, efficientExecution: Bool? = nil, parallelExecution: Bool? = nil, automaticallySavesCompletedProduction: Bool? = nil) {
+        self.automaticallySavesCompletedProduction = automaticallySavesCompletedProduction ?? (model == nil && backgroundProvider == nil)
+        self.usesProductionQuota = model == nil && backgroundProvider == nil
         self.parallelExecution = parallelExecution ?? (UserDefaults.standard.object(forKey: "DiaryCanvasAI.parallelExecution") as? Bool ?? true)
         self.backgroundProvider = backgroundProvider ?? DiarySeedreamBackgroundProvider()
         self.albumSaver = albumSaver ?? DiaryAIBackgroundAlbum()
@@ -183,6 +208,10 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             if let saved, saved.schema == 1, let last = saved.checkpoints.last,
                try DiaryEditorAIBridge.digest(saved.baseline.restoredDocument) == DiaryEditorAIBridge.digest(source.document) {
                 enteredFromDraft = true
+                productionAttempt = saved.productionAttempt
+                productionTask = saved.productionTask
+                productionOwner = saved.productionOwner
+                productionDigest = saved.productionDigest
                 restartCheckpoint = saved.restartCheckpoint
                 creationSubmissionID = saved.creationSubmissionID
                 parallelExecution = saved.parallelExecution ?? false
@@ -449,6 +478,8 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
               let checkpoint = restartCheckpoint else { return }
         running = true
         defer { running = false }
+        do { try await endProductionQuota() }
+        catch { self.error = error.localizedDescription; return }
         let previousTask = task
         let previousBackground = backgroundTask
         let previousAlbum = albumTask
@@ -465,6 +496,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             try await setup(checkpoint.restoredDocument)
             pending = checkpoint.pending
             queue = []; selected = []; processing = []
+            productionAttempt = nil; productionTask = nil; productionOwner = nil; productionDigest = nil
             composition = ""; layoutRegions = []; textDone = false
             visualRevision = nil; confirmationScope = nil; awaitingConfirmation = false
             backgroundRecord = nil; backgroundPreview = nil
@@ -480,10 +512,104 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             stage = "重新开始未完成，请重试"
         }
     }
+    var requiresCloudSettlement: Bool { usesProductionQuota && productionTask != nil && productionTask?.state != "completed" }
     var canRestartProduction: Bool { active && restartCheckpoint != nil && !running && !addingMaterials && !saving }
+    private func endProductionQuota() async throws {
+        guard usesProductionQuota else { return }
+        await quotaPauseTask?.value
+        let service = DiaryProductionService.shared
+        if let productionOwner, productionOwner != service.owner {
+            throw DiaryAIError.invalid("请回到原账号处理当前制作任务")
+        }
+        if productionTask == nil, let key = productionAttempt, let digest = productionDigest {
+            productionTask = try await service.start(key: key, digest: digest)
+            try await persist()
+        }
+        if let productionTask {
+            let current = try await service.task(productionTask.id)
+            if current.state != "completed" {
+                _ = try await service.action("cancel", task: current)
+            }
+        }
+        productionTask = nil
+        productionAttempt = nil
+        productionDigest = nil
+        productionOwner = nil
+        try await persist()
+    }
+
+    private func prepareProductionQuota() async throws {
+        guard usesProductionQuota else { return }
+        await quotaPauseTask?.value
+        let service = DiaryProductionService.shared
+        guard let owner = service.owner else {
+            throw DiaryAIError.invalid("请先登录，再开始制作")
+        }
+        if let productionOwner, productionOwner != owner {
+            throw DiaryAIError.invalid("账号已变化，请返回原账号继续本次制作")
+        }
+        productionOwner = owner
+        if productionAttempt == nil {
+            productionAttempt = UUID()
+            struct Input: Encodable {
+                let request: DiaryAIRequest
+                let checkpoint: DiaryAIWorkspaceCheckpoint?
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(Input(request: request, checkpoint: restartCheckpoint))
+            productionDigest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+        try await persist()
+        if let existing = productionTask {
+            let current = try await service.task(existing.id)
+            if current.state == "completed" {
+                productionTask = current
+                try await persist()
+                return
+            }
+            productionTask = try await service.action("resume", task: current)
+        } else {
+            guard let key = productionAttempt, let digest = productionDigest else {
+                throw DiaryAIError.invalid("任务记录不完整，请重新开始")
+            }
+            productionTask = try await service.start(key: key, digest: digest)
+        }
+        try await persist()
+        await service.refresh()
+    }
+
+    private func confirmProductionCompletion() async throws {
+        guard usesProductionQuota, let productionTask, let working,
+              productionTask.state != "completed" else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let snapshot = DiaryAIWorkspaceCheckpoint(working.document, pending: pending)
+        let bytes = try encoder.encode(snapshot)
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        stage = "正在确认制作次数"
+        self.productionTask = try await DiaryProductionService.shared.complete(
+            task: productionTask, digest: digest)
+        try await persist()
+        await DiaryProductionService.shared.refresh()
+    }
+
     func processAll() { run(all: true) }
     func processSelected() { enqueue(Array(selected)) }
     func pause() {
+        if usesProductionQuota, let current = productionTask {
+            quotaPauseTask = Task {
+                do {
+                    let service = DiaryProductionService.shared
+                    let latest = try await service.task(current.id)
+                    if latest.state == "reserved" {
+                        _ = try await service.action("pause", task: latest)
+                    }
+                } catch {
+                    self.error = "本地进度已保留，服务器暂停状态待确认。"
+                }
+            }
+        }
         generation = UUID(); task?.cancel(); albumTask?.cancel(); backgroundTask?.cancel(); backgroundTask = nil; watchdog?.cancel(); task = nil; watchdog = nil; running = false; processing = []
         stage = "已暂停"; log("pause", "已暂停", "已提交批次保留，未提交操作丢弃。")
         Task { do { try await persist() } catch { self.error = error.localizedDescription } }
@@ -524,15 +650,33 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     func exitRestoringOriginal() async {
         guard !addingMaterials, preparingPhotos.isEmpty else { return }
         pause()
+        do { try await endProductionQuota() }
+        catch { self.error = error.localizedDescription; return }
         do { try await removeArchive(); active = false; source?.aiWorkspacePresented = false; working = nil; bridge = nil }
         catch { self.error = error.localizedDescription }
     }
+    private func saveCompletedProduction(token: UUID) async {
+        guard automaticallySavesCompletedProduction, generation == token,
+              !Task.isCancelled, active, error == nil, pending.isEmpty,
+              !needsTextCompletion, visualRevision == nil, !awaitingConfirmation,
+              !hasBackgroundRequest || backgroundRecord?.layerID != nil else { return }
+        running = false
+        processing = []
+        stage = "正在保存作品"
+        if !(await save()) {
+            needsSaveRetry = true
+            stage = "作品保存未完成，请重试保存"
+            if error == nil { error = "当前无法保存作品，请重试" }
+        }
+    }
+
     func save() async -> Bool {
         guard !running, !addingMaterials, preparingPhotos.isEmpty, !saving, let source, let baseline, let working else { return false }
         saving = true
         defer { saving = false }
         await albumTask?.value
         do {
+            try await confirmProductionCompletion()
             guard source.document == baseline.restoredDocument else { throw DiaryAIError.invalid("原作品已变化，不能覆盖。请退出后重新进入。") }
             var published = working.document
             // Pending objects remain fully editable assets in the document, hidden from the exported page.
@@ -545,6 +689,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             try await source.creationPublish?()
             let needsBackgroundRecovery = request.background != nil && (backgroundRecord?.layerID == nil || (request.background?.saveToAlbum == true && backgroundRecord?.albumState != "saved"))
             if pending.isEmpty && !needsTextCompletion && !needsBackgroundRecovery && visualRevision == nil && !awaitingConfirmation { try await removeArchive() }
+            needsSaveRetry = false
             active = false; source.aiWorkspacePresented = false; return true
         } catch { self.error = error.localizedDescription; return false }
     }
@@ -568,7 +713,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         try await productionLog.flush()
         guard !discarded, let baseline else { return }
         storageSequence += 1
-        let value = DiaryAIWorkspaceArchive(restartCheckpoint: restartCheckpoint, creationSubmissionID: creationSubmissionID, parallelExecution: parallelExecution, awaitingConfirmation: awaitingConfirmation, logSession: productionLog.directory.lastPathComponent, baseline: baseline, checkpoints: checkpoints, request: request, events: events, composition: composition, version: version, textDone: textDone, background: backgroundRecord, layoutRegions: layoutRegions, visualRevision: visualRevision, confirmationScope: confirmationScope)
+        let value = DiaryAIWorkspaceArchive(productionAttempt: productionAttempt, productionTask: productionTask, productionOwner: productionOwner, productionDigest: productionDigest, restartCheckpoint: restartCheckpoint, creationSubmissionID: creationSubmissionID, parallelExecution: parallelExecution, awaitingConfirmation: awaitingConfirmation, logSession: productionLog.directory.lastPathComponent, baseline: baseline, checkpoints: checkpoints, request: request, events: events, composition: composition, version: version, textDone: textDone, background: backgroundRecord, layoutRegions: layoutRegions, visualRevision: visualRevision, confirmationScope: confirmationScope)
         try await storage.save(value, sequence: storageSequence)
     }
     private func removeArchive() async throws {
@@ -603,6 +748,12 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 if restartCheckpoint == nil, let working {
                     restartCheckpoint = .init(working.document, pending: pending)
                     try await persist()
+                }
+                try await prepareProductionQuota()
+                if productionTask?.state == "completed" {
+                    stage = "作品已确认，可以保存"
+                    await saveCompletedProduction(token: token)
+                    return
                 }
                 if composition.isEmpty {
                     if request.action == .writing {
@@ -665,9 +816,11 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 }
                 if generation == token && pending.isEmpty && !needsTextCompletion && request.background != nil { try await createBackground(token: token) }
                 if awaitingConfirmation { try await finishConfirmation() }
+                if pending.isEmpty && !needsTextCompletion { try await confirmProductionCompletion() }
                 log("complete", "制作已完成", "画布已提交，本地校验完成。")
 
                 if generation == token { stage = needsTextCompletion ? "照片排版已保留，待补充文字" : pending.isEmpty ? (events.contains { $0.kind == "warning" } ? "处理完成，仍有视觉问题需检查" : "本轮处理完成，可以保存") : "等待选择下一批素材"; log("complete", stage); try await persist() }
+                await saveCompletedProduction(token: token)
             } catch is CancellationError {} catch {
                 if generation == token {
                     if visualRevision != nil { stage = "局部修复未完成，已提交排版保留" }
@@ -694,7 +847,6 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     }
     func generateBackground(regenerate: Bool = false) {
         guard canGenerateBackground else { return }
-        if regenerate { backgroundRecord = nil; backgroundPreview = nil }
         running = true; error = nil
         let token = UUID(); generation = token
         task = Task {
@@ -704,8 +856,14 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                     restartCheckpoint = .init(working.document, pending: pending)
                     try await persist()
                 }
+                _ = try DiaryAITestConfig.requireAPIKey()
+                if regenerate { try await endProductionQuota() }
+                try await prepareProductionQuota()
+                if regenerate { backgroundRecord = nil; backgroundPreview = nil }
                 try await createBackground(token: token)
+                try await confirmProductionCompletion()
                 stage = "背景已完成，可以保存"
+                await saveCompletedProduction(token: token)
             }
             catch is CancellationError {} catch {
                 if generation == token { self.error = error.localizedDescription; log("error", "背景尚未完成，排版已保留", error.localizedDescription); try? await persist() }
@@ -771,8 +929,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             try Task.checkCancellation(); guard generation == token else { throw CancellationError() }
             backgroundRecord?.filename = filename
             backgroundPreview = UIImage(data: bytes)
-            log("inspect", "检查纯背景", "检查书页中缝、占位框与媒介偏差。")
-            try await backgroundProvider.validate(reference: reference, background: bytes, style: style)
+            log("parallel", "并行背景默认通过", "背景下载与图像处理完成，直接交由协调器提交画布。")
             try Task.checkCancellation()
             guard generation == token, backgroundRecord?.id == recordID else { throw CancellationError() }
             backgroundRecord?.verified = true

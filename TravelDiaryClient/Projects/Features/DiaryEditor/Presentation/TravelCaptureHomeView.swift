@@ -2,9 +2,19 @@ import SwiftUI
 import PhotosUI
 import UIKit
 
+/// Kept by the root presenter until the editor closes, including during a tab change.
+struct TravelStyleEditorPresentation: Identifiable {
+    let session: DiaryEditorSession
+    let coordinator: CreationCoordinator
+    let request: DiaryAIRequest
+    let newPage: () async throws -> Void
+    var id: UUID { session.id }
+}
+
 /// 随记只负责采集与交接，编辑始终使用已有的 DiaryEditorScreen。
 struct TravelCaptureHomeView: View {
     let ownerID: String
+    let onPresentStyle: (TravelStyleEditorPresentation) -> Void
     @State private var books: [DiaryBook] = []
     @State private var book: DiaryBook?
     @State private var pageID: UUID?
@@ -29,7 +39,6 @@ struct TravelCaptureHomeView: View {
     @State private var selectedStyle: DiaryAIPageStyle = .scenic
     @State private var styleEditor: DiaryEditorSession?
     @State private var styleCoordinator: CreationCoordinator?
-    @State private var styleRequest: DiaryAIRequest?
     @State private var preview: UIImage?
     @State private var subjects: [StickerSubject] = []
     private let size = CGSize(width: 4370, height: 3130)
@@ -103,10 +112,6 @@ struct TravelCaptureHomeView: View {
             NavigationStack { CreationDraftListView(owner: ownerID).toolbar { Button("完成") { showDrafts = false } } }
         }
         .task { await loadCreationDrafts() }
-        .fullScreenCover(item: $styleEditor, onDismiss: { Task { await reload() } }) { value in
-            DiaryEditorScreen(session: value, creationRequest: styleRequest, onNewPage: newStylePage)
-                .id(value.id)
-        }
         .fullScreenCover(item: $editor, onDismiss: { Task { await reload(); await refreshPreview() } }) { DiaryEditorScreen(session: $0) }
         .alert("旅行随记", isPresented: Binding(get: { error != nil && reviewPhoto == nil }, set: { if !$0 { error = nil } })) { Button("好") { error = nil } } message: { Text(error ?? "") }
     }
@@ -133,9 +138,14 @@ struct TravelCaptureHomeView: View {
             try? await next.discardForNewPage()
             throw error
         }
-        styleRequest = next.draft.request()
-        styleCoordinator = next
+        presentStyle(session, coordinator: next)
+    }
+
+    private func presentStyle(_ session: DiaryEditorSession, coordinator: CreationCoordinator) {
+        styleCoordinator = coordinator
         styleEditor = session
+        onPresentStyle(.init(session: session, coordinator: coordinator,
+                             request: coordinator.draft.request(), newPage: newStylePage))
     }
 
     private func openStyleCanvas() async {
@@ -152,9 +162,7 @@ struct TravelCaptureHomeView: View {
             guard let session = await coordinator.prepare(allowEmpty: true) else {
                 throw DiaryAIError.invalid(coordinator.error ?? "无法打开制作草稿")
             }
-            styleCoordinator = coordinator
-            styleRequest = coordinator.draft.request()
-            styleEditor = session
+            presentStyle(session, coordinator: coordinator)
         } catch { self.error = error.localizedDescription }
     }
 

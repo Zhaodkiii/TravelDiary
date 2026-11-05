@@ -27,6 +27,54 @@ import SwiftUI
         #expect(second.document.root.layers.isEmpty)
         #expect(try await DiaryDocumentStore(ownerID: owner).listBooks().isEmpty)
     }
+    @Test(arguments: [false, true])
+    func styleExitDiscardsOnlyEmptyDrafts(_ wroteStory: Bool) async throws {
+        let owner = UUID().uuidString
+        let coordinator = CreationCoordinator(owner: owner)
+        coordinator.draft.styleEntry = true
+        let session = try #require(await coordinator.prepare(allowEmpty: true))
+        var request = coordinator.draft.request()
+        if wroteStory {
+            var brief = CreationBrief()
+            brief.story = "在山脚等到了日出"
+            request.creationBrief = brief
+        }
+        session.canvasAI.setForm(request)
+        await session.aiWorkspace.enter(request)
+        let discarded = try await coordinator.discardIfEmpty(session)
+        #expect(discarded == !wroteStory)
+        #expect(try await DiaryDocumentStore(ownerID: owner).listBooks().isEmpty)
+        if wroteStory {
+            #expect(try await coordinator.store.load(coordinator.draft.id).brief.story == "在山脚等到了日出")
+        } else {
+            #expect(try await coordinator.store.list().isEmpty)
+        }
+    }
+
+    @Test func publishedStylePageIsReadableBeforeCloseAndPreparationCanRetry() async throws {
+        let owner = UUID().uuidString
+        let coordinator = CreationCoordinator(owner: owner)
+        await coordinator.add(try bytes(), name: "旅行照片")
+        let session = try #require(await coordinator.prepare(allowEmpty: true))
+        var preparedPage: UUID?
+        let first = await session.commitToParent {
+            throw DiaryAIError.invalid("模拟阅读器准备失败")
+        }
+        #expect(!first)
+        let retry = await session.commitToParent {
+            let id = try #require(coordinator.draft.targetBookID)
+            let store = DiaryDocumentStore(ownerID: owner, bookID: id)
+            let book = try await store.loadBook()
+            let matches = book.contentPages.filter { $0.id == session.document.id }
+            #expect(matches.count == 1)
+            let page = try #require(matches.first)
+            _ = try await DiaryPreviewService.image(page: page, store: store, large: true)
+            preparedPage = page.id
+        }
+        #expect(retry)
+        #expect(preparedPage == coordinator.draft.documentID)
+    }
+
     @Test func newPageDeletesOldWorkspaceWithoutRecreatingItOnSave() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

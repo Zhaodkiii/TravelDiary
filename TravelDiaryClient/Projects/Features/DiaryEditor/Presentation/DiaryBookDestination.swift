@@ -3,6 +3,7 @@ import SwiftUI
 /// 专用路由避免与页面、素材等其他 UUID 跳转混淆。
 struct DiaryBookRoute: Hashable {
     let bookID: UUID
+    var pageID: UUID? = nil
     var managePages = false
     var zoomFromShelf = false
 }
@@ -11,7 +12,9 @@ struct DiaryBookRoute: Hashable {
 struct DiaryBookDestination: View {
     let ownerID: String
     let bookID: UUID
+    var pageID: UUID? = nil
     var managePages = false
+    var preparedBook: DiaryBook? = nil
     @State private var book: DiaryBook?
     @State private var error: String?
     @State private var retry = 0
@@ -19,14 +22,14 @@ struct DiaryBookDestination: View {
 
     var body: some View {
         Group {
-            if let book {
+            if let book = book ?? (preparedBook?.id == bookID ? preparedBook : nil) {
                 if managePages || book.pages.isEmpty {
                     DiaryBookScreen(ownerID: ownerID, book: book)
                 } else {
                     DiaryPhysicalBookScreen(
                         book: book,
                         store: DiaryDocumentStore(ownerID: ownerID, bookID: bookID),
-                        onShowList: { showingList = true }
+                        initialPageID: pageID, onShowList: { showingList = true }
                     )
                 }
             } else if let error {

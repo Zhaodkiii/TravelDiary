@@ -101,6 +101,46 @@ struct DiaryStickerDrawEngineTests {
         #expect(restored.currentRequest.heroID == hero)
         #expect(restored.currentRequest.creationNotes?[hero.uuidString] == "第二张说明")
     }
+    @Test func submissionFourPhotosFourStickersTiming() async throws {
+        let (session, root) = fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = session.aiWorkspace
+        let request = DiaryAIRequest.defaults(.relayout)
+        await workspace.enter(request)
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let photo = UIGraphicsImageRenderer(size: CGSize(width: 3024, height: 4032), format: format).image { ctx in
+            UIColor.systemTeal.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 3024, height: 4032))
+        }
+        let bytes = try #require(photo.jpegData(compressionQuality: 0.9))
+        let sticker = UIGraphicsImageRenderer(size: CGSize(width: 1024, height: 1024), format: format).image { ctx in
+            UIColor.orange.setFill(); ctx.fill(CGRect(x: 100, y: 100, width: 800, height: 800))
+        }
+        let stickerBytes = try #require(sticker.pngData())
+        let flow = try DiaryAICreationFlow(session: session)
+        let oldOwner = MaterialCatalogRepository.shared.owner
+        MaterialCatalogRepository.shared.activate(session.store.ownerID)
+        defer {
+            MaterialCatalogRepository.shared.activate(oldOwner)
+            try? FileManager.default.removeItem(at: flow.directory)
+        }
+        for i in 0..<4 {
+            let filename = "photo-\(i).jpg"
+            try bytes.write(to: flow.directory.appendingPathComponent(filename))
+            flow.draft.photos.append(.init(filename: filename, digest: "\(i)", name: filename))
+            flow.images[filename] = photo
+            let name = "sticker-\(i).png"
+            try stickerBytes.write(to: flow.directory.appendingPathComponent(name))
+            let item = CloudMaterial(id: "timing-\(i)", revision: 0, name: name, keywords: [], aliases: [], kind: "illustration", subcategory: "", thumbnail_sha256: "", thumbnail_url: "", sha256: "", byte_size: stickerBytes.count, favorite_count: 0, is_favorited: false)
+            flow.draft.stickers.append(.init(item: item, filename: name, kept: false))
+            flow.images[name] = sticker
+        }
+        let started = Date()
+        #expect(await flow.submit())
+        print("CREATION_TIMING submit-total=\(Date().timeIntervalSince(started))")
+        #expect(workspace.objects.filter { $0.role == "photo" }.count == 4)
+        #expect(workspace.objects.filter { $0.role == "decoration" }.count == 4)
+        #expect(flow.draft.submitted)
+    }
     @Test func invalidCreationNeverPartiallyPublishes() async throws {
         let (session, root) = fixture()
         defer { try? FileManager.default.removeItem(at: root) }
