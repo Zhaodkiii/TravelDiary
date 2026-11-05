@@ -11,7 +11,7 @@ enum DiaryBookImageExporter {
     }
 
     static func spreadPages(_ book: DiaryBook) -> [[DiaryPageEntry?]] {
-        book.contentPages.isEmpty ? [] : book.readingSpreads
+        book.exportSpreads
     }
 
     static func export(book: DiaryBook, store: DiaryDocumentStore, mode: Mode,
@@ -61,7 +61,7 @@ enum DiaryBookImageExporter {
                     let pair = spreads[index]
                     let left = try await pair[0].asyncMap(render)
                     let right = try await pair[1].asyncMap(render)
-                    images.append(try renderSpread(left: left, right: right, lining: index == 0, book: book, page: pair.compactMap { $0 }.first))
+                    images.append(try renderSpread(left: left, right: right, lining: index == 0 && book.effectiveCover != nil, book: book, page: pair.compactMap { $0 }.first))
                     progress(index + 1, spreads.count); await Task.yield()
                 }
                 try write(collage(images))

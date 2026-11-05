@@ -61,7 +61,7 @@ enum DiaryBookVideoExporter {
                 // Autorelease image encoders before moving on to the next spread.
                 spreadSize = try autoreleasepool {
                     let image = try DiaryBookImageExporter.renderSpread(left: leaves[0], right: leaves[1],
-                        lining: index == 0, book: book, page: pairs[index].compactMap { $0 }.first, width: width, scale: 1)
+                        lining: index == 0 && book.effectiveCover != nil, book: book, page: pairs[index].compactMap { $0 }.first, width: width, scale: 1)
                     guard let data = image.pngData() else { throw ExportError.cannotRender }
                     try data.write(to: url, options: .atomic)
                     return image.size

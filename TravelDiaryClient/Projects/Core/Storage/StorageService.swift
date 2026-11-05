@@ -215,7 +215,7 @@ actor StorageService {
         guard let data = try? Data(contentsOf: root.appendingPathComponent("book.json")),
               let book = try? JSONDecoder().decode(DiaryBook.self, from: data),
               book.id == id, book.format == "TravelDiary.Book", book.schemaVersion == 1 else { return false }
-        return book.pages.allSatisfy { completeManifest(root: root, pageID: $0.id, revision: $0.revisionID.uuidString) }
+        return (book.pages + [book.coverDraft].compactMap { $0 }).allSatisfy { completeManifest(root: root, pageID: $0.id, revision: $0.revisionID.uuidString) }
     }
 
     private func canRebuildPreview(_ url: URL, owner: String) -> Bool {

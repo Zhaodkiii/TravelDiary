@@ -24,7 +24,11 @@ struct AppCoordinatorView: View {
         .task {
             networkMonitor.start()
         }
-        .onChange(of: entryReady, initial: true) { _, ready in onEntryReady(ready) }
+        .onChange(of: entryReady, initial: true) { _, ready in
+            SupportLogger.log(level: .info, module: .lifecycle,
+                              message: "引导交接：入口就绪=\(ready) session=\(lifecycle.sessionState.logValue) preparedAccountID=\(lifecycle.preparedAccountID.map(String.init) ?? "-") homeReadyAccountID=\(homeReadyAccountID.map(String.init) ?? "-")")
+            onEntryReady(ready)
+        }
         .onChange(of: lifecycle.sessionState, initial: true) { _, state in
             if case .signedIn = state {
                 // 恢复已有账号也算已进入过应用，退出登录后不再自动创建游客会话。
@@ -127,7 +131,7 @@ struct SupportMainCoordinatorView: View {
     @ObservedObject private var helpFeedback = HelpFeedbackService.shared
     @ObservedObject private var customizations = CustomizationService.shared
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selectedTab: SupportRootTab = .diaryEditor
+    @State private var selectedTab: SupportRootTab = .travelCapture
     @Namespace private var bookshelfTransition
     @State private var path = NavigationPath()
     @State private var stylePresentation: TravelStyleEditorPresentation?
@@ -226,14 +230,18 @@ struct SupportMainCoordinatorView: View {
     private var tabContent: some View {
         TabView(selection: $selectedTab) {
             Tab("随记", systemImage: "sparkles", value: SupportRootTab.travelCapture) {
-                TravelCaptureHomeView(ownerID: String(session.accountID)) { stylePresentation = $0 }
+                TravelCaptureHomeView(ownerID: String(session.accountID), onInitialLoad: {
+                    if selectedTab == .travelCapture { reportHomeReady() }
+                }) { stylePresentation = $0 }
                     .id(session.accountID)
             }
 
             Tab("手帐", systemImage: "book.pages", value: SupportRootTab.diaryEditor) {
                 DiaryEditorHomeView(ownerID: String(session.accountID), path: $path,
                     creating: $showsCreateDiaryBookForm, bookTransition: bookshelfTransition,
-                    onBrowseTemplates: { selectedTab = .diaryPresets }, onInitialLoad: onHomeReady)
+                    onBrowseTemplates: { selectedTab = .diaryPresets }, onInitialLoad: {
+                        if selectedTab == .diaryEditor { reportHomeReady() }
+                    })
                     .id(session.accountID)
             }
 
@@ -252,6 +260,12 @@ struct SupportMainCoordinatorView: View {
                     .id(session.accountID)
             }
         }
+    }
+
+    private func reportHomeReady() {
+        SupportLogger.log(level: .info, module: .lifecycle,
+                          message: "引导交接：当前首页首读完成 tab=\(selectedTab) accountID=\(session.accountID)")
+        onHomeReady()
     }
 
     /// Register typed routes at the shared stack root, independent of the

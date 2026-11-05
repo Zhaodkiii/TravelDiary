@@ -655,9 +655,12 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             var frameAssets: [String: (DiaryAsset, UIImage)] = [:]
             for item in frames.compactMap({ $0 }) where frameAssets[item.id] == nil {
                 try Task.checkCancellation()
-                guard let source = item.image,
-                      DiaryPhotoFrameAperture.detect(source, opening: item.opening) != nil,
-                      let bytes = source.pngData() else { throw DiaryEditorError.invalidImage }
+                let bytes = try await DiaryAIImageWork.run {
+                    guard let source = item.image,
+                          DiaryPhotoFrameAperture.detect(source, opening: item.opening) != nil,
+                          let bytes = source.pngData() else { throw DiaryEditorError.invalidImage }
+                    return bytes
+                }
                 frameAssets[item.id] = try await store.importImage(bytes, documentID: document.id)
             }
             try Task.checkCancellation()
@@ -865,9 +868,14 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         defer { busy = false }
         do {
             let preparedData: Data
-            if replacing == nil && asSticker, let source = UIImage(data: data),
-               let trimmed = DiaryStickerPlacement.trimmed(source).pngData() { preparedData = trimmed }
-            else { preparedData = data }
+            if replacing == nil && asSticker {
+                preparedData = try await DiaryAIImageWork.run {
+                    guard let source = UIImage(data: data), let trimmed = DiaryStickerPlacement.trimmed(source).pngData() else {
+                        throw DiaryEditorError.invalidImage
+                    }
+                    return trimmed
+                }
+            } else { preparedData = data }
             let (asset, image) = try await store.importImage(preparedData, documentID: document.id)
             if let replacing {
                 guard let target = editableLayer(replacing), target.assetID != nil,

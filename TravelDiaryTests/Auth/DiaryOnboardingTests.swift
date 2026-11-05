@@ -1,8 +1,11 @@
 import Testing
 import Foundation
 import CoreGraphics
+import SwiftUI
+import UIKit
 @testable import TravelDiary
 
+@Suite(.serialized)
 @MainActor
 struct DiaryOnboardingTests {
     @Test func testNewInstallationAndInterruptedGuideRemainEligible() {
@@ -78,6 +81,48 @@ struct DiaryOnboardingTests {
         // giving the user their existing retry controls instead of hanging.
         handoff.updateReadiness(true)
         #expect(handoff.canDismiss)
+    }
+
+    @Test func defaultCaptureTabFinishesHandoffBehindGuideWithoutOpeningShelf() async throws {
+        let scene = try #require(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let previous = scene.keyWindow
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        let container = AppContainer.live(environment: .debug)
+        let session = UserSession(accountID: Int64.random(in: 8_000_000...9_000_000),
+                                  email: "", displayName: "Onboarding test", signedInAt: Date(),
+                                  signInMethod: .device, isDeviceAccount: true)
+        var handoff = DiaryOnboardingHandoff()
+        handoff.requestFinish()
+        let host = UIHostingController(rootView: ZStack {
+            // Mount the real main coordinator with its real initial tab. A test
+            // of just the handoff booleans cannot catch a missing tab callback.
+            SupportMainCoordinatorView(session: session, dependencies: container.contentDependencies.coordinator,
+                                       onHomeReady: { handoff.updateReadiness(true) })
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            Color.white
+        })
+        window.rootViewController = host
+        window.windowLevel = .alert + 1
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKey()
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !handoff.canDismiss && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(handoff.canDismiss, "Default 随记 tab must signal readiness without loading the 手帐 tab")
+        let tabBar = try #require(findTabBar(in: host.view))
+        #expect(tabBar.selectedItem?.title == "随记")
+    }
+
+    private func findTabBar(in view: UIView) -> UITabBar? {
+        if let tabBar = view as? UITabBar { return tabBar }
+        return view.subviews.lazy.compactMap { findTabBar(in: $0) }.first
     }
 
 }

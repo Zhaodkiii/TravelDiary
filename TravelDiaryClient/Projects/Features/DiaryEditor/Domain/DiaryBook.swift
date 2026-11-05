@@ -11,7 +11,9 @@ nonisolated struct DiaryBook: Codable, Identifiable, Equatable, Sendable {
     var createdAt = Date()
     var updatedAt = Date()
     var defaultPageSize = DiaryPagePreset.a5.size
+    static let coverSize = CGSize(width: 2185, height: 3130)
     var coverPageID: UUID?
+    var coverDraft: DiaryPageEntry? = nil
     /// 外壳独立于列表封面；旧帐本不配置外壳。
     var shellPageID: UUID? = nil
     /// 导入操作发布记录，用于崩溃后重试去重。旧作品缺省为空。
@@ -20,52 +22,45 @@ nonisolated struct DiaryBook: Codable, Identifiable, Equatable, Sendable {
     var trashedPages: [DiaryTrashedPage] = []
     var shell: DiaryPageEntry? { pages.first { $0.id == shellPageID } }
     var contentPages: [DiaryPageEntry] { pages.filter { $0.id != shellPageID } }
-    var effectiveCover: DiaryPageEntry? { pages.first { $0.id == coverPageID } ?? pages.first }
-    /// Explicit template pairs take precedence over legacy physical page parity.
-    var readingSpreads: [[DiaryPageEntry?]] {
-        // Complete canvases occupy a spread by themselves, regardless of the book default.
-        // The legacy pair representation stores that canvas in slot 0; renderers must
-        // consult canvasLayout before treating it as a left-hand leaf.
-        if contentPages.contains(where: { $0.canvasLayout == .spread }) {
-            var result: [[DiaryPageEntry?]] = []
-            var singles: [DiaryPageEntry] = []
-            func flush() {
-                guard !singles.isEmpty else { return }
-                var section = self
-                section.pages = singles
-                section.shellPageID = nil
-                result.append(contentsOf: section.readingSpreads)
-                singles.removeAll()
-            }
-            for page in contentPages {
-                if page.canvasLayout == .spread {
-                    flush()
-                    result.append([page, nil])
-                } else { singles.append(page) }
-            }
-            flush()
-            return result
-        }
-        let content = contentPages
-        guard content.contains(where: { $0.presetSpreadID != nil }) else {
-            return (0..<((content.count + 2) / 2)).map { spread in
-                [spread * 2 - 1, spread * 2].map { content.indices.contains($0) ? content[$0] : nil }
-            }
-        }
+    var effectiveCover: DiaryPageEntry? { pages.first { $0.id == coverPageID && $0.canBeCover && $0.id != shellPageID } }
+    var bodyPages: [DiaryPageEntry] { contentPages.filter { $0.id != effectiveCover?.id } }
+    var bodyPageCount: Int { bodyPages.reduce(0) { $0 + ($1.canvasLayout == .spread ? 2 : 1) } }
+    /// The opening is always reserved, including when no cover has been made yet.
+    var readingSpreads: [[DiaryPageEntry?]] { [[nil, effectiveCover]] + bodySpreads }
+    var exportSpreads: [[DiaryPageEntry?]] {
+        (effectiveCover.map { [[nil, Optional($0)]] } ?? []) + bodySpreads
+    }
+    var bodySpreads: [[DiaryPageEntry?]] {
+        let content = bodyPages
         var result: [[DiaryPageEntry?]] = [], index = 0
         while index < content.count {
             let page = content[index]
-            if let pair = page.presetSpreadID, page.presetSpreadSide == "left", index + 1 < content.count,
-               content[index + 1].presetSpreadID == pair, content[index + 1].presetSpreadSide == "right" {
+            if page.canvasLayout == .spread {
+                result.append([page, nil]); index += 1
+            } else if let pair = page.presetSpreadID {
+                if page.presetSpreadSide == "left", index + 1 < content.count,
+                   content[index + 1].presetSpreadID == pair, content[index + 1].presetSpreadSide == "right" {
+                    result.append([page, content[index + 1]]); index += 2
+                } else {
+                    result.append(page.presetSpreadSide == "right" ? [nil, page] : [page, nil]); index += 1
+                }
+            } else if index + 1 < content.count, content[index + 1].canvasLayout == .single,
+                      content[index + 1].presetSpreadID == nil {
                 result.append([page, content[index + 1]]); index += 2
-            } else if page.presetSpreadID != nil || index == 0 || index + 1 == content.count || content[index + 1].presetSpreadID != nil {
-                result.append(page.presetSpreadSide == "left" ? [page, nil] : [nil, page]); index += 1
             } else {
-                result.append([page, content[index + 1]]); index += 2
+                result.append([page, nil]); index += 1
             }
         }
         return result
     }
+    func pageLabel(_ page: DiaryPageEntry) -> String {
+        if page.id == effectiveCover?.id { return "封面" }
+        if page.id == shellPageID { return "外壳" }
+        guard let index = bodyPages.firstIndex(where: { $0.id == page.id }) else { return page.title }
+        let first = bodyPages.prefix(index).reduce(1) { $0 + ($1.canvasLayout == .spread ? 2 : 1) }
+        return page.canvasLayout == .spread ? "第 \(first)–\(first + 1) 页" : "第 \(first) 页"
+    }
+
 }
 
 nonisolated struct DiaryPageEntry: Codable, Identifiable, Equatable, Sendable {
@@ -82,6 +77,7 @@ nonisolated struct DiaryPageEntry: Codable, Identifiable, Equatable, Sendable {
     var presetSpreadSide: String? = nil
     /// Optional for backward compatibility. Older documents infer their layout from size.
     var layout: DiaryCanvasLayout? = nil
+    var canBeCover: Bool { canvasLayout == .single && size.width.isFinite && size.height.isFinite && size.width > 0 && size.width < size.height }
     var canvasLayout: DiaryCanvasLayout { layout ?? DiaryCanvasLayout.infer(from: size) }
 }
 

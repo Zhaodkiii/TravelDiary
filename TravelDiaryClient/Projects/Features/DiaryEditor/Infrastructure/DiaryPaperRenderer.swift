@@ -1,7 +1,7 @@
 import UIKit
 
 /// Seeded paper surfaces shared by photo borders and stronger torn text decorations.
-@MainActor enum DiaryPaperRenderer {
+nonisolated enum DiaryPaperRenderer {
     private struct Random {
         var state: UInt64
         mutating func unit() -> CGFloat {

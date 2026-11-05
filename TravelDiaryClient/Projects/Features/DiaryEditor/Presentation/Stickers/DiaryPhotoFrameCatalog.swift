@@ -1,8 +1,8 @@
 import UIKit
 
 /// Parameters are encoded in the catalog identifier; generated pixels travel with saved documents.
-enum DiaryPhotoFrameCatalog {
-    struct Item: Identifiable {
+nonisolated enum DiaryPhotoFrameCatalog {
+    struct Item: Identifiable, Sendable {
         let id: String
         let title: String
         let opening: CGRect
@@ -20,7 +20,7 @@ enum DiaryPhotoFrameCatalog {
     }
     static var items: [Item] { (0..<3).map { generated(style: $0) } }
     static var defaultFrame: Item { generated() }
-    private static let cache: NSCache<NSString, UIImage> = {
+    nonisolated(unsafe) private static let cache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>(); cache.totalCostLimit = 48 * 1024 * 1024; return cache
     }()
     static func render(_ item: Item) -> UIImage? {

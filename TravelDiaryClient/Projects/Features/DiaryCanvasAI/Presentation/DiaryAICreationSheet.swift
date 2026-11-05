@@ -65,6 +65,7 @@ struct DiaryAICreationSheet: View {
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(submitting || flow.saveError != nil)
         .onAppear {
+            flow.resumePreparation()
             guard !appeared else { return }; appeared = true
             if flow.draft.step == 1 { path = [.stickers] }
             if flow.draft.step == 2 { path = [.stickers, .design] }
@@ -74,7 +75,7 @@ struct DiaryAICreationSheet: View {
             flow.setStep(step)
             if !value.contains(.library) { query = "" }
         }
-        .onDisappear { if !submitting { flow.cancelOperation() } }
+        .onDisappear { if !submitting { flow.cancelStickerOperation() } }
         .confirmationDialog("丢弃这次制作草稿？", isPresented: $discardsDraft, titleVisibility: .visible) {
             Button("丢弃草稿", role: .destructive) { flow.discardDraft(); dismiss() }
         } message: { Text("将移除这次准备的照片、贴纸与选择，已有作品不受影响。") }
@@ -87,6 +88,7 @@ struct DiaryAICreationSheet: View {
             VStack(alignment: .leading, spacing: 18) {
                 if let step { Text(step).font(.subheadline).foregroundStyle(.secondary) }
                 content()
+                if !flow.pendingPhotoIDs.isEmpty { Text("照片正在后台读取，可继续下一步。").font(.footnote).foregroundStyle(.secondary) }
                 if flow.busy { HStack { ProgressView(); Text(flow.status).font(.footnote) } }
                 if let error = flow.error { Text(error).font(.footnote).foregroundStyle(.orange) }
                 if let error = flow.saveError {
@@ -107,7 +109,7 @@ struct DiaryAICreationSheet: View {
             .padding(.horizontal, 20).padding(.vertical, 12).background(.regularMaterial)
     }
     private var photoPage: some View {
-        page("确认照片", step: "第 1 步，共 3 步 · 已选 \(flow.draft.photos.count)/30 张") {
+        page("确认照片", step: "第 1 步，共 3 步 · 已选 \(flow.selectedPhotoCount)/30 张") {
             Text("按顺序讲述这次旅行。3–8 张更便于突出重点。").font(.subheadline).foregroundStyle(.secondary)
             LazyVGrid(columns: columns, spacing: 16) {
                 ForEach(Array(flow.draft.photos.enumerated()), id: \.element.id) { index, photo in
@@ -130,19 +132,25 @@ struct DiaryAICreationSheet: View {
                     .accessibilityAction(named: "前移") { flow.movePhoto(photo.id, offset: -1) }
                     .accessibilityAction(named: "后移") { flow.movePhoto(photo.id, offset: 1) }
                 }
+                ForEach(flow.pendingPhotoIDs, id: \.self) { id in
+                    VStack {
+                        ProgressView("照片读取中").frame(maxWidth: .infinity, minHeight: 110)
+                        Button("移除") { flow.removePhoto(id) }.font(.caption)
+                    }
+                }
                 Button { picking = true } label: {
                     Label("继续添加", systemImage: "plus").frame(maxWidth: .infinity, minHeight: 110)
                         .background(ink.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
-                }.disabled(flow.draft.photos.count >= 30)
-            }.disabled(flow.busy)
+                }.disabled(flow.selectedPhotoCount >= 30)
+            }.disabled(flow.isSubmitting)
             ForEach(flow.failures.keys.sorted { $0.uuidString < $1.uuidString }, id: \.self) { id in
-                HStack { Text(flow.failures[id] ?? "照片读取失败"); Spacer(); Button("重试") { flow.retryFailure(id) }; Button("移除") { flow.removeFailure(id) } }.font(.footnote).disabled(flow.busy)
+                HStack { Text(flow.failures[id] ?? "照片读取失败"); Spacer(); Button("重试") { flow.retryFailure(id) }; Button("移除") { flow.removeFailure(id) } }.font(.footnote).disabled(flow.isSubmitting)
             }
             NavigationLink(value: Route.story) { Label(flow.draft.story.isEmpty ? "写点故事（选填）" : "编辑故事", systemImage: "square.and.pencil") }
-            Button("丢弃这次草稿", role: .destructive) { discardsDraft = true }.font(.footnote).disabled(flow.busy)
+            Button("丢弃这次草稿", role: .destructive) { discardsDraft = true }.font(.footnote).disabled(flow.isSubmitting)
         }
         .safeAreaInset(edge: .bottom) { footer("下一步 · 搭配贴纸", disabled: !flow.canContinue) { path.append(.stickers) } }
-        .photosPicker(isPresented: $picking, selection: $photos, maxSelectionCount: max(1, 30 - flow.draft.photos.count), selectionBehavior: .ordered, matching: .images)
+        .photosPicker(isPresented: $picking, selection: $photos, maxSelectionCount: max(1, 30 - flow.selectedPhotoCount), selectionBehavior: .ordered, matching: .images)
         .onChange(of: photos) { _, values in guard !values.isEmpty else { return }; photos = []; flow.importPhotos(values) }
     }
     @ViewBuilder private func thumbnail(_ file: String) -> some View {
@@ -174,8 +182,8 @@ struct DiaryAICreationSheet: View {
                 Picker("主题", selection: Binding(get: { flow.draft.theme }, set: { flow.setTheme($0) })) {
                     ForEach(availableThemes, id: \.self) { Text($0) }
                 }.pickerStyle(.menu)
-                Spacer(); Text("已选 \(flow.draft.stickers.count)/8").font(.subheadline.monospacedDigit())
-            }.disabled(flow.busy)
+                Spacer(); Text("已选 \(flow.selectedStickerCount)/8").font(.subheadline.monospacedDigit())
+            }.disabled(flow.isSubmitting)
             VStack(spacing: 12) {
                 HStack { Image(systemName: "sparkles"); Text("今天的贴纸搭配").font(.headline); Spacer(); Circle().fill(ink).frame(width: 7, height: 7) }.foregroundStyle(ink)
                 LazyVGrid(columns: columns, spacing: 14) {
@@ -183,7 +191,7 @@ struct DiaryAICreationSheet: View {
                         stickerCard(sticker)
                     }
                     NavigationLink(value: Route.library) { Label("添加", systemImage: "plus").frame(maxWidth: .infinity, minHeight: 110) }.disabled(flow.draft.stickers.count >= 8)
-                }.disabled(flow.busy)
+                }.disabled(flow.isSubmitting)
                 if flow.draft.stickers.isEmpty { Text("也可以不加贴纸，留白同样好看。").font(.footnote).foregroundStyle(.secondary) }
             }.padding(16).background(ink.opacity(0.08), in: RoundedRectangle(cornerRadius: 24))
                 .overlay(RoundedRectangle(cornerRadius: 24).stroke(ink.opacity(0.15), lineWidth: 2))
@@ -195,10 +203,10 @@ struct DiaryAICreationSheet: View {
             }
             if flow.loadingCatalog { ProgressView("正在寻找贴纸…") }
             if flow.candidates.isEmpty && !flow.loadingCatalog { Button("重新加载贴纸") { flow.loadCatalog() } }
-            HStack { Button("撤销上次操作") { flow.undoLast() }.disabled(!flow.undoAvailable || flow.busy); Spacer(); Button("不用贴纸") { flow.skipStickers(); path.append(.design) }.disabled(flow.busy) }.font(.footnote)
-            if flow.busy { Button("取消本次准备") { flow.cancelOperation() } }
+            HStack { Button("撤销上次操作") { flow.undoLast() }.disabled(!flow.undoAvailable || flow.isSubmitting); Spacer(); Button("不用贴纸") { flow.skipStickers(); path.append(.design) }.disabled(flow.isSubmitting) }.font(.footnote)
+            if flow.busy { Button("取消本次准备") { flow.cancelStickerOperation() } }
         }
-        .safeAreaInset(edge: .bottom) { footer("下一步 · 选择排版", disabled: flow.busy || flow.saveError != nil) { path.append(.design) } }
+        .safeAreaInset(edge: .bottom) { footer("下一步 · 选择排版", disabled: flow.isSubmitting || flow.saveError != nil) { path.append(.design) } }
         .task { flow.loadCatalog() }
     }
     private var availableThemes: [String] {
@@ -249,7 +257,7 @@ VStack(spacing: 4) {
             if librarySource == "我的" {
                 LazyVGrid(columns: columns, spacing: 16) {
                     ForEach(flow.personalItems) { item in
-                        let selected = flow.draft.stickers.contains { $0.id == "personal." + item.id }
+                        let selected = flow.pendingStickerIDs.contains("personal." + item.id) || flow.draft.stickers.contains { $0.id == "personal." + item.id }
                         Button {
                             flow.addPersonal(item) { if path.last == .library { path.removeLast() } }
                         } label: {
@@ -257,7 +265,7 @@ VStack(spacing: 4) {
                                 CachedPreviewImage(request: PersonalStickerService.imageRequest(item)).frame(height: 100)
                                 Text(selected ? "已添加" : "添加这张").font(.caption)
                             }
-                        }.disabled(selected || flow.busy || flow.draft.stickers.count >= 8)
+                        }.disabled(selected || flow.isSubmitting || flow.selectedStickerCount >= 8)
                     }
                 }
                 if flow.personalItems.isEmpty { Text("还没有制作过贴纸，可先选择推荐贴纸。").font(.footnote).foregroundStyle(.secondary) }
@@ -266,7 +274,7 @@ VStack(spacing: 4) {
             } else {
             LazyVGrid(columns: columns, spacing: 16) {
                 ForEach(libraryItems) { item in
-                    let selected = flow.draft.stickers.contains { $0.id == item.id }
+                    let selected = flow.pendingStickerIDs.contains(item.id) || flow.draft.stickers.contains { $0.id == item.id }
                     Button {
                         flow.addSticker(item) { if path.last == .library { path.removeLast() } }
                     } label: {
@@ -275,7 +283,7 @@ VStack(spacing: 4) {
                                 .frame(height: 100)
                             Text(selected ? "已添加" : item.name).font(.caption).lineLimit(2)
                         }
-                    }.disabled(selected || flow.busy || flow.draft.stickers.count >= 8)
+                    }.disabled(selected || flow.isSubmitting || flow.selectedStickerCount >= 8)
                 }
             }
             }
@@ -291,6 +299,13 @@ VStack(spacing: 4) {
             if !flow.draft.stickers.isEmpty {
                 ScrollView(.horizontal) { HStack { ForEach(flow.draft.stickers) { sticker in thumbnail(sticker.filename).frame(width: 48, height: 48) } } }
             }
+            if flow.preparingMaterials {
+                ProgressView("正在准备素材 \(flow.preparedCount)/\(flow.draft.photos.count + flow.draft.stickers.count)")
+                    .font(.caption)
+            } else if !flow.preparationFailures.isEmpty {
+                Text("有 \(flow.preparationFailures.count) 项素材准备失败，可重试或返回移除。").font(.caption).foregroundStyle(.orange)
+                Button("重试准备素材") { flow.resumePreparation() }
+            }
             Text("排版示意，制作后可继续调整。贴纸会融入正式构图。").font(.caption).foregroundStyle(.secondary)
             if flow.draft.photos.count > 8 { Text("照片较多，成品中会较小；可返回删减或调整主照。").font(.footnote).foregroundStyle(.orange) }
             DiaryAIDesignChooser(selection: Binding(get: { flow.design }, set: { flow.setDesign($0) }), photos: flow.photoPreviews)
@@ -298,7 +313,7 @@ VStack(spacing: 4) {
         }
         .navigationBarBackButtonHidden(submitting)
         .safeAreaInset(edge: .bottom) {
-            footer(submitting ? "正在准备制作…" : "开始制作", disabled: !flow.canContinue || submitting) {
+            footer(submitting ? (flow.preparingMaterials ? "正在准备素材 \(flow.preparedCount)/\(flow.draft.photos.count + flow.draft.stickers.count)…" : flow.status) : "开始制作", disabled: !flow.canContinue || submitting) {
                 submitting = true
                 Task {
                     if await flow.submit() { submitted() } else { submitting = false }

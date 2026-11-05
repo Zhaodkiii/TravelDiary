@@ -81,7 +81,7 @@ struct DiaryPresetTests {
         let book = try await store.createBook(title: "正方形", preset: .square)
         let local = DiaryDocumentStore(ownerID: "owner", baseDirectory: base, bookID: book.id)
         var original = DiaryDocument(); original.bookID = book.id
-        original.objects[original.rootContentID]?.referenceSize = book.defaultPageSize
+        original.objects[original.rootContentID]?.referenceSize = DiaryBook.coverSize
         try await local.save(original)
         try await local.setCover(original.id)
         let current = try await local.loadBook()

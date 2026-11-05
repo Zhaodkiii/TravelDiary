@@ -8,6 +8,7 @@ import UIKit
 struct DiaryEditorScreen: View {
     @ObservedObject var session: DiaryEditorSession
     var entranceOnRightPage = false
+    var isCoverDraft = false
     var creationRequest: DiaryAIRequest? = nil
     var creationAutoStart = false
     var onNewPage: (() async throws -> Void)? = nil
@@ -217,13 +218,23 @@ struct DiaryEditorScreen: View {
                 if aiMode {
                     Button("关闭", action: closeAIEditor)
                         .disabled(enteringCreation || !session.aiWorkspace.preparingPhotos.isEmpty)
-                } else { Button("完成") { Task { await finishEditor() } }
+                } else { Button(isCoverDraft ? "完成并设为封面" : "完成") { Task { await finishEditor() } }
                 if !session.isRoot { Button("取消") { Task { await session.cancelEditor(); dismiss() } } }
                 }
             }
             .disabled(session.busy || importingCameraPhotos || session.aiWorkspace.addingMaterials)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
+            if isCoverDraft && !aiMode {
+                Button("保存草稿并关闭") {
+                    Task {
+                        do {
+                            if try await discardEmptyDraft?() == true { dismiss() }
+                            else if await session.close() { dismiss() }
+                        } catch { session.errorMessage = error.localizedDescription }
+                    }
+                }.disabled(session.busy || closingAIEditor)
+            }
             if onNewPage != nil && !aiMode {
                 Button(creatingNewPage ? "新建中…" : "新建页", systemImage: "plus.square") {
                     if session.document.root.layers.isEmpty && session.document.assets.isEmpty && session.document.root.drawing.isEmpty && session.document.root.background == nil && session.aiWorkspace.objects.isEmpty {

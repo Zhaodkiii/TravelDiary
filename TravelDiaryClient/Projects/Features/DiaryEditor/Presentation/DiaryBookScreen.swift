@@ -6,6 +6,7 @@ struct DiaryBookScreen: View {
     let ownerID: String
     @State private var book: DiaryBook
     @State private var store: DiaryDocumentStore
+    @State private var makingCover = false
     @State private var editor: DiaryEditorSession?
     @State private var photo: PhotosPickerItem?
     @State private var pickingPhoto = false
@@ -40,6 +41,13 @@ struct DiaryBookScreen: View {
         ScrollViewReader { scrollProxy in
         GeometryReader { viewport in
         ScrollView {
+            if book.effectiveCover == nil {
+                Button { makingCover = true } label: {
+                    Label(book.coverDraft == nil ? "添加封面" : "继续制作封面", systemImage: "plus.rectangle.portrait")
+                        .frame(maxWidth: .infinity).frame(height: 120)
+                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 16))
+                }.padding()
+            }
             if book.pages.isEmpty {
                 ContentUnavailableView("新建第一页", systemImage: "doc.badge.plus", description: Text("从空白画布或一张照片开始。"))
                     .padding(.top, 50)
@@ -129,7 +137,7 @@ struct DiaryBookScreen: View {
                     readingID = book.contentPages.first?.id; reading = true
                 }.disabled(book.contentPages.isEmpty)
             } label: { Image(systemName: "book") }
-                .disabled(book.pages.isEmpty).accessibilityLabel("阅读整本")
+                .accessibilityLabel("阅读整本")
             Menu {
                 Button("导出手帐", systemImage: "square.and.arrow.up") { showingExport = true }
                     .disabled(book.pages.isEmpty || draggingPage != nil)
@@ -144,7 +152,10 @@ struct DiaryBookScreen: View {
                         }
                     }
                 }
-                Button("自动使用第一页作封面") { perform { try await store.setCover(nil) } }
+                Button(book.coverDraft == nil ? "制作新封面" : "继续制作封面") { makingCover = true }
+                if book.effectiveCover != nil {
+                    Button("移除封面", role: .destructive) { perform { try await store.setCover(nil) } }
+                }
                 Button("最近删除（\(book.trashedPages.count)）") { showingTrash = true }
             } label: { Image(systemName: "ellipsis.circle") }
         }
@@ -168,6 +179,9 @@ struct DiaryBookScreen: View {
                 } catch { message = error.localizedDescription }
                 busy = false; photo = nil
             }
+        }
+        .fullScreenCover(isPresented: $makingCover, onDismiss: { Task { await refresh() } }) {
+            DiaryCoverEditorScreen(store: store)
         }
         .fullScreenCover(item: $editor, onDismiss: { Task { await refresh() } }) { session in
             DiaryEditorScreen(session: session)
@@ -216,7 +230,7 @@ struct DiaryBookScreen: View {
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { Task { await open(page) } }
             HStack {
-                Text(page.title.isEmpty ? "第 \(index + 1) 页" : page.title).font(.subheadline)
+                Text(page.id == book.coverPageID || page.title.isEmpty ? book.pageLabel(page) : page.title).font(.subheadline)
                 Spacer()
                 if book.effectiveCover?.id == page.id { Image(systemName: "book.closed.fill").foregroundStyle(.orange) }
                 if book.shellPageID == page.id { Text("外壳").font(.caption).foregroundStyle(.secondary) }
@@ -304,11 +318,20 @@ struct DiaryBookScreen: View {
             if book.shellPageID == page.id {
                 Button("取消外壳") { perform { try await store.setShell(nil) } }
             } else {
-                Button("设为外壳") { perform { try await store.setShell(page.id) } }
+                Button("设为外壳") { perform { try await store.setShell(page.id) } }.disabled(page.id == book.coverPageID)
             }
-            Button("设为封面") { perform { try await store.setCover(page.id) } }
-            Button("前移一页") { perform { try await store.movePage(page.id, forward: false) } }.disabled(index == 0)
-            Button("后移一页") { perform { try await store.movePage(page.id, forward: true) } }.disabled(index == book.pages.count - 1)
+            if page.id != book.coverPageID {
+                Button("复制为封面") { perform { try await store.copyAsCover(page.id) } }
+                    .disabled(!page.canBeCover || page.id == book.shellPageID)
+                Button("移为封面") { perform { try await store.setCover(page.id) } }
+                    .disabled(!page.canBeCover || page.id == book.shellPageID || page.presetSpreadID != nil)
+                if !page.canBeCover { Text("封面需使用竖版单页") }
+            } else {
+                Button("制作新封面") { makingCover = true }
+                Button("移除封面", role: .destructive) { perform { try await store.setCover(nil) } }
+            }
+            Button("前移一页") { perform { try await store.movePage(page.id, forward: false) } }.disabled(index == 0 || page.id == book.coverPageID || book.pages[index - 1].id == book.coverPageID)
+            Button("后移一页") { perform { try await store.movePage(page.id, forward: true) } }.disabled(index == book.pages.count - 1 || page.id == book.coverPageID)
             Button("移到最近删除", role: .destructive) { deleting = page }
         } label: { Image(systemName: "ellipsis") }
     }
@@ -389,7 +412,7 @@ private struct DiaryBookReaderScreen: View {
     var body: some View {
         NavigationStack {
             pageTabs
-                .navigationTitle("\(currentIndex + 1) / \(pages.count)")
+                .navigationTitle(pages.indices.contains(currentIndex) ? (currentBook ?? book).pageLabel(pages[currentIndex]) : "暂无页面")
                 .toolbar { readerToolbar }
                 .fullScreenCover(item: $editor, onDismiss: {
                     Task {
@@ -443,4 +466,51 @@ private struct DiaryPageSortFrames: PreferenceKey {
 private struct DiaryPageDeleteFrame: PreferenceKey {
     static let defaultValue = CGRect.zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
+}
+
+/// A cover is published only by the explicit finish action. Autosaves remain drafts.
+struct DiaryCoverEditorScreen: View {
+    let store: DiaryDocumentStore
+    @State private var session: DiaryEditorSession?
+    @State private var expectedCover: UUID?
+    @State private var error: String?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Group {
+            if let session {
+                DiaryEditorScreen(session: session, entranceOnRightPage: true, isCoverDraft: true,
+                    discardEmptyDraft: {
+                        let root = session.document.root
+                        guard root.layers.isEmpty, root.drawing.isEmpty, root.background == nil else { return false }
+                        await session.discardCreationSession()
+                        do { try await store.discardCoverDraft(session.document.id) }
+                        catch { session.resumeAfterFailedDiscard(); throw error }
+                        return true
+                    }, onFinished: {
+                        try await store.finishCoverDraft(session.document.id, replacing: expectedCover)
+                    })
+            } else {
+                NavigationStack {
+                    VStack(spacing: 16) {
+                        if let error {
+                            Text(error)
+                            Button("重试") { Task { await prepare() } }
+                        } else { ProgressView("正在准备封面…") }
+                    }
+                    .navigationTitle("制作封面")
+                    .toolbar { Button("关闭") { dismiss() } }
+                }
+            }
+        }.task { await prepare() }
+    }
+    private func prepare() async {
+        guard session == nil else { return }
+        error = nil
+        do {
+            expectedCover = try await store.loadBook().coverPageID
+            let loaded = try await store.prepareCoverDraft()
+            session = DiaryEditorSession(document: loaded.document, images: loaded.images, store: store)
+        } catch { self.error = error.localizedDescription }
+    }
 }

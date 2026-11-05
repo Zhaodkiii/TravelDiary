@@ -33,7 +33,7 @@ nonisolated enum DiaryStickerPlacement {
 }
 
 extension DiaryStickerPlacement {
-    @MainActor static func trimmed(_ image: UIImage) -> UIImage {
+    nonisolated static func trimmed(_ image: UIImage) -> UIImage {
         let factor = min(1, 512 / max(image.size.width, image.size.height))
         let width = max(1, Int(image.size.width * factor)), height = max(1, Int(image.size.height * factor))
         var bytes = [UInt8](repeating: 0, count: width * height * 4)

@@ -253,15 +253,21 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             }
         } catch { active = false; self.error = error.localizedDescription; source.errorMessage = error.localizedDescription }
     }
-    private func setup(_ document: DiaryDocument) async throws {
+    private func setup(_ document: DiaryDocument, preparedImages: [UUID: UIImage] = [:]) async throws {
         guard let source else { throw DiaryAIError.invalid("编辑器已关闭") }
-        var images = source.images
+        var images = source.images.merging(preparedImages) { _, new in new }
         for (id, asset) in document.assets where images[id] == nil { images[id] = try await source.store.loadOriginalImage(asset, documentID: document.id) }
         let session = DiaryEditorSession(document: document, images: images, store: source.store, contentID: source.contentID)
         session.aiTransientSession = true; session.selectedID = source.selectedID
         working = session; let adapter = DiaryEditorAIBridge(session); bridge = adapter
         objects = adapter.objectChoices
-        for object in objects where thumbnails[object.id] == nil {
+        let missing = Self.creationThumbnails(session, excluding: Set(thumbnails.keys))
+        thumbnails.merge(missing) { _, new in new }
+    }
+    static func creationThumbnails(_ session: DiaryEditorSession, excluding: Set<UUID> = []) -> [UUID: UIImage] {
+        let document = session.document, images = session.images
+        var result: [UUID: UIImage] = [:]
+        for object in DiaryEditorAIBridge(session).objectChoices where !excluding.contains(object.id) {
             if let outer = document.layer(object.id) {
                 let siblings = document.objects[session.contentID]?.layers ?? []
                 let bounds = DiaryPageRenderer.bounds(outer, document: document, siblings: siblings)
@@ -273,7 +279,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                     thumbnailDocument.objects[session.contentID]?.drawing = Data()
                     let ratio = min(1, 240 / max(bounds.width, bounds.height))
                     let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = false
-                    thumbnails[object.id] = UIGraphicsImageRenderer(size: CGSize(width: bounds.width * ratio, height: bounds.height * ratio), format: format).image { output in
+                    result[object.id] = UIGraphicsImageRenderer(size: CGSize(width: bounds.width * ratio, height: bounds.height * ratio), format: format).image { output in
                         output.cgContext.scaleBy(x: ratio, y: ratio)
                         output.cgContext.translateBy(x: -bounds.minX, y: -bounds.minY)
                         DiaryPageRenderer.draw(thumbnailDocument, contentID: session.contentID, images: images, in: output.cgContext, cacheObjects: false)
@@ -281,6 +287,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 }
             }
         }
+        return result
     }
     private func refresh() async throws {
         guard let bridge else { return }
@@ -302,7 +309,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     }
     /// Prepare every material in an isolated candidate, then durably publish one checkpoint.
     /// A restored submission ID prevents duplicate imports after an interrupted UI handoff.
-    func commitCreation(id: UUID, photos: [Data], stickers: [(Data, String, DiaryMaterialSource?)], heroIndex: Int, photoNotes: [String] = [], request value: DiaryAIRequest) async -> Bool {
+    func commitCreation(id: UUID, photos: [Data], stickers: [(Data, String, DiaryMaterialSource?)], heroIndex: Int, photoNotes: [String] = [], request value: DiaryAIRequest, prepared: DiaryCreationPreparedSubmission? = nil) async -> Bool {
         guard active else { error = "制作会话已关闭，请重新打开。"; return false }
         if creationSubmissionID == id { return true }
         guard active, !running, !addingMaterials, !saving, let working,
@@ -313,16 +320,23 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         defer { addingMaterials = false }
         let capturedOwner = MaterialCatalogRepository.shared.owner
         let sourceDigest = source.flatMap { try? DiaryEditorAIBridge.digest($0.document) }
-        let candidate = DiaryEditorSession(document: working.document, images: working.images, store: working.store, contentID: working.contentID)
+        let candidate = DiaryEditorSession(document: prepared?.document ?? working.document, images: prepared?.images ?? working.images, store: working.store, contentID: working.contentID)
         candidate.aiTransientSession = true
         var photoIDs: [UUID] = []
-        for bytes in photos {
-            let before = Set(DiaryEditorAIBridge(candidate).objectChoices.map(\.id))
-            guard await candidate.importPhotos([bytes]) else { error = candidate.errorMessage; return false }
-            photoIDs += DiaryEditorAIBridge(candidate).objectChoices.filter { $0.role == "photo" && !before.contains($0.id) }.map(\.id)
-        }
-        for (bytes, name, material) in stickers {
-            guard await candidate.importPhoto(bytes, asSticker: true, stickerName: name, materialSource: material) else { error = candidate.errorMessage; return false }
+        if let prepared {
+            guard prepared.document.id == working.document.id,
+                  prepared.contentID == working.contentID,
+                  prepared.photoIDs.count == photos.count else { return false }
+            photoIDs = prepared.photoIDs
+        } else {
+            for bytes in photos {
+                let before = Set(DiaryEditorAIBridge(candidate).objectChoices.map(\.id))
+                guard await candidate.importPhotos([bytes]) else { error = candidate.errorMessage; return false }
+                photoIDs += DiaryEditorAIBridge(candidate).objectChoices.filter { $0.role == "photo" && !before.contains($0.id) }.map(\.id)
+            }
+            for (bytes, name, material) in stickers {
+                guard await candidate.importPhoto(bytes, asSticker: true, stickerName: name, materialSource: material) else { error = candidate.errorMessage; return false }
+            }
         }
         guard !Task.isCancelled, active, self.working === working,
               MaterialCatalogRepository.shared.owner == capturedOwner,
@@ -342,7 +356,8 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             pending = DiaryEditorAIBridge(candidate).objectChoices.filter { $0.role != "background" }.map(\.id)
             checkpoints.append(.init(candidate.document, pending: pending)); version += 1
             creationSubmissionID = id
-            try await setup(candidate.document)
+            if let prepared { thumbnails.merge(prepared.thumbnails) { _, new in new } }
+            try await setup(candidate.document, preparedImages: candidate.images)
             try await refresh()
             try await persist()
             error = nil

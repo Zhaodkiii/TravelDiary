@@ -19,15 +19,16 @@ struct DiaryBookImageExportTests {
         let spread = DiaryPageEntry(id: UUID(), title: "", revisionID: UUID(), size: CGSize(width: 1311, height: 939))
         let single = DiaryPageEntry(id: UUID(), title: "", revisionID: UUID(), size: CGSize(width: 1000, height: 1400))
         book.pages = [spread, single, spread]
-        let pairs = book.readingSpreads
+        let pairs = book.exportSpreads
         #expect(pairs.count == 3)
         #expect(pairs[0][0]?.id == spread.id && pairs[0][1] == nil)
-        #expect(pairs[1][0] == nil && pairs[1][1]?.id == single.id)
+        #expect(pairs[1][0]?.id == single.id && pairs[1][1] == nil)
         #expect(pairs[2][0]?.id == spread.id && pairs[2][1] == nil)
         book.defaultPageSize = DiaryPagePreset.spread.size
         book.pages = [single]
         #expect(book.readingSpreads[0][0] == nil)
-        #expect(book.readingSpreads[0][1]?.id == single.id)
+        #expect(book.readingSpreads[0][1] == nil)
+        #expect(book.readingSpreads[1][0]?.id == single.id)
     }
 
     @Test func fullSpreadRendersBothHalvesWithoutAnEmptyRightLeaf() throws {
@@ -79,6 +80,7 @@ struct DiaryBookImageExportTests {
         var book = DiaryBook(title: "test")
         book.pages = (0..<5).map { _ in DiaryPageEntry(id: UUID(), title: "", revisionID: UUID(), size: CGSize(width: 100, height: 140)) }
         book.shellPageID = book.pages[0].id
+        book.coverPageID = book.pages[1].id
         let pairs = DiaryBookImageExporter.spreadPages(book)
         #expect(pairs.count == 3)
         #expect(pairs[0][0] == nil)
@@ -99,7 +101,7 @@ struct DiaryBookImageExportTests {
         let library = DiaryDocumentStore(ownerID: "spread-tests", baseDirectory: folder)
         let book = try await library.createBook(title: "spread", preset: .square)
         let store = DiaryDocumentStore(ownerID: "spread-tests", baseDirectory: folder, bookID: book.id)
-        for _ in 0..<4 {
+        for _ in 0..<5 {
             var page = DiaryDocument(); page.bookID = book.id
             page.objects[page.rootContentID]?.referenceSize = book.defaultPageSize
             try await store.save(page)

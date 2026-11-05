@@ -23,7 +23,7 @@ struct DiaryBookDestination: View {
     var body: some View {
         Group {
             if let book = book ?? (preparedBook?.id == bookID ? preparedBook : nil) {
-                if managePages || book.pages.isEmpty {
+                if managePages {
                     DiaryBookScreen(ownerID: ownerID, book: book)
                 } else {
                     DiaryPhysicalBookScreen(

@@ -2,8 +2,8 @@ import UIKit
 
 /// 从相框的封闭透明内孔恢复照片区域，外部透明背景和装饰孔洞不能成为照片蒙版。
 /// 仅依赖已随作品保存的相框素材，旧作品重新打开时也能恢复；每个解码版本只识别一次。
-@MainActor enum DiaryPhotoFrameAperture {
-    final class Aperture {
+nonisolated enum DiaryPhotoFrameAperture {
+    final class Aperture: Sendable {
         let source: UIImage
         let mask: UIImage
         let slot: DiaryPhotoSlot
@@ -11,7 +11,7 @@ import UIKit
             self.source = source; self.mask = mask; self.slot = slot
         }
     }
-    private static let cache: NSCache<NSString, Aperture> = {
+    nonisolated(unsafe) private static let cache: NSCache<NSString, Aperture> = {
         let value = NSCache<NSString, Aperture>(); value.totalCostLimit = 24*1024*1024; return value
     }()
 

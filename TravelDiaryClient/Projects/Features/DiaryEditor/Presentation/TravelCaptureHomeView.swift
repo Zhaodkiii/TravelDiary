@@ -14,6 +14,7 @@ struct TravelStyleEditorPresentation: Identifiable {
 /// 随记只负责采集与交接，编辑始终使用已有的 DiaryEditorScreen。
 struct TravelCaptureHomeView: View {
     let ownerID: String
+    var onInitialLoad: (() -> Void)? = nil
     let onPresentStyle: (TravelStyleEditorPresentation) -> Void
     @State private var books: [DiaryBook] = []
     @State private var book: DiaryBook?
@@ -75,10 +76,18 @@ struct TravelCaptureHomeView: View {
         }
         .disabled(busy)
         .overlay { if busy { ProgressView("正在准备…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) } }
-        .task { await reload(); if let data = try? Data(contentsOf: pendingURL), let value = UIImage(data: data) {
-            if let target = UserDefaults.standard.stringArray(forKey: captureKey), target.count == 2, let restored = books.first(where: { $0.id.uuidString == target[0] }) { book = restored; pageID = restored.contentPages.first(where: { $0.id.uuidString == target[1] })?.id }
-            image = value; error = nil; reviewPhoto = ReviewPhoto(image: value)
-        } }
+        .task {
+            await reload()
+            guard !Task.isCancelled else { return }
+            if let data = try? Data(contentsOf: pendingURL), let value = UIImage(data: data) {
+                if let target = UserDefaults.standard.stringArray(forKey: captureKey), target.count == 2, let restored = books.first(where: { $0.id.uuidString == target[0] }) { book = restored; pageID = restored.contentPages.first(where: { $0.id.uuidString == target[1] })?.id }
+                image = value; error = nil; reviewPhoto = ReviewPhoto(image: value)
+            }
+            // This is the default tab. Unselected shelf tabs are loaded lazily,
+            // so startup must be able to finish without mounting the bookshelf.
+            // reload() presents recoverable errors too; those must not block entry.
+            onInitialLoad?()
+        }
         .onChange(of: photo) { _, item in
             guard let item else { return }
             Task {

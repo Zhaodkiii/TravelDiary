@@ -134,12 +134,135 @@ struct DiaryStickerDrawEngineTests {
             flow.draft.stickers.append(.init(item: item, filename: name, kept: false))
             flow.images[name] = sticker
         }
+        let preparationStarted = Date()
+        await flow.waitForPreparation()
+        print("CREATION_TIMING prepare-total=\(Date().timeIntervalSince(preparationStarted))")
+        #expect(flow.preparedCount == 8)
+        #expect(flow.preparationBuildCount == 8)
+        let hero = flow.draft.photos[2].id
+        flow.setHero(hero)
+        flow.setPhotoNote(hero, value: "主照片说明")
+        flow.movePhoto(hero, offset: -1)
+        flow.setStory("返回修改故事")
+        await flow.waitForPreparation()
+        #expect(flow.preparationBuildCount == 8, "Metadata changes must reuse prepared materials")
+        flow.cancelOperation()
+        let restored = try DiaryAICreationFlow(session: session)
+        await restored.waitForPreparation()
+        #expect(restored.preparedCount == 8)
+        #expect(restored.preparationBuildCount == 0, "Reopening must restore the prepared cache")
+        restored.cancelOperation()
+        flow.resumePreparation()
         let started = Date()
         #expect(await flow.submit())
         print("CREATION_TIMING submit-total=\(Date().timeIntervalSince(started))")
         #expect(workspace.objects.filter { $0.role == "photo" }.count == 4)
         #expect(workspace.objects.filter { $0.role == "decoration" }.count == 4)
         #expect(flow.draft.submitted)
+        let objectHero = try #require(workspace.currentRequest.heroID)
+        #expect(workspace.currentRequest.creationNotes?[objectHero.uuidString] == "主照片说明")
+    }
+    @Test func preparationRetriesOnlyFailedMaterialsAndRejectsCancelledResults() async throws {
+        let (session, root) = fixture()
+        let flow = try DiaryAICreationFlow(session: session)
+        let oldOwner = MaterialCatalogRepository.shared.owner
+        MaterialCatalogRepository.shared.activate(session.store.ownerID)
+        defer {
+            flow.cancelOperation()
+            MaterialCatalogRepository.shared.activate(oldOwner)
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: flow.directory)
+        }
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 160)).image { ctx in
+            UIColor.red.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 120, height: 160))
+        }
+        let bytes = try #require(image.pngData())
+        for name in ["good", "bad"] {
+            flow.draft.photos.append(.init(filename: name, digest: name, name: name))
+            flow.images[name] = image
+            try (name == "good" ? bytes : Data([0, 1])).write(to: flow.directory.appendingPathComponent(name))
+        }
+        await flow.waitForPreparation()
+        #expect(flow.preparedCount == 1)
+        #expect(flow.preparationFailures.count == 1)
+        try bytes.write(to: flow.directory.appendingPathComponent("bad"))
+        await flow.waitForPreparation()
+        #expect(flow.preparedCount == 2)
+        #expect(flow.preparationBuildCount == 2)
+        #expect(flow.preparationFailures.isEmpty)
+        let removed = flow.draft.photos[0]
+        flow.removePhoto(removed.id)
+        await flow.waitForPreparation()
+        #expect(flow.preparedCount == 1)
+        #expect(flow.preparationBuildCount == 2)
+        flow.draft.photos.append(.init(filename: "cancelled", digest: "cancelled", name: "cancelled"))
+        flow.images["cancelled"] = image
+        try bytes.write(to: flow.directory.appendingPathComponent("cancelled"))
+        flow.resumePreparation()
+        flow.cancelOperation()
+        await Task.yield()
+        #expect(!flow.preparingMaterials)
+        #expect(flow.preparationBuildCount == 2)
+        flow.draft.photos.removeAll { $0.filename == "cancelled" }
+        await flow.waitForPreparation()
+        #expect(flow.preparedCount == 1)
+        #expect(session.document.assets.isEmpty, "Preparation must not publish into the source document")
+    }
+    @Test func fastSubmitWaitsForPhotoLoadingWithoutBlockingNavigation() async throws {
+        let (session, root) = fixture()
+        let flow = try DiaryAICreationFlow(session: session)
+        let owner = MaterialCatalogRepository.shared.owner
+        MaterialCatalogRepository.shared.activate(session.store.ownerID)
+        defer {
+            flow.cancelOperation(); MaterialCatalogRepository.shared.activate(owner)
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: flow.directory)
+        }
+        await session.aiWorkspace.enter(.defaults(.relayout))
+        let bytes = try #require(UIGraphicsImageRenderer(size: CGSize(width: 100, height: 120)).image { context in
+            UIColor.blue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 100, height: 120))
+        }.pngData())
+        let gate = PhotoLoadGate()
+        flow.enqueuePhotoLoads([{ await gate.wait(); return bytes }])
+        #expect(flow.pendingPhotoIDs.count == 1)
+        #expect(flow.canContinue)
+        #expect(!flow.busy)
+        flow.setStep(1); flow.setStory("读取期间编辑"); flow.setStep(2)
+        #expect(flow.draft.step == 2)
+        let submit = Task { await flow.submit() }
+        while !flow.isSubmitting { await Task.yield() }
+        #expect(session.aiWorkspace.objects.isEmpty)
+        #expect(!(await flow.submit()), "Repeated submit must not start a second request")
+        gate.release()
+        #expect(await submit.value)
+        #expect(flow.pendingPhotoIDs.isEmpty)
+        #expect(session.aiWorkspace.objects.filter { $0.role == "photo" }.count == 1)
+        #expect(flow.draft.submitted)
+    }
+    @Test func removedPendingPhotoNeverReturnsAndAdditionalSelectionIsQueued() async throws {
+        let (session, root) = fixture()
+        let flow = try DiaryAICreationFlow(session: session)
+        let owner = MaterialCatalogRepository.shared.owner
+        MaterialCatalogRepository.shared.activate(session.store.ownerID)
+        defer {
+            flow.cancelOperation(); MaterialCatalogRepository.shared.activate(owner)
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: flow.directory)
+        }
+        let bytes = try #require(UIGraphicsImageRenderer(size: CGSize(width: 80, height: 100)).image { _ in }.pngData())
+        let gate = PhotoLoadGate()
+        flow.enqueuePhotoLoads([{ await gate.wait(); return bytes }])
+        let removed = try #require(flow.pendingPhotoIDs.first)
+        await Task.yield()
+        flow.enqueuePhotoLoads([{ bytes }])
+        #expect(flow.selectedPhotoCount == 2)
+        flow.removePhoto(removed)
+        gate.release()
+        // Camera's empty enqueue provides the same queue barrier used by submit.
+        await flow.importCamera([])
+        #expect(flow.draft.photos.count == 1)
+        #expect(!flow.draft.photos.contains { $0.id == removed })
+        #expect(flow.pendingPhotoIDs.isEmpty)
     }
     @Test func invalidCreationNeverPartiallyPublishes() async throws {
         let (session, root) = fixture()
@@ -198,4 +321,14 @@ struct DiaryStickerDrawEngineTests {
         }
     }
 
+}
+
+@MainActor private final class PhotoLoadGate {
+    private var released = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    func wait() async {
+        if released { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func release() { released = true; continuation?.resume(); continuation = nil }
 }

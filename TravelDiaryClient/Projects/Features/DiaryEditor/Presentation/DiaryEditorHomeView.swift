@@ -157,8 +157,8 @@ struct DiaryEditorHomeView: View {
                 if !typeSize.isAccessibilitySize { cover(book).frame(width: 76, height: 100) }
                 VStack(alignment: .leading, spacing: 8) {
                     Text(book.title).font(.headline).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
-                    if let index = book.contentPages.firstIndex(where: { $0.id == recent?.pageID }) {
-                        Text("上次编辑第 \(index + 1) 页").font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
+                    if let page = book.contentPages.first(where: { $0.id == recent?.pageID }) {
+                        Text("上次编辑\(book.pageLabel(page))").font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
                     }
                     Button("继续编辑", systemImage: "pencil") { Task { await resume(book) } }
                         .buttonStyle(.borderedProminent).frame(minHeight: 44)
@@ -177,9 +177,9 @@ struct DiaryEditorHomeView: View {
                     .contentZoomSource(id: book.id, in: bookTransition)
             }.buttonStyle(.plain).accessibilityLabel("打开手帐，\(book.title)")
             HStack(alignment: .top, spacing: 4) {
-                Text("\(book.contentPages.count) 页 · \(updatedLabel(book.updatedAt))")
+                Text("\(book.bodyPageCount) 页 · \(updatedLabel(book.updatedAt))")
                     .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
-                    .accessibilityLabel("\(book.contentPages.count) 页，更新于 \(book.updatedAt.formatted(date: .complete, time: .shortened))")
+                    .accessibilityLabel("\(book.bodyPageCount) 页，更新于 \(book.updatedAt.formatted(date: .complete, time: .shortened))")
                 Spacer(minLength: 0)
                 Menu { bookActions(book) } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
                     .accessibilityLabel("\(book.title)的更多操作")
@@ -201,7 +201,11 @@ struct DiaryEditorHomeView: View {
                         .frame(maxWidth: geometry.size.width - 16, maxHeight: geometry.size.height - 16)
                         .shadow(color: .black.opacity(0.1), radius: 4, y: 3)
                 } else {
-                    Image(systemName: "book.closed").font(.largeTitle).foregroundStyle(DiaryLibraryStyle.accent.opacity(0.6))
+                    VStack(spacing: 12) {
+                        Image(systemName: "book.closed").font(.largeTitle)
+                        Text(book.title).font(.headline).multilineTextAlignment(.center)
+                        Text("待添加封面").font(.caption)
+                    }.padding().foregroundStyle(DiaryLibraryStyle.accent.opacity(0.6))
                 }
             }.frame(width: geometry.size.width, height: geometry.size.height)
         }

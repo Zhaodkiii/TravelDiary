@@ -77,7 +77,10 @@ struct DiaryPageListGrid<Page: Identifiable, Cell: View>: View {
         VStack(alignment: .leading, spacing: 20) {
             if !front.isEmpty {
                 LazyVGrid(columns: [GridItem(.flexible(), alignment: .top), GridItem(.flexible(), alignment: .top)], spacing: 20) {
-                    ForEach(front) { page in cell(page) }
+                    if let shell = front.first(where: { $0.id == shellID }) { cell(shell) }
+                    else { Color.clear.accessibilityHidden(true) }
+                    if let cover = front.first(where: { $0.id == coverID && $0.id != shellID }) { cell(cover) }
+                    else { Color.clear.accessibilityHidden(true) }
                 }
             }
             if !remaining.isEmpty {

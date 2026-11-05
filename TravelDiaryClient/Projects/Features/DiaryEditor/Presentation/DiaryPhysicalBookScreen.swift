@@ -21,6 +21,7 @@ struct DiaryPhysicalBookScreen: View {
     @State private var opened = false
     @State private var spread = 0
     @State private var turningCover = false
+    @State private var makingCover = false
     @State private var editor: DiaryEditorSession?
     @State private var editingRightHalf = false
     @State private var loadingEditor = false
@@ -30,32 +31,20 @@ struct DiaryPhysicalBookScreen: View {
     @State private var photo: PhotosPickerItem?
     @State private var choosingPreset = false
     @State private var showingExport = false
-    private var continuousSpread: Bool { DiaryCanvasLayout.infer(from: book.defaultPageSize) == .spread }
-    private var readingLeaves: [DiaryReadingLeaf] { DiaryReadingLeaf.project(book.contentPages) }
+    private var continuousSpread: Bool { true }
+    private var readingLeaves: [DiaryReadingLeaf] { DiaryReadingLeaf.project(book) }
     private var innerPages: [DiaryPageEntry] { book.contentPages }
-    private var contentSpreadCount: Int { continuousSpread ? readingLeaves.count / 2 : (innerPages.count + 2) / 2 }
-    // An odd number of pages needs one virtual blank spread; an even number already
-    // has a padded blank leaf on its final spread. Neither case gets a spread after it.
-    private var spreadCount: Int { continuousSpread ? max(1, contentSpreadCount) : contentSpreadCount + (innerPages.count.isMultiple(of: 2) ? 0 : 1) }
-    private var paperRatio: CGFloat {
-        if continuousSpread { return 2185.0 / 3130.0 }
-        let size = innerPages.first?.size ?? book.defaultPageSize
-        return max(size.width, 1) / max(size.height, 1)
-    }
+    private var contentSpreadCount: Int { readingLeaves.count / 2 }
+    private var spreadCount: Int { contentSpreadCount + 1 }
+    private var paperRatio: CGFloat { DiaryBook.coverSize.width / DiaryBook.coverSize.height }
 
     init(book: DiaryBook, store: DiaryDocumentStore, initialPageID: UUID? = nil, onShowList: (() -> Void)? = nil) {
         _book = State(initialValue: book)
         self.store = store
         self.onShowList = onShowList
-        let index = initialPageID.flatMap { id in book.contentPages.firstIndex { $0.id == id } }
-        let position: Int
-        if let index, DiaryCanvasLayout.infer(from: book.defaultPageSize) == .spread {
-            position = (DiaryReadingLeaf.project(book.contentPages).firstIndex { $0.page?.id == book.contentPages[index].id } ?? 0) / 2
-        } else {
-            position = index.map { ($0 + 1) / 2 } ?? 0
-        }
+        let position = initialPageID.flatMap { id in DiaryReadingLeaf.project(book).firstIndex { $0.page?.id == id } }.map { $0 / 2 } ?? 0
         _spread = State(initialValue: position)
-        _opened = State(initialValue: index != nil || book.shell == nil)
+        _opened = State(initialValue: initialPageID != nil || book.shell == nil)
     }
 
     var body: some View {
@@ -75,7 +64,7 @@ struct DiaryPhysicalBookScreen: View {
                             Image(systemName: "chevron.left")
                         }.disabled(!opened || (spread == 0 && book.shell == nil)).accessibilityLabel(spread == 0 ? "合上手帐" : "上一跨页")
                         Spacer()
-                        Text(opened ? (spread >= contentSpreadCount ? "添加页面" : "\(spreadTitle(spread)) / \(continuousSpread ? readingLeaves.count : innerPages.count)") : "外壳")
+                        Text(opened ? (spread == 0 || spread >= contentSpreadCount ? spreadTitle(spread) : "\(spreadTitle(spread)) / \(book.bodyPageCount)") : "外壳")
                             .font(.subheadline.monospacedDigit())
                         Spacer()
                         Button { if opened { spread += 1 } else { openBook() } } label: {
@@ -155,6 +144,9 @@ struct DiaryPhysicalBookScreen: View {
                     if let last = innerPages.last { reveal(last.id) }
                 }
             }
+            .fullScreenCover(isPresented: $makingCover, onDismiss: { Task { await refreshAfterEditing() } }) {
+                DiaryCoverEditorScreen(store: store)
+            }
             .fullScreenCover(item: $editor, onDismiss: {
                 Task { await refreshAfterEditing() }
             }) { session in
@@ -230,7 +222,7 @@ struct DiaryPhysicalBookScreen: View {
                         let size = DiaryBookStageLayout.openSize(viewport: stageViewport, paperRatio: paperRatio)
                         HStack(alignment: .top, spacing: 16) {
                             if continuousSpread {
-                                let ids = Set(readingLeaves[(spread * 2)..<min(spread * 2 + 2, readingLeaves.count)].compactMap { $0.page?.id })
+                                let ids = Set(readingLeaves.dropFirst(spread * 2).prefix(2).compactMap { $0.page?.id })
                                 ForEach(innerPages.filter { ids.contains($0.id) }) { page in
                                     readerPhotos(at: innerPages.firstIndex(where: { $0.id == page.id }) ?? 0, title: "当前页面照片")
                                 }
@@ -268,7 +260,7 @@ struct DiaryPhysicalBookScreen: View {
         } else {
             DiaryBookOpeningStage(progress: opened ? 1 : 0, viewport: viewport,
                                   paperRatio: paperRatio, cover: book.shell,
-                                  firstPage: innerPages.first, store: store) {
+                                  firstPage: book.effectiveCover, store: store) {
                 curlBook
             }
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.85), value: opened)
@@ -295,6 +287,7 @@ struct DiaryPhysicalBookScreen: View {
     }
     private func handleAdd(_ action: DiaryReaderAddAction) {
         switch action {
+        case .cover: makingCover = true
         case .blank: Task { await createPage(data: nil) }
         case .photo: pickingPhoto = true
         case .preset: choosingPreset = true
@@ -343,9 +336,11 @@ struct DiaryPhysicalBookScreen: View {
     private func preloadNeighboringSpreads() async {
         guard opened else { return }
         // 当前跨页先完成，避免预取抢在可见页面之前排入素材读取队列。
-        let pages = innerPages
-        let current = continuousSpread ? [spread] : [spread * 2 - 1, spread * 2]
-        let neighbors = continuousSpread ? [spread - 1, spread + 1] : [spread * 2 + 1, spread * 2 + 2, spread * 2 - 3, spread * 2 - 2]
+        let currentPages = readingLeaves.dropFirst(spread * 2).prefix(2).compactMap { $0.page }
+        let neighboringPages = readingLeaves.dropFirst(max(0, spread * 2 - 2)).prefix(6).compactMap { $0.page }
+        let pages = book.contentPages
+        let current = pages.indices.filter { index in currentPages.contains { $0.id == pages[index].id } }
+        let neighbors = pages.indices.filter { index in neighboringPages.contains { $0.id == pages[index].id } && !current.contains(index) }
         do {
             for index in current where pages.indices.contains(index) {
                 try Task.checkCancellation()
@@ -383,7 +378,9 @@ struct DiaryPhysicalBookScreen: View {
     }
 
     @ViewBuilder private func thumbnail(_ index: Int) -> some View {
-        if continuousSpread, readingLeaves.indices.contains(index + 1) {
+        if index == -1 {
+            DiaryBookLining().frame(width: 50, height: 76)
+        } else if continuousSpread, readingLeaves.indices.contains(index + 1) {
             let leaf = readingLeaves[index + 1]
             if let page = leaf.page {
                 if let left = leaf.left { DiarySpreadHalfPreview(page: page, store: store, left: left).frame(width: 50, height: 76) }
@@ -398,12 +395,14 @@ struct DiaryPhysicalBookScreen: View {
         }
     }
     private func spreadTitle(_ index: Int) -> String {
-        if continuousSpread { return "第 \(index * 2 + 1)–\(index * 2 + 2) 页" }
+        if index == 0 { return book.effectiveCover == nil ? "添加封面" : "封面" }
         if index >= contentSpreadCount { return "添加页面" }
-        if index == 0 { return innerPages.isEmpty ? "添加页面" : "第 1 页" }
-        let first = index * 2
-        let last = min(first + 1, innerPages.count)
-        return first == last ? "第 \(first) 页" : "第 \(first)–\(last) 页"
+        let shown = readingLeaves.dropFirst(index * 2).prefix(2).compactMap { $0.page }
+        let ids = Set(shown.map(\.id))
+        let body = book.bodyPages
+        let first = body.prefix { !ids.contains($0.id) }.reduce(1) { $0 + ($1.canvasLayout == .spread ? 2 : 1) }
+        let count = body.filter { ids.contains($0.id) }.reduce(0) { $0 + ($1.canvasLayout == .spread ? 2 : 1) }
+        return count <= 1 ? "第 \(first) 页" : "第 \(first)–\(first + count - 1) 页"
     }
     private func openBook() {
         guard spreadCount > 0, !turningCover else { return }
@@ -449,7 +448,7 @@ struct DiaryBindingRings: View {
 
 /// UIKit 中置书脊始终显示两个控制器，内封皮占首位，末尾缺页时补齐留白。
 /// 原生 pageCurl 提供交互卷页、取消回弹和纸张背面，无需模拟整张跨页滑动。
-private enum DiaryReaderAddAction { case blank, photo, preset }
+private enum DiaryReaderAddAction { case cover, blank, photo, preset }
 
 private struct DiaryCurlBook: View {
     let pages: [DiaryPageEntry]
@@ -776,13 +775,13 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
         self.selectedPage = page
         self.onSelect = onSelect
         self.onAdd = onAdd
-        super.init(rootView: DiaryBookPaper(page: page, store: store, left: index.isMultiple(of: 2), insideCover: !continuousSpread && index == 0, splitHalf: splitHalf, showsAddPlaceholder: showsAddPlaceholder, plainPaper: plainPaper, playback: playback))
+        super.init(rootView: DiaryBookPaper(page: page, store: store, left: index.isMultiple(of: 2), insideCover: index == 0, coverSlot: index == 1, splitHalf: splitHalf, showsAddPlaceholder: showsAddPlaceholder, plainPaper: plainPaper, playback: playback))
         view.backgroundColor = .clear
         safeAreaRegions = []
         if showsAddPlaceholder && (page != nil || index > 0) {
             let tap = UITapGestureRecognizer(target: self, action: #selector(selectPage(_:)))
             view.addGestureRecognizer(tap)
-            view.accessibilityHint = page == nil ? "轻点添加页面" : "轻点编辑这一页"
+            view.accessibilityHint = page == nil ? (index == 1 ? "轻点添加封面" : "轻点添加页面") : "轻点编辑这一页"
         }
     }
     private func updateReadingSurface() {
@@ -809,6 +808,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
         guard canSelect() else { return }
         finishReading()
         if let selectedPage { onSelect(selectedPage) }
+        else if index == 1 { onAdd(.cover) }
         else if index > 0 { showAddMenu(at: gesture.location(in: view)) }
     }
     private func showAddMenu(at point: CGPoint) {
@@ -846,6 +846,7 @@ private struct DiaryBookPaper: View {
     let store: DiaryDocumentStore
     let left: Bool
     let insideCover: Bool
+    let coverSlot: Bool
     let splitHalf: Bool?
     let showsAddPlaceholder: Bool
     let plainPaper: Bool
@@ -866,7 +867,7 @@ private struct DiaryBookPaper: View {
                     DiaryPagePreview(page: page, store: store, large: true, undecorated: true)
                 }
             } else if showsAddPlaceholder {
-                Label("添加页面", systemImage: "plus.circle").font(.caption).foregroundStyle(.brown.opacity(0.5))
+                Label(coverSlot ? "添加封面" : "添加页面", systemImage: "plus.circle").font(.caption).foregroundStyle(.brown.opacity(0.5))
             }
             HStack(spacing: 0) {
                 if left { Spacer(minLength: 0) }
@@ -907,16 +908,12 @@ private struct DiarySpreadHalfPreview: View {
 private struct DiaryReadingLeaf {
     let page: DiaryPageEntry?
     let left: Bool?
-    static func project(_ pages: [DiaryPageEntry]) -> [Self] {
-        var result: [Self] = []
-        for page in pages {
-            let spread = page.canvasLayout == .spread
-            if spread {
-                if !result.count.isMultiple(of: 2) { result.append(Self(page: nil, left: nil)) }
-                result.append(Self(page: page, left: true)); result.append(Self(page: page, left: false))
-            } else { result.append(Self(page: page, left: nil)) }
+    static func project(_ book: DiaryBook) -> [Self] {
+        book.readingSpreads.flatMap { pair in
+            if let page = pair[0], page.canvasLayout == .spread {
+                return [Self(page: page, left: true), Self(page: page, left: false)]
+            }
+            return pair.map { Self(page: $0, left: nil) }
         }
-        if !result.count.isMultiple(of: 2) { result.append(Self(page: nil, left: nil)) }
-        return result
     }
 }

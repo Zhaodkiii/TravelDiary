@@ -221,7 +221,12 @@ nonisolated final class DiaryDocumentStore: Sendable {
             if let bookID = self.bookID {
                 var book = try self.readBook(bookID)
                 let revision = UUID(uuidString: path.split(separator: "/")[1].description)!
-                if let index = book.pages.firstIndex(where: { $0.id == document.id }) {
+                if var draft = book.coverDraft, draft.id == document.id {
+                    guard self.opened.values[document.id] == draft.revisionID,
+                          document.root.referenceSize == DiaryBook.coverSize else { throw DiaryEditorError.pageConflict }
+                    draft.revisionID = revision; draft.updatedAt = Date()
+                    book.coverDraft = draft
+                } else if let index = book.pages.firstIndex(where: { $0.id == document.id }) {
                     guard self.opened.values[document.id] == book.pages[index].revisionID else { throw DiaryEditorError.pageConflict.logged() }
                     book.pages[index].size = document.root.referenceSize
                     book.pages[index].revisionID = revision
@@ -289,7 +294,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
             let path: String
             if let bookID = self.bookID {
                 let book = try self.readBook(bookID)
-                guard let page = book.pages.first(where: { $0.id == id }) else { throw DiaryEditorError.missingResource.logged() }
+                guard let page = (book.pages + [book.coverDraft].compactMap { $0 }).first(where: { $0.id == id }) else { throw DiaryEditorError.missingResource.logged() }
                 path = "revisions/\(page.revisionID.uuidString)/manifest.json"
                 self.opened.values[id] = page.revisionID
             } else {
@@ -435,7 +440,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
             try JSONEncoder().encode(book).write(to: destination.appendingPathComponent("book.json"), options: .atomic)
             let pagesRoot = destination.appendingPathComponent("pages", isDirectory: true)
             try fm.createDirectory(at: pagesRoot, withIntermediateDirectories: true)
-            for page in book.pages + book.trashedPages.map(\.entry) {
+            for page in book.pages + book.trashedPages.map(\.entry) + [book.coverDraft].compactMap { $0 } {
                 try Task.checkCancellation()
                 let sourcePage = self.directory(page.id)
                 let targetPage = pagesRoot.appendingPathComponent(page.id.uuidString, isDirectory: true)
@@ -783,7 +788,7 @@ extension DiaryDocumentStore {
                 entry.presetSpreadID = page.spreadID; entry.presetSpreadSide = page.spreadSide
                 book.pages.append(entry)
             }
-            book.coverPageID = draft.pages.first(where: { $0.role == .cover })?.id ?? draft.pages.first?.id
+            book.coverPageID = draft.pages.first(where: { $0.role == .cover }).flatMap { candidate in book.pages.first(where: { $0.id == candidate.id && $0.canBeCover })?.id }
             try cancellation?.check()
             let prepared = try target.publish(book)
             try FileManager.default.moveItem(at: target.root, to: self.libraryRoot.appendingPathComponent(draft.id.uuidString))
@@ -804,14 +809,78 @@ extension DiaryDocumentStore {
             book.title = name
         }
     }
+    /// A draft has its own catalog reference and is never a body page or an export page.
+    func prepareCoverDraft() async throws -> Loaded {
+        let id = try await run {
+            guard let bookID = self.bookID else { throw DiaryEditorError.invalidDocument }
+            var book = try self.readBook(bookID)
+            if let draft = book.coverDraft { return draft.id }
+            var document = DiaryDocument()
+            document.bookID = bookID
+            document.objects[document.rootContentID]?.referenceSize = DiaryBook.coverSize
+            let path = try self.writeSnapshot(document, prefix: "revisions", directory: self.directory(document.id))
+            let revision = UUID(uuidString: String(path.split(separator: "/")[1]))!
+            book.coverDraft = DiaryPageEntry(id: document.id, title: "封面草稿", revisionID: revision, size: DiaryBook.coverSize)
+            try self.publish(book)
+            return document.id
+        }
+        return try await load(id)
+    }
+    nonisolated func discardCoverDraft(_ id: UUID) async throws {
+        try await mutateBook { book in
+            guard book.coverDraft?.id == id else { throw DiaryEditorError.pageConflict }
+            book.coverDraft = nil
+        }
+    }
+    nonisolated func finishCoverDraft(_ id: UUID, replacing expected: UUID?) async throws {
+        try await mutateBook { book in
+            guard var draft = book.coverDraft, draft.id == id, draft.canBeCover,
+                  book.coverPageID == expected else { throw DiaryEditorError.pageConflict }
+            Self.archiveCover(in: &book)
+            draft.title = "封面"
+            book.pages.insert(draft, at: 0)
+            book.coverPageID = id; book.coverDraft = nil
+        }
+    }
+    private nonisolated static func archiveCover(in book: inout DiaryBook) {
+        if let index = book.pages.firstIndex(where: { $0.id == book.coverPageID }) {
+            book.trashedPages.append(DiaryTrashedPage(entry: book.pages.remove(at: index), originalIndex: index))
+        }
+        book.coverPageID = nil
+    }
     nonisolated func setCover(_ id: UUID?) async throws {
         try await mutateBook { book in
-            guard id == nil || book.pages.contains(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument.logged() }
-            book.coverPageID = id
+            guard let id else { Self.archiveCover(in: &book); return }
+            guard id != book.coverPageID else { return }
+            guard let index = book.pages.firstIndex(where: { $0.id == id }),
+                  book.pages[index].canBeCover, id != book.shellPageID,
+                  book.pages[index].presetSpreadID == nil else { throw DiaryEditorError.invalidDocument }
+            var page = book.pages.remove(at: index)
+            page.presetSpreadID = nil; page.presetSpreadSide = nil
+            Self.archiveCover(in: &book)
+            book.pages.insert(page, at: 0); book.coverPageID = id
+        }
+    }
+    /// Copies the immutable page revision without moving or splitting its original spread.
+    nonisolated func copyAsCover(_ id: UUID) async throws {
+        try await run {
+            guard let bookID = self.bookID else { throw DiaryEditorError.invalidDocument }
+            var book = try self.readBook(bookID)
+            guard let source = book.pages.first(where: { $0.id == id }), source.canBeCover,
+                  id != book.shellPageID else { throw DiaryEditorError.invalidDocument }
+            var document = try self.readSnapshot("revisions/\(source.revisionID)/manifest.json", directory: self.directory(id), documentID: id)
+            document.id = UUID()
+            let path = try self.writeSnapshot(document, prefix: "revisions", directory: self.directory(document.id))
+            let revision = UUID(uuidString: String(path.split(separator: "/")[1]))!
+            Self.archiveCover(in: &book)
+            book.pages.insert(DiaryPageEntry(id: document.id, title: "封面", revisionID: revision, size: source.size), at: 0)
+            book.coverPageID = document.id
+            try self.publish(book)
         }
     }
     nonisolated func setShell(_ id: UUID?) async throws {
         try await mutateBook { book in
+            guard id != book.coverPageID || id == nil else { throw DiaryEditorError.invalidDocument }
             guard id == nil || book.pages.contains(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument.logged() }
             book.shellPageID = id
         }
@@ -820,7 +889,7 @@ extension DiaryDocumentStore {
         try await mutateBook { book in
             guard let index = book.pages.firstIndex(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument.logged() }
             let target = index + (forward ? 1 : -1)
-            guard book.pages.indices.contains(target) else { return }
+            guard book.pages.indices.contains(target), id != book.coverPageID, book.pages[target].id != book.coverPageID else { return }
             book.pages.swapAt(index, target)
         }
     }
@@ -898,6 +967,12 @@ extension DiaryDocumentStore {
     @discardableResult
     private nonisolated func publish(_ value: DiaryBook) throws -> DiaryBook {
         var book = value
+        if let id = book.coverPageID {
+            guard let index = book.pages.firstIndex(where: { $0.id == id }), book.pages[index].canBeCover,
+                  id != book.shellPageID else { throw DiaryEditorError.invalidDocument }
+            let cover = book.pages.remove(at: index)
+            book.pages.insert(cover, at: 0)
+        }
         book.updatedAt = Date(); book.catalogRevision = UUID()
         let directory = libraryRoot.appendingPathComponent(book.id.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1161,7 +1236,7 @@ extension DiaryDocumentStore {
             let insertion = afterPageID.flatMap { id in book.pages.firstIndex { $0.id == id }.map { $0 + 1 } } ?? book.pages.count
             book.pages.insert(contentsOf: entries, at: insertion)
             if isNew {
-                book.coverPageID = entries.first(where: { $0.presetSource?.pageID == package.manifest.coverPageID })?.id ?? entries.first?.id
+                book.coverPageID = entries.first(where: { $0.presetSource?.pageID == package.manifest.coverPageID && $0.canBeCover })?.id
                 if let shellID = package.manifest.shellPageID {
                     book.shellPageID = entries.first(where: { $0.presetSource?.pageID == shellID })?.id
                 }
@@ -1354,7 +1429,7 @@ extension DiaryDocumentStore {
             guard book.format == "TravelDiary.Book", book.schemaVersion == 1,
                   Set(book.pages.map(\.id)).count == book.pages.count else { throw DiaryEditorError.invalidDocument }
             let target = DiaryDocumentStore(ownerID: self.ownerID, baseDirectory: self.storagePaths.support, bookID: book.id)
-            for page in book.pages + book.trashedPages.map(\.entry) {
+            for page in book.pages + book.trashedPages.map(\.entry) + [book.coverDraft].compactMap { $0 } {
                 let directory = source.appendingPathComponent("pages/\(page.id)")
                 let document = try target.readSnapshot("revisions/\(page.revisionID)/manifest.json", directory: directory, documentID: page.id)
                 for asset in document.assets.values {
