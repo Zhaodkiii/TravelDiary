@@ -14,6 +14,9 @@ struct DiaryEditorScreen: View {
     var onNewPage: (() async throws -> Void)? = nil
     var discardEmptyDraft: (() async throws -> Bool)? = nil
     var onFinished: (() async throws -> Void)? = nil
+    @State private var exportingDiagnostics = false
+    @State private var diagnosticExport: DiagnosticExport?
+    private struct DiagnosticExport: Identifiable { let id = UUID(); let url: URL }
     @State private var confirmsNewPage = false
     @State private var creatingNewPage = false
     @State private var creationEntered = false
@@ -59,6 +62,9 @@ struct DiaryEditorScreen: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { editorToolbar }
+            .sheet(item: $diagnosticExport) { export in
+                DiaryEditorDiagnosticShare(url: export.url)
+            }
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar(toolOpen && !aiMode ? .hidden : .visible, for: .navigationBar)
             .overlay {
@@ -175,7 +181,7 @@ struct DiaryEditorScreen: View {
                     openedDirectlyInAI = true
                     aiMode = true
                     enteringCreation = true
-                    await session.aiWorkspace.enter(creationRequest)
+                    await session.aiWorkspace.enter(creationRequest, preparingNewCreation: true)
                     if session.aiWorkspace.submittedCreationID != nil {
                         session.canvasAI.setForm(session.aiWorkspace.currentRequest)
                         studioDesign = session.aiWorkspace.currentDesign
@@ -223,6 +229,21 @@ struct DiaryEditorScreen: View {
                 }
             }
             .disabled(session.busy || importingCameraPhotos || session.aiWorkspace.addingMaterials)
+        }
+        ToolbarItem(placement: .principal) {
+            Button {
+                exportingDiagnostics = true
+                Task {
+                    defer { exportingDiagnostics = false }
+                    do { diagnosticExport = DiagnosticExport(url: try await session.aiWorkspace.exportProductionLog()) }
+                    catch { session.errorMessage = "日志导出失败：" + error.localizedDescription }
+                }
+            } label: {
+                if exportingDiagnostics { ProgressView() }
+                else { Label("导出日志", systemImage: "doc.badge.arrow.up").labelStyle(.iconOnly) }
+            }
+            .disabled(exportingDiagnostics)
+            .accessibilityLabel("导出诊断日志")
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
             if isCoverDraft && !aiMode {
@@ -617,4 +638,12 @@ private struct DiaryAIViewportAspectRatio: ViewModifier {
             content
         }
     }
+}
+
+private struct DiaryEditorDiagnosticShare: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

@@ -208,6 +208,26 @@ struct DiaryStickerDrawEngineTests {
         #expect(flow.preparedCount == 1)
         #expect(session.document.assets.isEmpty, "Preparation must not publish into the source document")
     }
+    @Test func selectedPhotoPreviewUsesOriginalImage() async throws {
+        let (session, root) = fixture()
+        let flow = try DiaryAICreationFlow(session: session)
+        let owner = MaterialCatalogRepository.shared.owner
+        MaterialCatalogRepository.shared.activate(session.store.ownerID)
+        defer {
+            flow.cancelOperation(); MaterialCatalogRepository.shared.activate(owner)
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: flow.directory)
+        }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let bytes = try #require(UIGraphicsImageRenderer(size: CGSize(width: 900, height: 700), format: format).image { _ in }.pngData())
+        await flow.importCamera([bytes])
+        let photo = try #require(flow.draft.photos.first)
+        let preview = try #require(flow.images[photo.filename])
+        #expect(preview.size == CGSize(width: 900, height: 700))
+        #expect(flow.pendingPhotoIDs.isEmpty)
+        #expect(flow.selectedPhotoImages.isEmpty)
+    }
     @Test func fastSubmitWaitsForPhotoLoadingWithoutBlockingNavigation() async throws {
         let (session, root) = fixture()
         let flow = try DiaryAICreationFlow(session: session)

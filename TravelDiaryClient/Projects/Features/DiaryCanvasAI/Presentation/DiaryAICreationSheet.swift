@@ -10,6 +10,7 @@ struct DiaryCreationSystemPicker: UIViewControllerRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(completed: completed) }
     func makeUIViewController(context: Context) -> PHPickerViewController {
         var configuration = PHPickerConfiguration(photoLibrary: .shared())
+        configuration.preferredAssetRepresentationMode = .current
         configuration.filter = .images; configuration.selectionLimit = max(1, limit); configuration.selection = .ordered
         let picker = PHPickerViewController(configuration: configuration)
         picker.delegate = context.coordinator; return picker
@@ -134,7 +135,11 @@ struct DiaryAICreationSheet: View {
                 }
                 ForEach(flow.pendingPhotoIDs, id: \.self) { id in
                     VStack {
-                        ProgressView("照片读取中").frame(maxWidth: .infinity, minHeight: 110)
+                        if let image = flow.selectedPhotoImages[id] {
+                            Image(uiImage: image).resizable().scaledToFit().frame(height: 110)
+                        } else {
+                            ProgressView("正在从相册读取").frame(maxWidth: .infinity, minHeight: 110)
+                        }
                         Button("移除") { flow.removePhoto(id) }.font(.caption)
                     }
                 }
@@ -150,7 +155,7 @@ struct DiaryAICreationSheet: View {
             Button("丢弃这次草稿", role: .destructive) { discardsDraft = true }.font(.footnote).disabled(flow.isSubmitting)
         }
         .safeAreaInset(edge: .bottom) { footer("下一步 · 搭配贴纸", disabled: !flow.canContinue) { path.append(.stickers) } }
-        .photosPicker(isPresented: $picking, selection: $photos, maxSelectionCount: max(1, 30 - flow.selectedPhotoCount), selectionBehavior: .ordered, matching: .images)
+        .photosPicker(isPresented: $picking, selection: $photos, maxSelectionCount: max(1, 30 - flow.selectedPhotoCount), selectionBehavior: .ordered, matching: .images, preferredItemEncoding: .current)
         .onChange(of: photos) { _, values in guard !values.isEmpty else { return }; photos = []; flow.importPhotos(values) }
     }
     @ViewBuilder private func thumbnail(_ file: String) -> some View {

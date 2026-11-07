@@ -244,9 +244,6 @@ struct DiaryEditorHomeView: View {
         do {
             let snapshot = try await DiaryDocumentStore(ownerID: ownerID).loadShelf()
 
-//            let store = DiaryDocumentStore(ownerID: ownerID)
-//            try await store.installInitialBooks()
-//            let snapshot = try await store.loadShelf()
             books = snapshot.books; unreadable = snapshot.unreadableIDs; loadError = nil
             recent = access.latest(in: books)
         } catch { loadError = "书架暂时无法刷新：" + error.localizedDescription }

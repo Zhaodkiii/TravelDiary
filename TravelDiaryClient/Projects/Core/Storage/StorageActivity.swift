@@ -6,10 +6,14 @@ nonisolated final class StorageActivity: @unchecked Sendable {
     private let lock = NSRecursiveLock()
     private var readers: [UUID: URL] = [:]
 
-    func acquire(_ url: URL) -> Lease {
+    private var origins: [UUID: String] = [:]
+    private var failures: [[String: String]] = []
+
+    func acquire(_ url: URL, file: String = #fileID, line: Int = #line) -> Lease {
         lock.lock(); defer { lock.unlock() }
         let id = UUID()
         readers[id] = url.standardizedFileURL
+        origins[id] = "\(file):\(line) at \(Date().ISO8601Format())"
         return Lease(id: id, registry: self)
     }
     func isInUse(_ url: URL) -> Bool {
@@ -18,11 +22,20 @@ nonisolated final class StorageActivity: @unchecked Sendable {
     }
     func exclusively<T>(_ url: URL, _ action: () throws -> T) throws -> T {
         lock.lock(); defer { lock.unlock() }
-        guard !isInUse(url) else { throw StorageFailure.inUse }
+        guard !isInUse(url) else {
+            failures.append(["time": Date().ISO8601Format(), "target": url.lastPathComponent,
+                             "holders": readers.filter { StoragePaths.contains($0.value, in: url) || StoragePaths.contains(url, in: $0.value) }.map { origins[$0.key] ?? "unknown" }.sorted().joined(separator: "\n")])
+            failures = Array(failures.suffix(50))
+            throw StorageFailure.inUse
+        }
         return try action()
     }
+    func diagnosticSnapshot() -> [String: Any] {
+        lock.lock(); defer { lock.unlock() }
+        return ["active": readers.map { ["directory": $0.value.lastPathComponent, "origin": origins[$0.key] ?? "unknown"] }, "blockedOperations": failures]
+    }
     private func release(_ id: UUID) {
-        lock.lock(); defer { lock.unlock() }; readers.removeValue(forKey: id)
+        lock.lock(); defer { lock.unlock() }; readers.removeValue(forKey: id); origins.removeValue(forKey: id)
     }
     final class Lease: @unchecked Sendable {
         private let id: UUID

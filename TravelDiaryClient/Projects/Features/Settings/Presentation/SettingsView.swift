@@ -37,7 +37,7 @@ struct SettingsView: View {
                     SupportNavigationRow(title: "重看制作引导", symbol: "book.pages", detail: "看一页旅行手帐如何慢慢成形")
                 }.buttonStyle(.plain).feedbackPaperCard()
                 NavigationLink { DiaryAIMakingSettingsView() } label: {
-                    SupportNavigationRow(title: "AI 制作", symbol: "sparkles", detail: "运行方式与背景生成")
+                    SupportNavigationRow(title: "AI 制作", symbol: "sparkles", detail: "运行方式、作品保存与背景生成")
                 }.buttonStyle(.plain).feedbackPaperCard()
 
                 NavigationLink {
@@ -95,11 +95,18 @@ struct SettingsView: View {
 }
 
 private struct DiaryAIMakingSettingsView: View {
+    @AppStorage("DiaryCanvasAI.autoSaveCompletedWork") private var autoSaveCompletedWork = true
     @AppStorage("DiaryCanvasAI.parallelExecution") private var parallel = false
     @AppStorage("DiaryCanvasAI.backgroundMode") private var mode = "guided"
     var body: some View {
         Form {
             DiaryProductionQuotaSection()
+            Section("作品保存") {
+                Toggle("制作完成后自动保存作品", isOn: $autoSaveCompletedWork)
+                    .accessibilityIdentifier("settings.ai.auto-save-completed-work")
+                Text("开启后，AI 制作完成会自动保存作品。关闭后保留制作结果，点击“保存作品”后保存；草稿进度仍会保留。此设置不影响背景保存到相册。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("运行方式") {
                 Toggle("并行制作", isOn: $parallel)
                 Text("背景与图层排版同时进行，对新打开的任务生效。").font(.caption).foregroundStyle(.secondary)

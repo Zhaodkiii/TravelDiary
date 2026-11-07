@@ -73,7 +73,7 @@ struct DiaryOnboardingArtwork {
 }
 
 /// Alternating brush sweeps reveal the supplied background rather than fading it in.
-struct DiaryOnboardingBrushMask: Shape {
+nonisolated struct DiaryOnboardingBrushMask: Shape {
     var progress: CGFloat
     var animatableData: CGFloat {
         get { progress }

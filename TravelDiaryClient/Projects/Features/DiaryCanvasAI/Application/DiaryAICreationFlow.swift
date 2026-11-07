@@ -54,6 +54,7 @@ nonisolated struct DiaryCreationDraft: Codable {
     @Published private(set) var stickerLoadFailed = false
     var selectedStickerCount: Int { draft.stickers.count + pendingStickerIDs.count }
     @Published private(set) var pendingPhotoIDs: [UUID] = []
+    @Published private(set) var selectedPhotoImages: [UUID: UIImage] = [:]
     typealias PhotoLoader = @MainActor () async throws -> Data
     private var photoTask: Task<Void, Never>?
     private var photoGeneration = UUID()
@@ -129,7 +130,7 @@ nonisolated struct DiaryCreationDraft: Codable {
             try JSONEncoder().encode(draft).write(to: directory.appendingPathComponent("draft.json"), options: .atomic)
             saveError = nil
             if !busy && pendingPhotoIDs.isEmpty {
-                let used = Set(draft.photos.map(\.filename) + draft.stickers.map(\.filename) + (undo?.stickers.map(\.filename) ?? []))
+                let used = Set(draft.photos.map(\.filename) + draft.stickers.map(\.filename) + stickerStock.map { $0.0.filename } + (undo?.stickers.map(\.filename) ?? []))
                 for file in (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [] where ["photo", "sticker"].contains(file.pathExtension) && !used.contains(file.lastPathComponent) {
                     try? FileManager.default.removeItem(at: file)
                 }
@@ -139,7 +140,8 @@ nonisolated struct DiaryCreationDraft: Codable {
         } catch { saveError = "草稿保存失败：" + error.localizedDescription; return false }
     }
     func cancelOperation() {
-        photoGeneration = UUID(); photoTask?.cancel(); photoTask = nil; pendingPhotoIDs = []
+        stockTask?.cancel(); stockTask = nil; stickerStock = []
+        photoGeneration = UUID(); photoTask?.cancel(); photoTask = nil; pendingPhotoIDs = []; selectedPhotoImages = [:]
         preparationSuspended = true
         preparationGeneration = UUID(); preparationTask?.cancel(); preparationTask = nil
         preparingMaterials = false
@@ -169,6 +171,7 @@ nonisolated struct DiaryCreationDraft: Codable {
     func removePhoto(_ id: UUID) {
         guard !isSubmitting else { return }
         pendingPhotoIDs.removeAll { $0 == id }
+        selectedPhotoImages[id] = nil
         draft.photos.removeAll { $0.id == id }; draft.photoNotes?[id.uuidString] = nil
         if draft.heroID == id {
             draft.heroID = draft.photos.first?.id
@@ -199,21 +202,55 @@ nonisolated struct DiaryCreationDraft: Codable {
         pendingPhotoIDs += selected.map { $0.0 }
         let generation = photoGeneration, previous = photoTask
         photoTask = Task {
-            await previous?.value
-            for (id, load) in selected {
-                guard !Task.isCancelled, photoGeneration == generation, ownerValid else { return }
-                guard pendingPhotoIDs.contains(id) else { continue }
-                do {
-                    let data = try await load()
-                    guard !Task.isCancelled, photoGeneration == generation, ownerValid, pendingPhotoIDs.contains(id) else { continue }
-                    try await appendPhoto(data, selectionID: id)
-                } catch {
-                    guard !Task.isCancelled, photoGeneration == generation, ownerValid else { return }
-                    if pendingPhotoIDs.contains(id) { failures[id] = "照片读取失败，请重试或移除"; failedPhotoLoads[id] = load }
+            let tasks = selected.map { id, load in
+                    Task { @MainActor [self] in
+                        guard !Task.isCancelled, self.photoGeneration == generation, self.ownerValid else { return }
+                        guard self.pendingPhotoIDs.contains(id) else { return }
+                        do {
+                            let data = try await Self.readSelectedPhoto(load)
+                            guard !Task.isCancelled, self.photoGeneration == generation, self.ownerValid,
+                                  self.pendingPhotoIDs.contains(id) else { return }
+                            try await self.appendPhoto(data, selectionID: id)
+                        } catch {
+                            guard !Task.isCancelled, self.photoGeneration == generation, self.ownerValid else { return }
+                            if self.pendingPhotoIDs.contains(id) {
+                                self.failures[id] = "照片读取失败，请重试或移除"
+                                self.failedPhotoLoads[id] = load
+                            }
+                        }
+                        guard self.photoGeneration == generation else { return }
+                        self.pendingPhotoIDs.removeAll { $0 == id }
+                        self.selectedPhotoImages[id] = nil
+                        self.save()
+                    }
                 }
-                guard photoGeneration == generation else { return }
-                pendingPhotoIDs.removeAll { $0 == id }
-                save()
+            for task in tasks { await task.value }
+            await previous?.value
+        }
+    }
+    private final class PhotoReadResult {
+        var continuation: CheckedContinuation<Data, Error>?
+        func finish(_ result: Result<Data, Error>) {
+            let waiting = continuation
+            continuation = nil
+            waiting?.resume(with: result)
+        }
+    }
+    private static func readSelectedPhoto(_ load: @escaping PhotoLoader) async throws -> Data {
+        let result = PhotoReadResult()
+        var reading: Task<Void, Never>?
+        var deadline: Task<Void, Never>?
+        defer { reading?.cancel(); deadline?.cancel() }
+        return try await withCheckedThrowingContinuation { continuation in
+            result.continuation = continuation
+            reading = Task { @MainActor in
+                do { result.finish(.success(try await load())) }
+                catch { result.finish(.failure(error)) }
+            }
+            deadline = Task { @MainActor in
+                do { try await Task.sleep(for: .seconds(60)) }
+                catch { return }
+                result.finish(.failure(URLError(.timedOut)))
             }
         }
     }
@@ -243,19 +280,22 @@ nonisolated struct DiaryCreationDraft: Codable {
         await photoTask?.value
     }
     private func appendPhoto(_ data: Data, selectionID: UUID) async throws {
-        let prepared = try await DiaryAIImageWork.run { () -> (String, UIImage) in
-            guard let image = Self.thumbnail(data) else { throw DiaryEditorError.invalidImage }
-            return (SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), image)
-        }
+        // Publish the selected image before hashing, disk I/O or canvas preparation.
+        guard let image = UIImage(data: data) else { throw DiaryEditorError.invalidImage }
+        guard ownerValid, pendingPhotoIDs.contains(selectionID) else { throw CancellationError() }
+        selectedPhotoImages[selectionID] = image
+        let digest = await Task.detached(priority: .userInitiated) {
+            SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }.value
         try Task.checkCancellation()
         guard ownerValid, pendingPhotoIDs.contains(selectionID) else { throw CancellationError() }
-        guard !draft.photos.contains(where: { $0.digest == prepared.0 }), draft.photos.count < 30 else { return }
-        let file = prepared.0 + ".photo"
+        guard !draft.photos.contains(where: { $0.digest == digest }), draft.photos.count < 30 else { return }
+        let file = digest + ".photo"
         let url = directory.appendingPathComponent(file)
-        try await DiaryAIImageWork.run { try data.write(to: url, options: .atomic) }
+        try await Task.detached(priority: .userInitiated) { try data.write(to: url, options: .atomic) }.value
         guard ownerValid, pendingPhotoIDs.contains(selectionID) else { throw CancellationError() }
-        let photo = DiaryCreationPhoto(id: selectionID, filename: file, digest: prepared.0, name: "照片")
-        draft.photos.append(photo); images[file] = prepared.1
+        let photo = DiaryCreationPhoto(id: selectionID, filename: file, digest: digest, name: "照片")
+        draft.photos.append(photo); images[file] = image
         if draft.heroID == nil { draft.heroID = photo.id }
         save()
     }
@@ -390,8 +430,51 @@ nonisolated struct DiaryCreationDraft: Codable {
             } catch { if operation == token, !Task.isCancelled { stickerLoadFailed = true; self.error = "贴纸准备失败，请重试。" } }
         }
     }
+    private var stickerStock: [(DiaryCreationSticker, UIImage)] = []
+    private var stockTask: Task<Void, Never>?
+    private var stockTheme = ""
+
+    private func refillStickerStock() {
+        guard stockTask == nil, stickerStock.count < 12, ownerValid else { return }
+        let theme = draft.theme
+        stockTask = Task {
+            defer { stockTask = nil }
+            do {
+                var params = ["schema": "2", "type": "sticker", "sort": "random", "limit": "36"]
+                params["exclude"] = Set(stickerStock.map { $0.0.id } + draft.stickers.map(\.id) + Array(draft.excluded)).sorted().joined(separator: ",")
+                if theme != "全部" { params["q"] = theme }
+                struct StockResponse: Decodable { let items: [CloudMaterial]; let draw_scope: String? }
+                let page: StockResponse = try await MaterialCatalogRepository.shared.request(MaterialRoutes.path("items/", params))
+                guard page.draw_scope == "published_stickers" else { return }
+                for item in page.items where item.availability != "unavailable" && item.revision > 0 {
+                    guard !Task.isCancelled, ownerValid, draft.theme == theme else { return }
+                    if stickerStock.contains(where: { $0.0.id == item.id }) || draft.stickers.contains(where: { $0.id == item.id }) || draft.excluded.contains(item.id) { continue }
+                    if let prepared = try? await prepareSticker(item, kept: false) {
+                        guard !Task.isCancelled, ownerValid, draft.theme == theme else { return }
+                        stickerStock.append(prepared)
+                    }
+                }
+            } catch { /* Existing stock remains usable; the next draw retries replenishment. */ }
+        }
+    }
+
     func draw() {
         guard !isSubmitting, !busy, !allKept else { return }
+        if stockTheme != draft.theme {
+            stockTask?.cancel(); stockTask = nil; stickerStock = []; stockTheme = draft.theme
+        }
+        stickerStock.removeAll { entry in draft.excluded.contains(entry.0.id) || draft.stickers.contains { $0.id == entry.0.id } }
+        let keptStock = draft.stickers.filter(\.kept)
+        let needed = max(0, 6 - keptStock.count)
+        if needed > 0, stickerStock.count >= needed {
+            let incoming = Array(stickerStock.prefix(needed)); stickerStock.removeFirst(needed)
+            remember(); draft.history.append(draft.stickers.map(\.id)); draft.history = Array(draft.history.suffix(2))
+            draft.stickers = keptStock + incoming.map { $0.0 }
+            for entry in incoming { images[entry.0.filename] = entry.1 }
+            draft.seed &+= 1; draft.batch += 1; draft.didDraw = true
+            save(); refillStickerStock()
+            return
+        }
         busy = true; stickerLoadFailed = false; error = nil; status = "正在准备新一批贴纸…"
         let token = UUID(); operation = token
         job = Task {
@@ -434,7 +517,7 @@ nonisolated struct DiaryCreationDraft: Codable {
                 guard operation == token, !Task.isCancelled, ownerValid else { return }
                 remember(); draft.history.append(draft.stickers.map(\.id)); draft.history = Array(draft.history.suffix(2))
                 draft.stickers = prepared; draft.seed = result.seed; draft.batch += 1; draft.didDraw = true
-                images.merge(previews) { _, new in new }; save()
+                images.merge(previews) { _, new in new }; save(); refillStickerStock()
                 UIAccessibility.post(notification: .announcement, argument: "已换好 \(prepared.count) 张贴纸")
             } catch { if operation == token, !Task.isCancelled { stickerLoadFailed = true; self.error = "换批失败，已保留原来的贴纸。请重试或不用贴纸继续。" } }
         }

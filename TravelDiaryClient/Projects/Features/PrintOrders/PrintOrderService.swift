@@ -43,7 +43,9 @@ final class PrintOrderService: ObservableObject, PrintPaymentClient {
             tasks.values.forEach { $0.cancel() }; tasks.removeAll(); progress = [:]; jobs = []; owner = id
             if let id, let data = try? Data(contentsOf: index(id)), let saved = try? JSONDecoder().decode([PrintLocalJob].self, from: data) {
                 jobs = saved.filter { $0.owner == id }
-                for i in jobs.indices where jobs[i].state == "正在上传" { jobs[i].state = "上传已暂停" }
+                for i in jobs.indices where ["正在上传", "正在提交订单"].contains(jobs[i].state) {
+                    jobs[i].state = jobs[i].orderID == nil ? "提交已暂停" : "上传已暂停"
+                }
             }
             if let id { restorePayments(owner: id) }
         }
@@ -80,6 +82,12 @@ final class PrintOrderService: ObservableObject, PrintPaymentClient {
                 path: "/api/v1/print/" + (components?.path ?? path), queryItems: components?.queryItems, body: body.map { .raw($0, contentType: "application/json") } ?? .none,
                 strategy: NetworkStrategy(requiresAuth: true, allowETag: false)))
         } catch {
+            if case SupportNetworkError.http(_, _, let data) = error,
+               let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let details = value["data"] as? [String: Any],
+               details["print_error"] as? String == "unsupported_exporter_version" {
+                throw PrintFailure("当前印制服务暂不支持此生产稿版本。本地生产稿已保留，请待服务更新后重新提交。")
+            }
             if case SupportNetworkError.http(_, _, let data) = error,
                let value = try? JSONSerialization.jsonObject(with:data) as? [String:Any],
                let details = value["data"] as? [String:Any], let code = details["region_error"] as? String {
@@ -195,7 +203,7 @@ final class PrintOrderService: ObservableObject, PrintPaymentClient {
         guard let job = jobs.first(where: { $0.id == id }) else { return }
         do {
             try requireOwner(job.owner, bound: true)
-            try mutate(id) { $0.state = "正在上传"; $0.error = nil }
+            try mutate(id) { $0.state = job.orderID == nil ? "正在提交订单" : "正在上传"; $0.error = nil }
             // 恢复时校验文件摘要，绝不使用已修改的作品替换旧稿。
             for file in job.submission.files {
                 let url = job.directory.appendingPathComponent(file.role + ".pdf")
@@ -220,6 +228,7 @@ final class PrintOrderService: ObservableObject, PrintPaymentClient {
                     try persist(job.owner)
                 }
             }
+            try mutate(id) { $0.state = "正在上传" }
             if let expected = job.productionID, expected != order.production_id {
                 throw PrintFailure("此上传任务已被新生产稿替换，请返回订单使用最新任务")
             }
@@ -308,7 +317,12 @@ final class PrintOrderService: ObservableObject, PrintPaymentClient {
                 body: json(["production_id":plan.production_id,"client_confirmed":true,"completed_roles":completed.sorted()]))
             try mutate(id) { $0.state = "已上传" }; progress[id] = 1
         } catch {
-            try? mutate(id) { $0.state = "上传已暂停"; $0.error = error is CancellationError ? nil : error.localizedDescription }
+            try? mutate(id) {
+                $0.state = $0.orderID == nil
+                    ? (error is CancellationError ? "提交已暂停" : "提交失败")
+                    : "上传已暂停"
+                $0.error = error is CancellationError ? nil : error.localizedDescription
+            }
         }
     }
 }

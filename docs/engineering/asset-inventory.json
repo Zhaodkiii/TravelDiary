@@ -1,0 +1,1644 @@
+[
+  {
+    "name": "ai302",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/ai302.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/ai302.imageset",
+    "bytes": 176312,
+    "references": []
+  },
+  {
+    "name": "aihubmix",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/aihubmix.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/aihubmix.imageset",
+    "bytes": 161912,
+    "references": []
+  },
+  {
+    "name": "amap",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/amap.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/amap.imageset",
+    "bytes": 1090589,
+    "references": []
+  },
+  {
+    "name": "applemap",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/applemap.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/applemap.imageset",
+    "bytes": 97235,
+    "references": []
+  },
+  {
+    "name": "applogo",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/applogo.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/applogo.imageset",
+    "bytes": 676628,
+    "references": []
+  },
+  {
+    "name": "arxiv",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/arxiv.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/arxiv.imageset",
+    "bytes": 6623,
+    "references": []
+  },
+  {
+    "name": "assistant",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/assistant.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/assistant.imageset",
+    "bytes": 24356,
+    "references": []
+  },
+  {
+    "name": "baidumap",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/baidumap.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/baidumap.imageset",
+    "bytes": 18239,
+    "references": []
+  },
+  {
+    "name": "bing",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/bing.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/bing.imageset",
+    "bytes": 150122,
+    "references": []
+  },
+  {
+    "name": "bochaai",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/bochaai.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/bochaai.imageset",
+    "bytes": 444215,
+    "references": []
+  },
+  {
+    "name": "brave",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/brave.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/brave.imageset",
+    "bytes": 1540772,
+    "references": []
+  },
+  {
+    "name": "cherry",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/cherry.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/cherry.imageset",
+    "bytes": 111875,
+    "references": []
+  },
+  {
+    "name": "claude",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/claude.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/claude.imageset",
+    "bytes": 164930,
+    "references": []
+  },
+  {
+    "name": "deepseek",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/deepseek.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/deepseek.imageset",
+    "bytes": 10268,
+    "references": []
+  },
+  {
+    "name": "defaultIcon",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/defaultIcon.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/defaultIcon.imageset",
+    "bytes": 30908,
+    "references": []
+  },
+  {
+    "name": "doubao",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/doubao.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/doubao.imageset",
+    "bytes": 130643,
+    "references": []
+  },
+  {
+    "name": "exa",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/exa.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/exa.imageset",
+    "bytes": 368657,
+    "references": []
+  },
+  {
+    "name": "gitee",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/gitee.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/gitee.imageset",
+    "bytes": 121322,
+    "references": []
+  },
+  {
+    "name": "gitee_dark",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/gitee_dark.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/gitee_dark.imageset",
+    "bytes": 121088,
+    "references": []
+  },
+  {
+    "name": "github",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/github.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/github.imageset",
+    "bytes": 94715,
+    "references": []
+  },
+  {
+    "name": "github_dark",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/github_dark.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/github_dark.imageset",
+    "bytes": 93695,
+    "references": []
+  },
+  {
+    "name": "google",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/google.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Shared/IntegrationIcons/google.imageset",
+    "bytes": 721592,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/Support/SecondCameraEditorMimeTypeUtil.swift",
+      "TravelDiaryClient/Projects/Features/Auth/Infrastructure/DefaultAuthRepository.swift",
+      "TravelDiaryClient/Projects/Features/AccountManagement/Domain/AccountDeactivationModels.swift",
+      "TravelDiaryClient/Projects/Features/AccountManagement/Presentation/AccountManagementViewModel.swift"
+    ]
+  },
+  {
+    "name": "google_search",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/google_search.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/google_search.imageset",
+    "bytes": 113063,
+    "references": []
+  },
+  {
+    "name": "googlemap",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/googlemap.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/googlemap.imageset",
+    "bytes": 18980,
+    "references": []
+  },
+  {
+    "name": "hanlin",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/hanlin.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/hanlin.imageset",
+    "bytes": 250580,
+    "references": []
+  },
+  {
+    "name": "huggingface",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/huggingface.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/huggingface.imageset",
+    "bytes": 183569,
+    "references": []
+  },
+  {
+    "name": "hunyuan",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/hunyuan.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/hunyuan.imageset",
+    "bytes": 23057,
+    "references": []
+  },
+  {
+    "name": "iflow",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/iflow.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/iflow.imageset",
+    "bytes": 13163,
+    "references": []
+  },
+  {
+    "name": "kimi",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/kimi.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/kimi.imageset",
+    "bytes": 67436,
+    "references": []
+  },
+  {
+    "name": "kimi_dark",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/kimi_dark.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/kimi_dark.imageset",
+    "bytes": 65561,
+    "references": []
+  },
+  {
+    "name": "knowledge_bag",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/knowledge_bag.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/knowledge_bag.imageset",
+    "bytes": 912293,
+    "references": []
+  },
+  {
+    "name": "langsearch",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/langsearch.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/langsearch.imageset",
+    "bytes": 19817,
+    "references": []
+  },
+  {
+    "name": "lm_studio",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/lm_studio.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/lm_studio.imageset",
+    "bytes": 57101,
+    "references": []
+  },
+  {
+    "name": "lm_studio_dark",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/lm_studio_dark.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/lm_studio_dark.imageset",
+    "bytes": 56945,
+    "references": []
+  },
+  {
+    "name": "longcat",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/longcat.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/longcat.imageset",
+    "bytes": 105593,
+    "references": []
+  },
+  {
+    "name": "longcat_dark",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/longcat_dark.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/longcat_dark.imageset",
+    "bytes": 106880,
+    "references": []
+  },
+  {
+    "name": "meta",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/meta.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Shared/IntegrationIcons/meta.imageset",
+    "bytes": 150800,
+    "references": [
+      "TravelDiaryClient/Projects/Core/Networking/ETagStore.swift",
+      "TravelDiaryClient/Projects/Core/Storage/LegacyCacheMigration.swift",
+      "TravelDiaryClient/Projects/Core/Networking/Caching/ResourceETagCache.swift",
+      "TravelDiaryClient/Projects/Core/Networking/Caching/DeviceCache.swift"
+    ]
+  },
+  {
+    "name": "mimo",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/mimo.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/mimo.imageset",
+    "bytes": 112565,
+    "references": []
+  },
+  {
+    "name": "mimo_dark",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/mimo_dark.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/mimo_dark.imageset",
+    "bytes": 109319,
+    "references": []
+  },
+  {
+    "name": "minimax",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/minimax.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/minimax.imageset",
+    "bytes": 122297,
+    "references": []
+  },
+  {
+    "name": "modelscope",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/modelscope.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/modelscope.imageset",
+    "bytes": 38624,
+    "references": []
+  },
+  {
+    "name": "n1n",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/n1n.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/n1n.imageset",
+    "bytes": 25178,
+    "references": []
+  },
+  {
+    "name": "openai",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/openai.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/openai.imageset",
+    "bytes": 139202,
+    "references": []
+  },
+  {
+    "name": "openai_dark",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/openai_dark.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/openai_dark.imageset",
+    "bytes": 136616,
+    "references": []
+  },
+  {
+    "name": "openrouter",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/openrouter.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/openrouter.imageset",
+    "bytes": 66380,
+    "references": []
+  },
+  {
+    "name": "openrouter_dark",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/openrouter_dark.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/openrouter_dark.imageset",
+    "bytes": 64430,
+    "references": []
+  },
+  {
+    "name": "openweather",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/openweather.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/openweather.imageset",
+    "bytes": 18056,
+    "references": []
+  },
+  {
+    "name": "perplexity",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/perplexity.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/perplexity.imageset",
+    "bytes": 131246,
+    "references": []
+  },
+  {
+    "name": "poe",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/poe.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/poe.imageset",
+    "bytes": 135338,
+    "references": []
+  },
+  {
+    "name": "poe_dark",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/poe_dark.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/poe_dark.imageset",
+    "bytes": 124469,
+    "references": []
+  },
+  {
+    "name": "prompt",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/prompt.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Shared/IntegrationIcons/prompt.imageset",
+    "bytes": 163901,
+    "references": [
+      "TravelDiaryClient/Projects/Features/DiaryCanvasAI/Background/DiarySeedreamBackgroundProvider.swift",
+      "TravelDiaryClient/Projects/Features/DiaryCanvasAI/Workspace/DiaryAIWorkspace.swift",
+      "TravelDiaryClient/Projects/Features/DiaryCanvasAI/Application/DiaryAIDraftController.swift",
+      "TravelDiaryTests/DiaryCanvasAI/DiaryAIBackgroundTests.swift"
+    ]
+  },
+  {
+    "name": "qweather",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/qweather.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/qweather.imageset",
+    "bytes": 14951,
+    "references": []
+  },
+  {
+    "name": "qweather_dark",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/qweather_dark.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/qweather_dark.imageset",
+    "bytes": 15248,
+    "references": []
+  },
+  {
+    "name": "qwen",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/qwen.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/qwen.imageset",
+    "bytes": 3326,
+    "references": []
+  },
+  {
+    "name": "siliconflow",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/siliconflow.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/siliconflow.imageset",
+    "bytes": 32732,
+    "references": []
+  },
+  {
+    "name": "siri",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/siri.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/siri.imageset",
+    "bytes": 1811951,
+    "references": []
+  },
+  {
+    "name": "spark",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/spark.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/spark.imageset",
+    "bytes": 138998,
+    "references": []
+  },
+  {
+    "name": "step",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/step.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Shared/IntegrationIcons/step.imageset",
+    "bytes": 73964,
+    "references": [
+      "TravelDiaryClient/Projects/Features/TravelCreation/CreationFlowView.swift",
+      "TravelDiaryClient/Projects/Features/Customization/CustomizationViews.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/Support/SecondCameraEditorMimeTypeUtil.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/PhotoEditorTelegram/UpstreamTelegram/DrawingUI/Sources/DrawingMetalView.swift",
+      "TravelDiaryClient/Projects/Features/diagram/SwiftFlowNew/Utils/EdgeUtils.swift",
+      "TravelDiaryClient/Projects/Features/diagram/SwiftFlowNew/Models/Edge.swift",
+      "TravelDiaryClient/Projects/Features/DiaryCanvasAI/Application/DiaryAICreationFlow.swift",
+      "TravelDiaryClient/Projects/Features/DiaryCanvasAI/Presentation/DiaryAICreationSheet.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/Canvas/DiaryCanvasView.swift",
+      "TravelDiaryTests/Customization/CustomizationFormTests.swift",
+      "TravelDiaryTests/DiaryCanvasAI/DiaryCreationFlowTests.swift"
+    ]
+  },
+  {
+    "name": "tavily",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/tavily.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/tavily.imageset",
+    "bytes": 138785,
+    "references": []
+  },
+  {
+    "name": "tiangong",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/tiangong.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/tiangong.imageset",
+    "bytes": 179273,
+    "references": []
+  },
+  {
+    "name": "translate",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/translate.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Shared/IntegrationIcons/translate.imageset",
+    "bytes": 3407,
+    "references": [
+      "TravelDiaryClient/Core/UI/SparkPromptInputSheets.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/Preview/SecondCameraAttachmentPrepViewController.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/ImageEditor/SecondCameraImageEditorTransform.swift"
+    ]
+  },
+  {
+    "name": "translate_circle",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/translate_circle.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/translate_circle.imageset",
+    "bytes": 4265,
+    "references": []
+  },
+  {
+    "name": "webreader",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/webreader.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/webreader.imageset",
+    "bytes": 1021343,
+    "references": []
+  },
+  {
+    "name": "wenxin",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/wenxin.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/wenxin.imageset",
+    "bytes": 192362,
+    "references": []
+  },
+  {
+    "name": "xai",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/xai.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/xai.imageset",
+    "bytes": 96623,
+    "references": []
+  },
+  {
+    "name": "xai_dark",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/xai_dark.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/xai_dark.imageset",
+    "bytes": 96497,
+    "references": []
+  },
+  {
+    "name": "yi",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/yi.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/yi.imageset",
+    "bytes": 64970,
+    "references": []
+  },
+  {
+    "name": "yi_dark",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/yi_dark.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/yi_dark.imageset",
+    "bytes": 64841,
+    "references": []
+  },
+  {
+    "name": "zhipuai",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/zhipuai.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/zhipuai.imageset",
+    "bytes": 75182,
+    "references": []
+  },
+  {
+    "name": "zhipuai_dark",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AI/zhipuai_dark.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Shared/IntegrationIcons/zhipuai_dark.imageset",
+    "bytes": 53090,
+    "references": []
+  },
+  {
+    "name": "AccentColor",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AccentColor.colorset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/DesignSystem/Colors/AccentColor.colorset",
+    "bytes": 123,
+    "references": [
+      "TravelDiaryClient/Core/UI/SparkPromptInputSheets.swift",
+      "TravelDiaryClient/Core/UI/SparkVoiceInput.swift",
+      "TravelDiaryClient/Projects/Core/Markdown/MarkdownTheme.swift",
+      "TravelDiaryClient/Projects/Core/Markdown/MarkdownDocumentView.swift",
+      "TravelDiaryClient/Projects/Core/UI/Sheet/AdaptiveSheetContainer.swift",
+      "TravelDiaryClient/Projects/Features/TravelCreation/CreationFlowView.swift",
+      "TravelDiaryClient/Projects/Features/diagram/SwiftFlow/Previews/FlowCanvasPreview.swift",
+      "TravelDiaryClient/Projects/Features/diagram/SwiftFlow/Previews/FlowCanvasLivePreview.swift",
+      "TravelDiaryClient/Projects/Features/diagram/SwiftFlow/Views/DefaultNodeContent.swift",
+      "TravelDiaryClient/Projects/Features/diagram/SwiftFlow/Views/FlowCanvas.swift",
+      "TravelDiaryClient/Projects/Features/diagram/SwiftFlow/Views/FlowNodeHandles.swift",
+      "TravelDiaryClient/Projects/Features/DiaryCanvasAI/Presentation/DiaryAIRequestSheet.swift",
+      "TravelDiaryClient/Projects/Features/DiaryCanvasAI/Presentation/DiaryAIWorkspaceView.swift",
+      "TravelDiaryClient/Projects/Features/DiaryCanvasAI/Presentation/DiaryAIActivityTimeline.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/DiaryBookThumbnailRail.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/TravelCaptureReview.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/Stickers/DiaryPhotoFramePicker.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/Stickers/StickerMakerScreen.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/Text/DiaryTextEditorSheet.swift",
+      "TravelDiary.xcodeproj/project.pbxproj"
+    ]
+  },
+  {
+    "name": "AppIcon",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AppIcon.appiconset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Brand/AppIcons/AppIcon.appiconset",
+    "bytes": 1564132,
+    "references": [
+      "TravelDiary.xcodeproj/project.pbxproj"
+    ]
+  },
+  {
+    "name": "AppIcon1",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/AppIcon1.appiconset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Brand/AppIcons/AppIcon1.appiconset",
+    "bytes": 2304849,
+    "references": []
+  },
+  {
+    "name": "DiaryBookLeather",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/DiaryBookLeather.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryEditor/BookAppearance/DiaryBookLeather.imageset",
+    "bytes": 3589773,
+    "references": [
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/DiaryBookOpeningStage.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/DiaryPresetBookReader.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/DiaryBoundSpread.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/DiaryEditorScreen.swift",
+      "TravelDiaryTests/DiaryEditor/DiaryBookImageExportTests.swift"
+    ]
+  },
+  {
+    "name": "DiaryBookRing",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/DiaryBookRing.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryEditor/BookAppearance/DiaryBookRing.imageset",
+    "bytes": 908,
+    "references": [
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/DiaryPhysicalBookScreen.swift",
+      "TravelDiaryTests/DiaryEditor/DiaryBookImageExportTests.swift"
+    ]
+  },
+  {
+    "name": "DiarySpreadExportBackground",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/DiarySpreadExportBackground.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryEditor/Export/DiarySpreadExportBackground.imageset",
+    "bytes": 425628,
+    "references": [
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Infrastructure/DiaryBookImageExporter.swift"
+    ]
+  },
+  {
+    "name": "album-tilt-28",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/album-tilt-28.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/album-tilt-28.imageset",
+    "bytes": 6186,
+    "references": []
+  },
+  {
+    "name": "blur-28",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/blur-28.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/blur-28.imageset",
+    "bytes": 9793,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/ImageEditor/SecondCameraImageEditorViewController.swift"
+    ]
+  },
+  {
+    "name": "brush-highlighter",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/brush-highlighter.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/brush-highlighter.imageset",
+    "bytes": 2296,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/ImageEditor/SecondCameraImageEditorViewController+Draw.swift"
+    ]
+  },
+  {
+    "name": "brush-pen-28",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/brush-pen-28.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/brush-pen-28.imageset",
+    "bytes": 2468,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/Preview/SecondCameraAttachmentPreviewToolbar.swift"
+    ]
+  },
+  {
+    "name": "brush-pen",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/brush-pen.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/brush-pen.imageset",
+    "bytes": 2450,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/ImageEditor/SecondCameraImageEditorViewController+Draw.swift"
+    ]
+  },
+  {
+    "name": "check-28",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/check-28.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/check-28.imageset",
+    "bytes": 1449,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/Preview/SecondCameraAttachmentPreviewToolbar.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/ImageEditor/SecondCameraImageEditorToolbar.swift"
+    ]
+  },
+  {
+    "name": "check-circle-fill",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/check-circle-fill.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/check-circle-fill.imageset",
+    "bytes": 1725,
+    "references": []
+  },
+  {
+    "name": "chevron-left-bold-28",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/chevron-left-bold-28.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/chevron-left-bold-28.imageset",
+    "bytes": 1452,
+    "references": []
+  },
+  {
+    "name": "chevron-right-colored-42",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/chevron-right-colored-42.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/chevron-right-colored-42.imageset",
+    "bytes": 2515,
+    "references": []
+  },
+  {
+    "name": "crop-rotate-28",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/crop-rotate-28.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/crop-rotate-28.imageset",
+    "bytes": 3956,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/Preview/SecondCameraAttachmentPreviewToolbar.swift"
+    ]
+  },
+  {
+    "name": "edit-28",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/edit-28.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/edit-28.imageset",
+    "bytes": 1845,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/ImageEditor/SecondCameraImageEditorViewController.swift"
+    ]
+  },
+  {
+    "name": "flash-auto",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/flash-auto.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/flash-auto.imageset",
+    "bytes": 2438,
+    "references": []
+  },
+  {
+    "name": "flash-off",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/flash-off.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/flash-off.imageset",
+    "bytes": 2244,
+    "references": []
+  },
+  {
+    "name": "flash-on",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/flash-on.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/flash-on.imageset",
+    "bytes": 1382,
+    "references": []
+  },
+  {
+    "name": "flip-28",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/flip-28.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/flip-28.imageset",
+    "bytes": 6321,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/ImageEditor/SecondCameraImageEditorCropViewController.swift"
+    ]
+  },
+  {
+    "name": "font-bold",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/font-bold.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/font-bold.imageset",
+    "bytes": 2487,
+    "references": []
+  },
+  {
+    "name": "font-condensed",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/font-condensed.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/font-condensed.imageset",
+    "bytes": 3091,
+    "references": []
+  },
+  {
+    "name": "font-regular",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/font-regular.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/font-regular.imageset",
+    "bytes": 2493,
+    "references": []
+  },
+  {
+    "name": "font-script",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/font-script.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/font-script.imageset",
+    "bytes": 6682,
+    "references": []
+  },
+  {
+    "name": "font-serif",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/font-serif.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/font-serif.imageset",
+    "bytes": 3070,
+    "references": []
+  },
+  {
+    "name": "link",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/link.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/link.imageset",
+    "bytes": 2937,
+    "references": [
+      "TravelDiaryClient/Projects/Core/Markdown/MarkdownTheme.swift",
+      "TravelDiaryClient/Projects/Core/Markdown/MarkdownDocumentView.swift",
+      "TravelDiaryClient/Projects/Core/Markdown/MarkdownSegment.swift",
+      "TravelDiaryClient/Projects/App/Sources/TravelDiaryApp.swift",
+      "TravelDiaryClient/Projects/Features/HelpFeedback/FeedbackFormScreen.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/PhotoEditorTelegram/UpstreamTelegram/MediaEditor/Sources/Drawing/CodableDrawingEntity.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/DiaryReadingAnimation.swift",
+      "TravelDiaryTests/Storage/ResourceCacheTests.swift",
+      "TravelDiaryTests/Storage/StorageManagementTests.swift"
+    ]
+  },
+  {
+    "name": "lock-28",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/lock-28.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/lock-28.imageset",
+    "bytes": 4346,
+    "references": []
+  },
+  {
+    "name": "media-editor-video-trim-gray",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/media-editor-video-trim-gray.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/media-editor-video-trim-gray.imageset",
+    "bytes": 2061,
+    "references": []
+  },
+  {
+    "name": "media-editor-video-trim-yellow",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/media-editor-video-trim-yellow.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/media-editor-video-trim-yellow.imageset",
+    "bytes": 2063,
+    "references": []
+  },
+  {
+    "name": "mijick-background-inverted",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-background-inverted.colorset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Colors/mijick-background-inverted.colorset",
+    "bytes": 326,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Preview/SecondCameraPublicMediaPreview.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Preview/SecondCameraMediaPreviewViewport.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+TopBar.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+BottomBar.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+CaptureButton.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+TopButton.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Components/DefaultScreen+CloseButton.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/CapturedMedia/DefaultCustomCapturedMediaScreen+PreviewToolbar.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/CapturedMedia/DefaultCustomCapturedMediaScreen.swift"
+    ]
+  },
+  {
+    "name": "mijick-background-primary-50",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-background-primary-50.colorset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Colors/mijick-background-primary-50.colorset",
+    "bytes": 326,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+CameraOutputSwitch.swift"
+    ]
+  },
+  {
+    "name": "mijick-background-primary-80",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-background-primary-80.colorset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Colors/mijick-background-primary-80.colorset",
+    "bytes": 326,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+TopBar.swift"
+    ]
+  },
+  {
+    "name": "mijick-background-primary",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-background-primary.colorset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Colors/mijick-background-primary.colorset",
+    "bytes": 326,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Preview/CustomCameraPreview+Metal.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Preview/SecondCameraPublicMediaPreview.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Preview/SecondCameraMediaPreviewViewport.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Error/DefaultCustomCameraErrorScreen.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/CapturedMedia/DefaultCustomCapturedMediaScreen.swift"
+    ]
+  },
+  {
+    "name": "mijick-background-red",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-background-red.colorset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Colors/mijick-background-red.colorset",
+    "bytes": 326,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+CaptureButton.swift"
+    ]
+  },
+  {
+    "name": "mijick-background-secondary",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-background-secondary.colorset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Colors/mijick-background-secondary.colorset",
+    "bytes": 326,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Preview/SecondCameraPublicMediaPreview.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+CameraOutputSwitch.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+BottomBar.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+TopButton.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/CapturedMedia/DefaultCustomCapturedMediaScreen+PreviewToolbar.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/CapturedMedia/DefaultCustomCapturedMediaScreen.swift"
+    ]
+  },
+  {
+    "name": "mijick-background-yellow",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-background-yellow.colorset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Colors/mijick-background-yellow.colorset",
+    "bytes": 326,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Preview/CustomCameraPreview+FocusIndicator.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+TopBar.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+CameraOutputSwitch.swift"
+    ]
+  },
+  {
+    "name": "mijick-icon-cancel",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-icon-cancel.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Capture/mijick-icon-cancel.imageset",
+    "bytes": 942,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Preview/SecondCameraPublicMediaPreview.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Components/DefaultScreen+CloseButton.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/CapturedMedia/DefaultCustomCapturedMediaScreen.swift"
+    ]
+  },
+  {
+    "name": "mijick-icon-change-camera",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-icon-change-camera.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Capture/mijick-icon-change-camera.imageset",
+    "bytes": 1705,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+BottomBar.swift"
+    ]
+  },
+  {
+    "name": "mijick-icon-check",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-icon-check.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Capture/mijick-icon-check.imageset",
+    "bytes": 916,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/CapturedMedia/DefaultCustomCapturedMediaScreen.swift"
+    ]
+  },
+  {
+    "name": "mijick-icon-crosshair",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-icon-crosshair.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Capture/mijick-icon-crosshair.imageset",
+    "bytes": 6622,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Preview/CustomCameraPreview+FocusIndicator.swift"
+    ]
+  },
+  {
+    "name": "mijick-icon-flash-auto",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-icon-flash-auto.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Capture/mijick-icon-flash-auto.imageset",
+    "bytes": 1433,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+TopBar.swift"
+    ]
+  },
+  {
+    "name": "mijick-icon-flash-off",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-icon-flash-off.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Capture/mijick-icon-flash-off.imageset",
+    "bytes": 1199,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+TopBar.swift"
+    ]
+  },
+  {
+    "name": "mijick-icon-flash-on",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-icon-flash-on.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Capture/mijick-icon-flash-on.imageset",
+    "bytes": 1030,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+TopBar.swift"
+    ]
+  },
+  {
+    "name": "mijick-icon-flip-off",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-icon-flip-off.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Capture/mijick-icon-flip-off.imageset",
+    "bytes": 1486,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+TopBar.swift"
+    ]
+  },
+  {
+    "name": "mijick-icon-flip-on",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-icon-flip-on.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Capture/mijick-icon-flip-on.imageset",
+    "bytes": 1198,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+TopBar.swift"
+    ]
+  },
+  {
+    "name": "mijick-icon-grid-off",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-icon-grid-off.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Capture/mijick-icon-grid-off.imageset",
+    "bytes": 840,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+TopBar.swift"
+    ]
+  },
+  {
+    "name": "mijick-icon-grid-on",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-icon-grid-on.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Capture/mijick-icon-grid-on.imageset",
+    "bytes": 805,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+TopBar.swift"
+    ]
+  },
+  {
+    "name": "mijick-icon-light",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-icon-light.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Capture/mijick-icon-light.imageset",
+    "bytes": 974,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+TopBar.swift"
+    ]
+  },
+  {
+    "name": "mijick-icon-photo",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-icon-photo.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Capture/mijick-icon-photo.imageset",
+    "bytes": 1151,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+CameraOutputSwitch.swift"
+    ]
+  },
+  {
+    "name": "mijick-icon-video",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-icon-video.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Capture/mijick-icon-video.imageset",
+    "bytes": 1166,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+CameraOutputSwitch.swift"
+    ]
+  },
+  {
+    "name": "mijick-text-brand",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-text-brand.colorset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Colors/mijick-text-brand.colorset",
+    "bytes": 326,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Error/DefaultCustomCameraErrorScreen.swift"
+    ]
+  },
+  {
+    "name": "mijick-text-primary",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-text-primary.colorset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Colors/mijick-text-primary.colorset",
+    "bytes": 326,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+TopBar.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Error/DefaultCustomCameraErrorScreen.swift"
+    ]
+  },
+  {
+    "name": "mijick-text-secondary",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-text-secondary.colorset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Colors/mijick-text-secondary.colorset",
+    "bytes": 326,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Error/DefaultCustomCameraErrorScreen.swift"
+    ]
+  },
+  {
+    "name": "mijick-text-tertiary",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/mijick-text-tertiary.colorset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Colors/mijick-text-tertiary.colorset",
+    "bytes": 326,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Presentation/Default/Camera/DefaultCustomCameraScreen+CameraOutputSwitch.swift"
+    ]
+  },
+  {
+    "name": "multicapture-off",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/multicapture-off.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/multicapture-off.imageset",
+    "bytes": 6215,
+    "references": []
+  },
+  {
+    "name": "multicapture-on",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/multicapture-on.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/multicapture-on.imageset",
+    "bytes": 3872,
+    "references": []
+  },
+  {
+    "name": "play-fill-32",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/play-fill-32.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/play-fill-32.imageset",
+    "bytes": 1260,
+    "references": []
+  },
+  {
+    "name": "quality-high",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/quality-high.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/quality-high.imageset",
+    "bytes": 5949,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/Preview/SecondCameraAttachmentPreviewToolbar.swift"
+    ]
+  },
+  {
+    "name": "quality-standard",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/quality-standard.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/quality-standard.imageset",
+    "bytes": 8041,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/Preview/SecondCameraAttachmentPreviewToolbar.swift"
+    ]
+  },
+  {
+    "name": "ratio-28",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/ratio-28.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/ratio-28.imageset",
+    "bytes": 3727,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/ImageEditor/SecondCameraImageEditorCropViewController.swift"
+    ]
+  },
+  {
+    "name": "rotate-28",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/rotate-28.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/rotate-28.imageset",
+    "bytes": 4194,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/ImageEditor/SecondCameraImageEditorCropViewController.swift"
+    ]
+  },
+  {
+    "name": "save-28",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/save-28.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/save-28.imageset",
+    "bytes": 4557,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/Preview/SecondCameraAttachmentPreviewToolbar.swift"
+    ]
+  },
+  {
+    "name": "sticker-smiley-28",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/sticker-smiley-28.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/sticker-smiley-28.imageset",
+    "bytes": 5306,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/ImageEditor/SecondCameraImageEditorViewController.swift"
+    ]
+  },
+  {
+    "name": "switch-camera-28",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/switch-camera-28.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/switch-camera-28.imageset",
+    "bytes": 2381,
+    "references": []
+  },
+  {
+    "name": "text-28",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/text-28.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/text-28.imageset",
+    "bytes": 3404,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/ImageEditor/SecondCameraImageEditorViewController.swift"
+    ]
+  },
+  {
+    "name": "text_effects-fill",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/text_effects-fill.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/text_effects-fill.imageset",
+    "bytes": 4950,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/UIKitExtensions/SecondCameraMediaTextView.swift"
+    ]
+  },
+  {
+    "name": "text_effects",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/text_effects.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/text_effects.imageset",
+    "bytes": 6470,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/UIKitExtensions/SecondCameraMediaTextView.swift"
+    ]
+  },
+  {
+    "name": "trash",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/trash.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/trash.imageset",
+    "bytes": 4199,
+    "references": [
+      "TravelDiaryClient/Projects/Core/Storage/StorageService.swift",
+      "TravelDiaryClient/Projects/Features/HelpFeedback/FeedbackFormScreen.swift",
+      "TravelDiaryClient/Projects/Features/StorageManagement/StorageManagementScreen.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/PhotoEditorTelegram/TelegramPhotoEditorView.swift",
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/ImageEditor/SecondCameraImageEditorView.swift",
+      "TravelDiaryClient/Projects/Features/diagram/SwiftFlow/Previews/FlowCanvasPreview.swift",
+      "TravelDiaryClient/Projects/Features/DiaryCanvasAI/Presentation/DiaryAIWorkspaceView.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Infrastructure/DiaryDocumentStore.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/DiaryPhotoManagerSheet.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/DiaryEditorHomeView.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/DiaryBookScreen.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/DiaryReaderPhotoStrip.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/Tools/DiaryLayerToolContent.swift",
+      "TravelDiaryClient/Projects/Features/DiaryEditor/Presentation/Text/DiaryTextEditorSheet.swift"
+    ]
+  },
+  {
+    "name": "undo-28",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/undo-28.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/undo-28.imageset",
+    "bytes": 1933,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/ImageEditor/SecondCameraImageEditorToolbar.swift"
+    ]
+  },
+  {
+    "name": "x-28",
+    "status": "retained",
+    "reason": "reference-token",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/x-28.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/SecondCamera/Editor/x-28.imageset",
+    "bytes": 1652,
+    "references": [
+      "TravelDiaryClient/Projects/Features/SecondCamera/CustomCamera/Internal/Editing/ImageEditor/SecondCameraImageEditorToolbar.swift"
+    ]
+  },
+  {
+    "name": "x-circle-fill",
+    "status": "unused-candidate",
+    "reason": "no-static-reference",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/SecondCamera/x-circle-fill.imageset",
+    "path": "ResourceArchive/UnusedAssets/Assets.xcassets/Features/SecondCamera/Editor/x-circle-fill.imageset",
+    "bytes": 1926,
+    "references": []
+  },
+  {
+    "name": "TextPaper-gardenBlueTicket",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TextPaper-gardenBlueTicket.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryEditor/TextPapers/TextPaper-gardenBlueTicket.imageset",
+    "bytes": 234162,
+    "references": []
+  },
+  {
+    "name": "TextPaper-gardenClover",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TextPaper-gardenClover.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryEditor/TextPapers/TextPaper-gardenClover.imageset",
+    "bytes": 350139,
+    "references": []
+  },
+  {
+    "name": "TextPaper-gardenLavender",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TextPaper-gardenLavender.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryEditor/TextPapers/TextPaper-gardenLavender.imageset",
+    "bytes": 327357,
+    "references": []
+  },
+  {
+    "name": "TextPaper-gardenLily",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TextPaper-gardenLily.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryEditor/TextPapers/TextPaper-gardenLily.imageset",
+    "bytes": 339351,
+    "references": []
+  },
+  {
+    "name": "TextPaper-gardenLilyTag",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TextPaper-gardenLilyTag.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryEditor/TextPapers/TextPaper-gardenLilyTag.imageset",
+    "bytes": 287898,
+    "references": []
+  },
+  {
+    "name": "TextPaper-gardenStrawberry",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TextPaper-gardenStrawberry.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryEditor/TextPapers/TextPaper-gardenStrawberry.imageset",
+    "bytes": 320064,
+    "references": []
+  },
+  {
+    "name": "TravelLayout-automatic",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TravelLayout-automatic.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryCanvasAI/LayoutPreviews/TravelLayout-automatic.imageset",
+    "bytes": 2790970,
+    "references": []
+  },
+  {
+    "name": "TravelLayout-collage",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TravelLayout-collage.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryCanvasAI/LayoutPreviews/TravelLayout-collage.imageset",
+    "bytes": 3396257,
+    "references": []
+  },
+  {
+    "name": "TravelLayout-editorial",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TravelLayout-editorial.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryCanvasAI/LayoutPreviews/TravelLayout-editorial.imageset",
+    "bytes": 3117763,
+    "references": []
+  },
+  {
+    "name": "TravelLayout-headline",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TravelLayout-headline.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryCanvasAI/LayoutPreviews/TravelLayout-headline.imageset",
+    "bytes": 3206381,
+    "references": []
+  },
+  {
+    "name": "TravelLayout-hero",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TravelLayout-hero.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryCanvasAI/LayoutPreviews/TravelLayout-hero.imageset",
+    "bytes": 2884995,
+    "references": []
+  },
+  {
+    "name": "TravelLayout-story",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TravelLayout-story.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryCanvasAI/LayoutPreviews/TravelLayout-story.imageset",
+    "bytes": 3036257,
+    "references": []
+  },
+  {
+    "name": "TravelStyle-clean",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TravelStyle-clean.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryCanvasAI/StylePreviews/TravelStyle-clean.imageset",
+    "bytes": 380430,
+    "references": []
+  },
+  {
+    "name": "TravelStyle-gentle",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TravelStyle-gentle.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryCanvasAI/StylePreviews/TravelStyle-gentle.imageset",
+    "bytes": 489164,
+    "references": []
+  },
+  {
+    "name": "TravelStyle-illustrated",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TravelStyle-illustrated.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryCanvasAI/StylePreviews/TravelStyle-illustrated.imageset",
+    "bytes": 615542,
+    "references": []
+  },
+  {
+    "name": "TravelStyle-playful",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TravelStyle-playful.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryCanvasAI/StylePreviews/TravelStyle-playful.imageset",
+    "bytes": 499971,
+    "references": []
+  },
+  {
+    "name": "TravelStyle-scenic",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TravelStyle-scenic.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryCanvasAI/StylePreviews/TravelStyle-scenic.imageset",
+    "bytes": 480559,
+    "references": []
+  },
+  {
+    "name": "TravelStyle-vintage",
+    "status": "retained",
+    "reason": "dynamic-name",
+    "original": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/TravelStyle-vintage.imageset",
+    "path": "TravelDiaryClient/Projects/App/Resources/Assets.xcassets/Features/DiaryCanvasAI/StylePreviews/TravelStyle-vintage.imageset",
+    "bytes": 554066,
+    "references": []
+  }
+]

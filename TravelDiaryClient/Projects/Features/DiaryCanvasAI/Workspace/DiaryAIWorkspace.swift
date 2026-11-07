@@ -84,6 +84,12 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         request = value.coordinated()
         log("settings", "整页制作设置", request.designBrief)
         if value.action != .relayout { pending = [] }
+        else if pending.isEmpty, value.background?.backgroundOnly != true, let working {
+            pending = objects.filter { $0.editable && $0.role != "background" && (!value.selectedOnly || $0.id == source?.selectedID) }.map(\.id)
+            checkpoints.append(.init(working.document, pending: pending))
+            composition = ""; layoutRegions = []; textDone = false
+            awaitingConfirmation = false; visualRevision = nil; confirmationScope = nil
+        }
         running = true
         Task {
             do {
@@ -154,7 +160,10 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     var canGenerateBackground: Bool { active && !running && pending.isEmpty && hasBackgroundRequest && !needsTextCompletion && visualRevision == nil && (!awaitingConfirmation || backgroundRecord?.verified == false) }
     var canRetryAlbum: Bool { !running && backgroundRecord?.layerID != nil && backgroundRecord?.albumState != "saved" }
     @Published private(set) var needsSaveRetry = false
-    private let automaticallySavesCompletedProduction: Bool
+    private let automaticSaveOverride: Bool?
+    private var automaticallySavesCompletedProduction: Bool {
+        automaticSaveOverride ?? (UserDefaults.standard.object(forKey: "DiaryCanvasAI.autoSaveCompletedWork") as? Bool ?? true)
+    }
     private let efficientExecution: Bool
     private let model: any DiaryAIModelClient
     private let productionLog: DiaryAIProductionLog
@@ -163,7 +172,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private var storageSequence = 0
     var canRollback: Bool { checkpoints.count > 1 && !running && !addingMaterials }
     init(session: DiaryEditorSession, model: (any DiaryAIModelClient)? = nil, root: URL? = nil, backgroundProvider: (any DiaryAIBackgroundProvider)? = nil, albumSaver: (any DiaryAIBackgroundAlbumSaving)? = nil, efficientExecution: Bool? = nil, parallelExecution: Bool? = nil, automaticallySavesCompletedProduction: Bool? = nil) {
-        self.automaticallySavesCompletedProduction = automaticallySavesCompletedProduction ?? (model == nil && backgroundProvider == nil)
+        self.automaticSaveOverride = automaticallySavesCompletedProduction ?? ((model == nil && backgroundProvider == nil) ? nil : false)
         self.usesProductionQuota = model == nil && backgroundProvider == nil
         self.parallelExecution = parallelExecution ?? (UserDefaults.standard.object(forKey: "DiaryCanvasAI.parallelExecution") as? Bool ?? true)
         self.backgroundProvider = backgroundProvider ?? DiarySeedreamBackgroundProvider()
@@ -193,10 +202,14 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         }
     }
     func exportProductionLog() async throws -> URL {
+        productionLog.record("storage-diagnostics", StorageActivity.shared.diagnosticSnapshot())
+        if let source {
+            productionLog.record("editor-diagnostics", ["page": source.document.id.uuidString, "busy": source.busy, "error": source.errorMessage ?? "", "stage": stage, "running": running])
+        }
         productionLog.record("export", ["eventCount": events.count, "version": version, "pending": pending.map(\.uuidString)])
         return try await productionLog.export()
     }
-    func enter(_ request: DiaryAIRequest) async {
+    func enter(_ request: DiaryAIRequest, preparingNewCreation: Bool = false) async {
         guard !active, let source else { return }
         enteredFromDraft = false
         (model as? DiaryArkResponsesClient)?.productionLog = productionLog
@@ -237,9 +250,9 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 layoutRegions = []; visualRevision = nil; confirmationScope = nil
                 baseline = .init(source.document, pending: [])
                 try await setup(source.document)
-                pending = request.action == .relayout && request.background?.backgroundOnly != true ? objects.filter { $0.editable && $0.role != "background" && (!request.selectedOnly || $0.id == source.selectedID) }.map(\.id) : []
+                pending = preparingNewCreation && request.action == .relayout && request.background?.backgroundOnly != true ? objects.filter { $0.editable && $0.role != "background" && (!request.selectedOnly || $0.id == source.selectedID) }.map(\.id) : []
                 checkpoints = [.init(source.document, pending: pending)]; version = 0; composition = ""; events = []; textDone = false; queue = []; selected = []
-                log("checkpoint", "已创建排版前恢复点", "照片与相框绑定保留；待排区不改变源图层坐标。")
+                log("checkpoint", preparingNewCreation ? "已创建制作恢复点" : "已打开当前作品", "进入页面保留当前画布；确认开始调整后再建立待排任务。")
             }
             if let bytes = try? JSONEncoder().encode(self.request) { productionLog.data("effective-settings", bytes) }
             let originalBridge = DiaryEditorAIBridge(source); _ = try await originalBridge.capture(self.request)
@@ -259,6 +272,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         for (id, asset) in document.assets where images[id] == nil { images[id] = try await source.store.loadOriginalImage(asset, documentID: document.id) }
         let session = DiaryEditorSession(document: document, images: images, store: source.store, contentID: source.contentID)
         session.aiTransientSession = true; session.selectedID = source.selectedID
+        if let previous = working { await previous.discardCreationSession() }
         working = session; let adapter = DiaryEditorAIBridge(session); bridge = adapter
         objects = adapter.objectChoices
         let missing = Self.creationThumbnails(session, excluding: Set(thumbnails.keys))
@@ -295,15 +309,16 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         var contextRequest = request; contextRequest.selectedOnly = false
         _ = try await bridge.capture(contextRequest)
         preview = UIImage(data: try await bridge.originalPreview()); objects = bridge.objectChoices
-        updateDisplaySession()
+        await updateDisplaySession()
     }
-    private func updateDisplaySession() {
+    private func updateDisplaySession() async {
         if let working {
             var document = working.document
             let hidden = Set(pending)
             document.objects[working.contentID]?.layers.removeAll { hidden.contains($0.id) || $0.frameTargetID.map(hidden.contains) == true }
             let display = DiaryEditorSession(document: document, images: working.images, store: working.store, contentID: working.contentID)
             display.aiTransientSession = true
+            if let previous = displaySession { await previous.discardCreationSession() }
             displaySession = display
         }
     }
@@ -1869,7 +1884,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                                 throw error
                             }
                             committed = true; committedRound = round; preview = UIImage(data: draft.preview); objects = bridge.objectChoices
-                            updateDisplaySession()
+                            await updateDisplaySession()
                             madeProgress = true; repeatedErrors = 0; missingCallRetries = 0
                             (model as? DiaryArkResponsesClient)?.allowedLayerReferences = objects.filter { confirmationIDs.contains($0.id) }.flatMap { [$0.shortID, $0.id.uuidString] }
                             feedback = [.init(id: "canvas-v\(version)", caption: "本批已提交，检查主体遮挡和文字留白；通过finish_batch，有问题request_batch_revision", data: draft.preview)]

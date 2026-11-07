@@ -602,7 +602,7 @@ struct PrintUploadScreen: View {
                     if let error = job.error { Text(error).foregroundStyle(.red) }
                     if service.isRunning(id) { Button("暂停上传") { service.pause(id) } }
                     else if job.state != "已上传" || latestOrder?.file_state == "failed" {
-                        Button("继续上传生产文件") { service.resume(id) }
+                        Button(job.orderID == nil ? "重新提交订单" : "继续上传生产文件") { service.resume(id) }
                     }
                     Text("可关闭页面，稍后从“我的印制订单”恢复。切换到后台后上传可能暂停。")
                         .font(.footnote).foregroundStyle(.secondary)
