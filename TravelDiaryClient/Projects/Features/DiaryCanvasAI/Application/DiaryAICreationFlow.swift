@@ -130,7 +130,13 @@ nonisolated struct DiaryCreationDraft: Codable {
             try JSONEncoder().encode(draft).write(to: directory.appendingPathComponent("draft.json"), options: .atomic)
             saveError = nil
             if !busy && pendingPhotoIDs.isEmpty {
-                let used = Set(draft.photos.map(\.filename) + draft.stickers.map(\.filename) + stickerStock.map { $0.0.filename } + (undo?.stickers.map(\.filename) ?? []) + (removedPhoto.map { [$0.filename] } ?? []))
+                var used = Set<String>()
+                for photo in draft.photos { used.insert(photo.filename) }
+                for sticker in draft.stickers { used.insert(sticker.filename) }
+                if let undo {
+                    for sticker in undo.stickers { used.insert(sticker.filename) }
+                }
+                if let removedPhoto { used.insert(removedPhoto.filename) }
                 for file in (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [] where ["photo", "sticker"].contains(file.pathExtension) && !used.contains(file.lastPathComponent) {
                     try? FileManager.default.removeItem(at: file)
                 }
@@ -140,7 +146,6 @@ nonisolated struct DiaryCreationDraft: Codable {
         } catch { saveError = "草稿保存失败：" + error.localizedDescription; return false }
     }
     func cancelOperation() {
-        stockTask?.cancel(); stockTask = nil; stickerStock = []
         photoGeneration = UUID(); photoTask?.cancel(); photoTask = nil; pendingPhotoIDs = []; selectedPhotoImages = [:]
         preparationSuspended = true
         preparationGeneration = UUID(); preparationTask?.cancel(); preparationTask = nil
@@ -328,36 +333,22 @@ nonisolated struct DiaryCreationDraft: Codable {
         catalogJob = Task {
             defer { if catalogOperation == stamp { loadingCatalog = false } }
             do {
-                var values: [CloudMaterial] = []
-                var cursor: String? = more ? catalogCursor : nil
-                var visited = Set<String>()
-                repeat {
-                    var params = ["schema": "2", "type": "sticker", "limit": "100"]
-                    params["cursor"] = cursor
-                    let page: MaterialListPage<CloudMaterial> = try await MaterialCatalogRepository.shared.request(MaterialRoutes.path("items/", params))
-                    try Task.checkCancellation()
-                    guard MaterialCatalogRepository.shared.owner == owner else { throw CancellationError() }
-                    values += page.items; cursor = page.next_cursor
-                    if let cursor, !visited.insert(cursor).inserted { break }
-                } while cursor != nil && values.count < 500
-                guard catalogOperation == stamp else { return }
-                catalogCursor = cursor; hasMoreCatalog = cursor != nil
+                let cursor = more ? catalogCursor : nil
+                var params = ["schema": "2", "type": "sticker", "limit": "36"]
+                params["cursor"] = cursor
+                let page: MaterialListPage<CloudMaterial> = try await MaterialCatalogRepository.shared.request(MaterialRoutes.path("items/", params))
+                try Task.checkCancellation()
+                guard catalogOperation == stamp, MaterialCatalogRepository.shared.owner == owner else { return }
+                catalogCursor = page.next_cursor
+                hasMoreCatalog = catalogCursor != nil && catalogCursor != cursor
                 var seen = Set<String>()
-                candidates = (more ? candidates + values : values).filter { $0.availability != "unavailable" && $0.revision > 0 && seen.insert($0.id).inserted }
-                if !draft.didDraw { draw() }
+                candidates = ((more ? candidates : []) + page.items).filter { $0.availability != "unavailable" && $0.revision > 0 && seen.insert($0.id).inserted }
             } catch {
                 if !Task.isCancelled, catalogOperation == stamp { self.error = "贴纸目录暂不可用，可以重试或不用贴纸继续。" }
             }
         }
     }
-    var themes: [String] {
-        ["全部"] + ["旅行", "自然", "生活"].filter { theme in
-            candidates.contains { ($0.name + $0.keywords.joined(separator: " ")).localizedCaseInsensitiveContains(theme) }
-        }
-    }
-    var filteredCandidates: [CloudMaterial] {
-        candidates.filter { draft.theme == "全部" || ($0.name + $0.keywords.joined(separator: " ")).localizedCaseInsensitiveContains(draft.theme) }
-    }
+    let themes = ["全部", "旅行", "自然", "生活"]
     private func remember() { undo = draft; undoAvailable = true }
     func cancelStickerOperation() {
         operation = UUID(); job?.cancel(); job = nil; busy = false; pendingStickerIDs = []; stickerLoadFailed = false
@@ -451,68 +442,23 @@ nonisolated struct DiaryCreationDraft: Codable {
             } catch { if operation == token, !Task.isCancelled { stickerLoadFailed = true; self.error = "贴纸准备失败，请重试。" } }
         }
     }
-    private var stickerStock: [(DiaryCreationSticker, UIImage)] = []
-    private var stockTask: Task<Void, Never>?
-    private var stockTheme = ""
-
-    private func refillStickerStock() {
-        guard stockTask == nil, stickerStock.count < 12, ownerValid else { return }
-        let theme = draft.theme
-        stockTask = Task {
-            defer { stockTask = nil }
-            do {
-                var params = ["schema": "2", "type": "sticker", "sort": "random", "limit": "36"]
-                params["exclude"] = Set(stickerStock.map { $0.0.id } + draft.stickers.map(\.id) + Array(draft.excluded)).sorted().joined(separator: ",")
-                if theme != "全部" { params["q"] = theme }
-                struct StockResponse: Decodable { let items: [CloudMaterial]; let draw_scope: String? }
-                let page: StockResponse = try await MaterialCatalogRepository.shared.request(MaterialRoutes.path("items/", params))
-                guard page.draw_scope == "published_stickers" else { return }
-                for item in page.items where item.availability != "unavailable" && item.revision > 0 {
-                    guard !Task.isCancelled, ownerValid, draft.theme == theme else { return }
-                    if stickerStock.contains(where: { $0.0.id == item.id }) || draft.stickers.contains(where: { $0.id == item.id }) || draft.excluded.contains(item.id) { continue }
-                    if let prepared = try? await prepareSticker(item, kept: false) {
-                        guard !Task.isCancelled, ownerValid, draft.theme == theme else { return }
-                        stickerStock.append(prepared)
-                    }
-                }
-            } catch { /* Existing stock remains usable; the next draw retries replenishment. */ }
-        }
-    }
-
     func draw() {
         guard !isSubmitting, !busy, !allKept else { return }
-        if stockTheme != draft.theme {
-            stockTask?.cancel(); stockTask = nil; stickerStock = []; stockTheme = draft.theme
-        }
-        stickerStock.removeAll { entry in draft.excluded.contains(entry.0.id) || draft.stickers.contains { $0.id == entry.0.id } }
-        let keptStock = draft.stickers.filter(\.kept)
-        let needed = max(0, 6 - keptStock.count)
-        if needed > 0, stickerStock.count >= needed {
-            let incoming = Array(stickerStock.prefix(needed)); stickerStock.removeFirst(needed)
-            remember(); draft.history.append(draft.stickers.map(\.id)); draft.history = Array(draft.history.suffix(2))
-            draft.stickers = keptStock + incoming.map { $0.0 }
-            for entry in incoming { images[entry.0.filename] = entry.1 }
-            draft.seed &+= 1; draft.batch += 1; draft.didDraw = true
-            save(); refillStickerStock()
-            return
-        }
         busy = true; stickerLoadFailed = false; error = nil; status = "正在准备新一批贴纸…"
         let token = UUID(); operation = token
         job = Task {
             defer { if operation == token { busy = false } }
             do {
                 let kept = draft.stickers.filter(\.kept)
-                let target = kept.count >= 6 ? draft.stickers.count : max(Int.random(in: 3...6), kept.count)
+                let target = kept.count >= 6 ? draft.stickers.count : max(Int.random(in: 3...6), kept.count + 1)
                 let excluded = draft.excluded.union(draft.stickers.map(\.id)).filter { UUID(uuidString: $0) != nil }
-                var params = ["schema": "2", "type": "sticker", "sort": "random", "limit": String(max(1, target - kept.count)), "exclude": excluded.sorted().joined(separator: ",")]
-                if draft.theme != "全部" { params["q"] = draft.theme }
-                // Ordinary catalog pages also contain items. Require an explicit draw receipt
-                // so an older server cannot silently pass its first page off as a random batch.
+                struct DrawInput: Encodable { let count: Int; let theme: String; let exclude: [String]; let recent: [String] }
                 struct DrawResponse: Decodable { let items: [CloudMaterial]; let draw_scope: String? }
-                let repository = MaterialCatalogRepository.shared
-                guard let engine = repository.engine else { throw URLError(.userAuthenticationRequired) }
-                let path = MaterialRoutes.path("items/", params)
-                let request = SupportNetworkRequest(method: .get, path: "/api/v1/materials/items/", queryItems: URLComponents(string: path)?.queryItems, strategy: NetworkStrategy(requiresAuth: true, allowETag: false))
+                guard let engine = MaterialCatalogRepository.shared.engine else { throw URLError(.userAuthenticationRequired) }
+                let count = max(1, target - kept.count)
+                let recent = Set(draft.history.suffix(2).flatMap { $0 }).filter { UUID(uuidString: $0) != nil }
+                let input = DrawInput(count: count, theme: draft.theme == "全部" ? "" : draft.theme, exclude: excluded.sorted(), recent: recent.sorted())
+                let request = SupportNetworkRequest(method: .post, path: "/api/v1/materials/stickers/draw/", body: .json(AnyEncodable(input)), strategy: NetworkStrategy(requiresAuth: true, allowETag: false))
                 let response = try await engine.sendRaw(request)
                 let page = try JSONDecoder().decode(DrawResponse.self, from: response.data)
                 guard page.draw_scope == "published_stickers" else {
@@ -522,25 +468,24 @@ nonisolated struct DiaryCreationDraft: Codable {
                 try Task.checkCancellation()
                 guard operation == token, ownerValid else { return }
                 let fresh = page.items.filter { $0.availability != "unavailable" && $0.revision > 0 && !excluded.contains($0.id) }
-                guard !fresh.isEmpty else { stickerLoadFailed = true; self.error = "服务端暂时没有更多可用贴纸，已保留当前搭配。"; return }
+                guard !fresh.isEmpty else { stickerLoadFailed = false; self.error = "服务端暂时没有更多可用贴纸，已保留当前搭配。"; return }
                 var seen = Set<String>()
                 let incoming = fresh.filter { seen.insert($0.id).inserted }.prefix(max(0, target - kept.count))
-                candidates = candidates.filter { old in !incoming.contains { $0.id == old.id } } + incoming
-                let result = DiaryStickerDrawEngine.Result(ids: kept.map(\.id) + incoming.map(\.id), seed: draft.seed &+ 1)
-                var prepared: [DiaryCreationSticker] = []
+                var replacements: [DiaryCreationSticker] = []
                 var previews: [String: UIImage] = [:]
-                for id in result.ids {
-                    if let existing = draft.stickers.first(where: { $0.id == id }) { prepared.append(existing); continue }
-                    guard let item = candidates.first(where: { $0.id == id }) else { throw DiaryEditorError.invalidImage }
+                for item in incoming {
                     let (sticker, image) = try await prepareSticker(item, kept: false)
-                    prepared.append(sticker); previews[sticker.filename] = image
+                    replacements.append(sticker); previews[sticker.filename] = image
                 }
+                var remaining = replacements.makeIterator()
+                var prepared = draft.stickers.compactMap { $0.kept ? $0 : remaining.next() }
+                while let next = remaining.next() { prepared.append(next) }
                 guard operation == token, !Task.isCancelled, ownerValid else { return }
                 remember(); draft.history.append(draft.stickers.map(\.id)); draft.history = Array(draft.history.suffix(2))
-                draft.stickers = prepared; draft.seed = result.seed; draft.batch += 1; draft.didDraw = true
-                images.merge(previews) { _, new in new }; save(); refillStickerStock()
+                draft.stickers = prepared; draft.seed &+= 1; draft.batch += 1; draft.didDraw = true
+                images.merge(previews) { _, new in new }; save()
                 UIAccessibility.post(notification: .announcement, argument: "已换好 \(prepared.count) 张贴纸")
-            } catch { if operation == token, !Task.isCancelled { stickerLoadFailed = true; self.error = "换批失败，已保留原来的贴纸。请重试或不用贴纸继续。" } }
+            } catch { if operation == token, !Task.isCancelled { stickerLoadFailed = false; self.error = "换批失败，已保留原来的贴纸。请重试或不用贴纸继续。" } }
         }
     }
     private struct PreparationInput {

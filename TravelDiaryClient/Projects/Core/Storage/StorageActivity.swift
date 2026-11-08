@@ -41,7 +41,8 @@ nonisolated final class StorageActivity: @unchecked Sendable {
         private let id: UUID
         private let registry: StorageActivity
         fileprivate init(id: UUID, registry: StorageActivity) { self.id = id; self.registry = registry }
-        deinit { registry.release(id) }
+        func release() { registry.release(id) }
+        deinit { release() }
     }
 }
 

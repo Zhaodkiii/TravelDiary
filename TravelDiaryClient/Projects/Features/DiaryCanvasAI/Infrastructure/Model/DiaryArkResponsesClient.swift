@@ -10,14 +10,16 @@ import Foundation
     var allowedLayerReferences: [String]?
     var allowedWorkspaceTools: Set<String>?
     var onTransportEvent: ((String, String) -> Void)?
-    private let apiKeyProvider: @MainActor () throws -> String
+    let runtime: DiaryAITaskRuntime
     private let session: URLSession
-    init(session: URLSession? = nil, apiKeyProvider: @escaping @MainActor () throws -> String = DiaryAITestConfig.requireAPIKey) {
-        self.apiKeyProvider = apiKeyProvider
+    init(session: URLSession? = nil, runtime: DiaryAITaskRuntime = DiaryAITaskRuntime()) {
+        self.runtime = runtime
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = DiaryAIRequestLimits.idleTimeout
         configuration.timeoutIntervalForResource = DiaryAIRequestLimits.requestDeadline
-        self.session = session ?? URLSession(configuration: configuration)
+        configuration.urlCache = nil
+        self.session = session ?? URLSession(configuration: configuration, delegate: DiaryAIRejectRedirects.shared, delegateQueue: nil)
+        runtime.register(self.session)
     }
 
     static func tools() -> [[String: Any]] {
@@ -48,7 +50,9 @@ import Foundation
     }
 
     func respond(prompt: String?, images: [DiaryAIImage], continuation: Data?, results: [DiaryAIToolResult]) async throws -> DiaryAIModelReply {
-        let apiKey = try DiaryAITestConfig.validatedKey(apiKeyProvider())
+        var access = try await runtime.access("diary.layout")
+        var apiKey = access.credential.secret
+        productionLog?.registerSecret(apiKey)
         var history = try continuation.map { try JSONSerialization.jsonObject(with: $0) as? [[String: Any]] ?? [] } ?? []
         func imageParts(_ values: [DiaryAIImage]) -> [[String: Any]] {
             values.flatMap { image in [
@@ -60,8 +64,8 @@ import Foundation
         for result in results { history.append(["type": "function_call_output", "call_id": result.callID, "output": result.text]) }
         let feedbackImages = results.flatMap(\.images)
         if !feedbackImages.isEmpty { history.append(["role": "user", "content": imageParts(feedbackImages)]) }
-        var request = URLRequest(url: DiaryAITestConfig.endpoint)
-        request.httpMethod = "POST"; request.timeoutInterval = DiaryAIRequestLimits.idleTimeout
+        var request = URLRequest(url: access.scene.endpoint)
+        request.httpMethod = "POST"; request.timeoutInterval = min(DiaryAIRequestLimits.idleTimeout, Double(access.scene.limits.requestTimeoutSeconds))
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         var selectedTools = workspaceMode ? DiaryAIWorkspaceTools.schemas.filter { tool in
@@ -108,14 +112,18 @@ import Foundation
                 parameters["properties"] = properties; selectedTools[index]["parameters"] = parameters
             }
         }
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["model": DiaryAITestConfig.model, "input": history,
+        var requestBody: [String: Any] = ["model": access.scene.modelId, "input": history,
             "tools": selectedTools,
             "tool_choice": workspaceMode ? "required" : "auto",
             "thinking": ["type": "enabled"], "reasoning": ["effort": "low"],
-            "stream": true, "max_output_tokens": planning ? 4096 : 8192, "store": false])
+            "stream": true, "max_output_tokens": planning ? 4096 : 8192, "store": false]
+        requestBody.merge(access.scene.parameters.mapValues(\.foundation)) { _, new in new }
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
         var received: Data?
+        var refreshedCredential = false
         for attempt in 0..<3 {
             try Task.checkCancellation()
+            try runtime.assertOwner()
             let started = Date()
             onTransportEvent?("开始连接模型服务", "规划：\(planning ? "是" : "否") · 思考：\("low")")
             productionLog?.record("request", ["endpoint": request.url!.absoluteString, "attempt": attempt])
@@ -132,6 +140,7 @@ import Foundation
                 var firstEvent = false
                 for try await line in bytes.lines {
                     try Task.checkCancellation()
+                    try runtime.assertOwner()
                     guard Date().timeIntervalSince(started) < DiaryAIRequestLimits.requestDeadline else {
                         throw DiaryAIError.invalid("本次模型请求超过总时限，已提交批次保留。手动重试会发起新请求，可能再次计费。")
                     }
@@ -155,6 +164,16 @@ import Foundation
             }
             let sanitizedBody = Data(String(decoding: errorBody, as: UTF8.self).replacingOccurrences(of: apiKey, with: "[REDACTED]").utf8)
             productionLog?.data("response-error", sanitizedBody)
+            if status == 401, !refreshedCredential, attempt < 2 {
+                refreshedCredential = true
+                let fresh = try await runtime.access("diary.layout", force: true)
+                if fresh.credential.version != access.credential.version {
+                    access = fresh; apiKey = fresh.credential.secret
+                    productionLog?.registerSecret(apiKey)
+                    request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+                    continue
+                }
+            }
             if status == 429, attempt < 2 {
                 let delay = min(15, max(1, Double((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After") ?? "") ?? Double(2 << attempt)))
                 try await Task.sleep(for: .seconds(delay)); continue

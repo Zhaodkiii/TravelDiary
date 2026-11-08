@@ -7,6 +7,8 @@ import ZIPFoundation
     private var sequence = 0
     private let writer = DiaryAILogWriter()
     private var knownAttachments: Set<String> = []
+    private var secrets: Set<String> = []
+    func registerSecret(_ value: String) { if !value.isEmpty { secrets.insert(value) } }
     private(set) var failure: String?
     init(owner: String, page: UUID, root: URL = StoragePaths.system.support) {
         let paths = StoragePaths(support: root, caches: StoragePaths.system.caches, temporary: StoragePaths.system.temporary)
@@ -42,7 +44,7 @@ import ZIPFoundation
     func data(_ kind: String, _ data: Data) {
         sequence += 1
         // Keep sequence/time assignment synchronous; parse, redact and encode on the ordered writer.
-        writer.record(kind, data: data, sequence: sequence, date: Date(), directory: directory, key: DiaryAITestConfig.apiKey)
+        writer.record(kind, data: data, sequence: sequence, date: Date(), directory: directory, keys: Array(secrets))
     }
     func flush() async throws { try await writer.flush() }
     func export() async throws -> URL {
@@ -84,14 +86,14 @@ private nonisolated final class DiaryAILogWriter: @unchecked Sendable {
     private var failure: Error?
     private let formatter = ISO8601DateFormatter()
 
-    func record(_ kind: String, data: Data, sequence: Int, date: Date, directory: URL, key: String) {
+    func record(_ kind: String, data: Data, sequence: Int, date: Date, directory: URL, keys: [String]) {
         queue.async {
             autoreleasepool {
                 do {
                     let value = try (try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed))
                         ?? ["file": try self.attachment(data, ext: "txt", directory: directory)]
                     let body: [String: Any] = ["sequence": sequence, "time": self.formatter.string(from: date),
-                        "kind": kind, "payload": try self.sanitize(value, directory: directory, key: key)]
+                        "kind": kind, "payload": try self.sanitize(value, directory: directory, keys: keys)]
                     var bytes = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys, .fragmentsAllowed])
                     bytes.append(10)
                     self.appendOnQueue(bytes, to: directory.appendingPathComponent("events.jsonl"))
@@ -99,17 +101,19 @@ private nonisolated final class DiaryAILogWriter: @unchecked Sendable {
             }
         }
     }
-    private func sanitize(_ value: Any, directory: URL, key: String) throws -> Any {
+    private func sanitize(_ value: Any, directory: URL, keys: [String]) throws -> Any {
         if let dict = value as? [String: Any] {
-            return try dict.filter { !["authorization", "api_key", "apikey"].contains($0.key.lowercased()) }
-                .mapValues { try sanitize($0, directory: directory, key: key) }
+            return try dict.filter { !["authorization", "proxy-authorization", "api_key", "apikey", "secret", "access_token", "refresh_token", "credentials"].contains($0.key.lowercased()) }
+                .mapValues { try sanitize($0, directory: directory, keys: keys) }
         }
-        if let array = value as? [Any] { return try array.map { try sanitize($0, directory: directory, key: key) } }
+        if let array = value as? [Any] { return try array.map { try sanitize($0, directory: directory, keys: keys) } }
         if let text = value as? String {
             if text.hasPrefix("data:image/"), let comma = text.firstIndex(of: ","), let data = Data(base64Encoded: String(text[text.index(after: comma)...])) {
                 return ["attachment": try attachment(data, ext: text.hasPrefix("data:image/png") ? "png" : "jpg", directory: directory), "bytes": data.count] as [String: Any]
             }
-            return key.isEmpty ? text : text.replacingOccurrences(of: key, with: "[REDACTED]")
+            var clean = text
+            for key in keys { clean = clean.replacingOccurrences(of: key, with: "[REDACTED]") }
+            return clean.replacingOccurrences(of: #"(?i)Bearer\s+[^\s\"<>]+"#, with: "Bearer [REDACTED]", options: .regularExpression)
         }
         return value
     }

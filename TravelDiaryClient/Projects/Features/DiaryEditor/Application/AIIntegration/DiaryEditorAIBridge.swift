@@ -6,7 +6,7 @@ import CoreText
 @MainActor final class DiaryEditorAIBridge: DiaryAIEditorBridge {
     private weak var session: DiaryEditorSession?
     var autoFitPhotoRegions = false
-    private var locallyPlaced = Set<UUID>()
+    private var pendingStickerPlacements = Set<UUID>()
     var layoutRegions: [DiaryAILayoutRegion] = []
     var allowedBatchIDs: Set<UUID>?
     var excludedRenderIDs: Set<UUID> = []
@@ -268,7 +268,7 @@ import CoreText
         }
         layer.size.height = DiaryPageRenderer.textBounds(layer).height
     }
-    private func place(_ operation: DiaryAIOperation, id: UUID, document: inout DiaryDocument, context: DiaryAIContext) throws {
+    private func place(_ operation: DiaryAIOperation, id: UUID, document: inout DiaryDocument, context: DiaryAIContext, finalStickerPlacement: Bool = false) throws {
         guard var layer = document.layer(id) else { throw DiaryAIError.invalid("对象不存在") }
         let siblings = document.objects[context.contentID]!.layers
         try require(layer.transform.warp == nil, "透视变形对象需保留原位置，请先在编辑器内调整")
@@ -300,9 +300,9 @@ import CoreText
             layer.transform.position.x += min(max(fitted.minX, region.minX), region.maxX - fitted.width) - fitted.minX
             layer.transform.position.y += min(max(fitted.minY, region.minY), region.maxY - fitted.height) - fitted.minY
         }
-        if autoFitPhotoRegions && role(layer, in: document) == "decoration" {
+        if autoFitPhotoRegions && (finalStickerPlacement || operation.type != "setPlacement") && role(layer, in: document) == "decoration" {
             let page = CGRect(origin: .zero, size: context.size)
-            let blockers = siblings.filter { $0.id != id && $0.visible && !excludedRenderIDs.contains($0.id) && role($0, in: document) == "decoration" && (locallyPlaced.contains($0.id) || !(allowedBatchIDs?.contains($0.id) ?? true)) }.map {
+            let blockers = siblings.filter { $0.id != id && $0.visible && !excludedRenderIDs.contains($0.id) && role($0, in: document) == "decoration" && !pendingStickerPlacements.contains($0.id) }.map {
                 DiaryPageRenderer.bounds($0, document: document, siblings: siblings).applying($0.transform.matrix)
             }
             let bounds = DiaryPageRenderer.bounds(layer, document: document, siblings: siblings).applying(layer.transform.matrix)
@@ -315,7 +315,7 @@ import CoreText
                 DiaryPageRenderer.bounds(photo, document: document, siblings: siblings).applying(DiaryPageRenderer.matrix(photo, siblings: siblings))
             }
             let photoCores = photoBounds.map { $0.insetBy(dx: $0.width * 0.12, dy: $0.height * 0.12) }
-            func clear(_ rect: CGRect) -> Bool {
+            func clear(_ rect: CGRect, preferStaggered: Bool = true) -> Bool {
                 let rowPeers = blockers.filter {
                     abs($0.midY - rect.midY) < min($0.height, rect.height) * 0.45
                         && abs($0.midX - rect.midX) < max($0.width, rect.width) * 3
@@ -324,7 +324,7 @@ import CoreText
                     abs($0.midX - rect.midX) < min($0.width, rect.width) * 0.45
                         && abs($0.midY - rect.midY) < max($0.height, rect.height) * 3
                 }
-                return rowPeers.count < 2 && columnPeers.count < 2 && page.contains(rect) && !photoCores.contains(where: { $0.intersects(rect) }) && !(context.spineX.map { rect.minX < $0 + 24 && rect.maxX > $0 - 24 } ?? false) && !textAreas.contains(where: { $0.intersects(rect) }) && !blockers.contains { other in
+                return (!preferStaggered || (rowPeers.count < 2 && columnPeers.count < 2)) && page.contains(rect) && !photoCores.contains(where: { $0.intersects(rect) }) && !(context.spineX.map { rect.minX < $0 + 24 && rect.maxX > $0 - 24 } ?? false) && !textAreas.contains(where: { $0.intersects(rect) }) && !blockers.contains { other in
                     let overlap = rect.intersection(other)
                     return !overlap.isNull && overlap.width * overlap.height / max(1, min(rect.width * rect.height, other.width * other.height)) > 0.3
                 }
@@ -351,17 +351,63 @@ import CoreText
                                    CGPoint(x: associatedPhoto.midX, y: associatedPhoto.maxY), CGPoint(x: associatedPhoto.maxX, y: associatedPhoto.maxY)]
                     options += anchors.map { bounds.offsetBy(dx: $0.x - bounds.midX, dy: $0.y - bounds.midY) }
                 }
-                if let nearest = options.filter(clear).min(by: { hypot($0.midX - bounds.midX, $0.midY - bounds.midY) < hypot($1.midX - bounds.midX, $1.midY - bounds.midY) }) {
+                // A corner can require moving on both axes (e.g. clear a title
+                // horizontally and bring the rotated bottom edge onto the page).
+                let margin: CGFloat = 1
+                var safePage = page
+                if let spine = context.spineX {
+                    safePage = bounds.midX < spine
+                        ? CGRect(x: 0, y: 0, width: spine - 24, height: page.height)
+                        : CGRect(x: spine + 24, y: 0, width: page.width - spine - 24, height: page.height)
+                }
+                let obstacles = blockers + textAreas + photoCores
+                var xs = [bounds.minX, safePage.minX + margin, safePage.maxX - bounds.width - margin]
+                var ys = [bounds.minY, margin, page.height - bounds.height - margin]
+                for obstacle in obstacles {
+                    xs += [obstacle.minX - bounds.width - 12, obstacle.maxX + 12]
+                    ys += [obstacle.minY - bounds.height - 12, obstacle.maxY + 12]
+                }
+                for x in xs {
+                    for y in ys {
+                        options.append(CGRect(origin: CGPoint(x: x, y: y), size: bounds.size))
+                    }
+                }
+                // Tight gaps may fit the sticker but not the preferred 12-point gutter.
+                // Include close-fitting corners while still validating the whole transformed rect.
+                var tightX = [bounds.minX, safePage.minX, safePage.maxX - bounds.width]
+                var tightY = [bounds.minY, safePage.minY, safePage.maxY - bounds.height]
+                for obstacle in obstacles {
+                    tightX += [obstacle.minX - bounds.width - 0.01, obstacle.maxX + 0.01]
+                    tightY += [obstacle.minY - bounds.height - 0.01, obstacle.maxY + 0.01]
+                }
+                func nearestSafe(in candidates: [CGRect], preferStaggered: Bool = true) -> CGRect? {
+                    candidates.filter { safePage.contains($0) && clear($0, preferStaggered: preferStaggered) }.min {
+                        hypot($0.minX - bounds.minX, $0.minY - bounds.minY)
+                            < hypot($1.minX - bounds.minX, $1.minY - bounds.minY)
+                    }
+                }
+                var nearest = nearestSafe(in: options)
+                if nearest == nil {
+                    for x in Set(tightX).sorted() {
+                        for y in Set(tightY).sorted() {
+                            options.append(CGRect(origin: CGPoint(x: x, y: y), size: bounds.size))
+                        }
+                    }
+                    nearest = nearestSafe(in: options) ?? nearestSafe(in: options, preferStaggered: false)
+                }
+                if let nearest {
                     layer.transform.position.x += nearest.midX - bounds.midX
                     layer.transform.position.y += nearest.midY - bounds.midY
+                } else if finalStickerPlacement {
+                    throw DiaryAIError.invalid("贴纸\(id)在本页候选位置中找不到可避开文字与照片主体的安全位置，请局部调整此贴纸。")
                 }
             }
         }
-        locallyPlaced.insert(id)
+        if finalStickerPlacement { pendingStickerPlacements.remove(id) }
         document.update(id) { $0 = layer }
     }
     func propose(_ plan: DiaryAIPlan) async throws -> DiaryAIDraft {
-        locallyPlaced = []
+        pendingStickerPlacements = Set(plan.operations.filter { $0.type == "setPlacement" }.compactMap(\.objectID))
         guard let base, let context, let request, let session else { throw DiaryAIError.invalid("快照已失效") }
         try require(plan.schemaVersion == 1 && plan.contextID == context.id && plan.baseDigest == context.digest, "计划基础版本不匹配")
         try require(plan.operations.count <= 200 && Set(plan.operations.map(\.operationID)).count == plan.operations.count, "操作重复或过多")
@@ -537,7 +583,7 @@ import CoreText
                 // Resolve again after native text measurement, without reapplying scale/rotation.
                 var resolved = placement
                 resolved.scale = nil; resolved.width = nil; resolved.angle = nil; resolved.center = nil
-                try place(resolved, id: id, document: &copy, context: context)
+                try place(resolved, id: id, document: &copy, context: context, finalStickerPlacement: true)
             }
         }
         let siblings = copy.objects[context.contentID]!.layers

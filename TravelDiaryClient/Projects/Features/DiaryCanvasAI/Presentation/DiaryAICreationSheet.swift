@@ -260,17 +260,17 @@ struct DiaryAICreationSheet: View {
                 .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.38, dampingFraction: 0.78), value: flow.draft.stickers.map(\.id))
                 .sensoryFeedback(.selection, trigger: flow.draft.batch)
             HStack {
-                Button("换一组", systemImage: "arrow.clockwise") { flow.draw() }.buttonStyle(.bordered).disabled(flow.busy || flow.loadingCatalog || flow.allKept || flow.candidates.isEmpty)
+                Button("换一组", systemImage: "arrow.clockwise") { flow.draw() }.buttonStyle(.bordered).disabled(flow.busy || flow.allKept)
                 Spacer()
                 Button("暂不添加") { flow.skipStickers(); path.append(.design) }.font(.subheadline)
             }
-            if flow.loadingCatalog { ProgressView("正在寻找贴纸…") }
-            if flow.candidates.isEmpty && !flow.loadingCatalog { Button("重新加载贴纸") { flow.loadCatalog() } }
+
+
             if flow.undoAvailable { Button("撤销上次操作") { flow.undoLast() }.font(.footnote).disabled(flow.isSubmitting) }
             if flow.busy { Button("取消本次准备") { flow.cancelStickerOperation() } }
         }
         .safeAreaInset(edge: .bottom) { footer("继续", disabled: flow.isSubmitting || flow.saveError != nil) { path.append(.design) } }
-        .task { flow.loadCatalog() }
+        .task { if !flow.draft.didDraw { flow.draw() } }
     }
     private var availableThemes: [String] {
         ["全部"] + Set(flow.themes + [flow.draft.theme]).filter { $0 != "全部" }.sorted()
@@ -375,7 +375,7 @@ struct DiaryAICreationSheet: View {
             if flow.hasMoreCatalog { Button("加载更多贴纸") { flow.loadCatalog(more: true) }.disabled(flow.loadingCatalog) }
             if flow.loadingCatalog { ProgressView("正在加载…") }
         }.searchable(text: $query, prompt: "搜索贴纸")
-        .task(id: librarySource) { if librarySource == "我的" { await flow.loadPersonal() } }
+        .task(id: librarySource) { if librarySource == "我的" { await flow.loadPersonal() } else { flow.loadCatalog() } }
     }
     private var designPage: some View {
         page("选择排版", step: "成品 · 3/3") {

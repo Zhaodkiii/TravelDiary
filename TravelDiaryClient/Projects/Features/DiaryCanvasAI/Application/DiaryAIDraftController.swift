@@ -14,6 +14,7 @@ import Combine
     @Published private(set) var outputTokens: Int?
     @Published private(set) var restored = false
     let bridge: any DiaryAIEditorBridge
+    var startInWorkspace: ((DiaryAIRequest) -> Void)?
     private let model: any DiaryAIModelClient
     private let repository: DiaryAILocalTaskStore
     private var task: Task<Void, Never>?
@@ -84,6 +85,12 @@ import Combine
     }
     func start(_ request: DiaryAIRequest, refinement: String? = nil) {
         guard !running, request.canSubmit else { return }
+        if let startInWorkspace {
+            var value = request
+            if let refinement, !refinement.isEmpty { value.instruction += "\n用户继续调整：" + refinement }
+            startInWorkspace(value)
+            return
+        }
         forms[request.action] = request; error = nil; inputTokens = nil; outputTokens = nil
         let token = UUID(); generation = token
         runningAction = request.action; startedAt = Date(); stage = "正在准备页面"; status[request.action] = nil

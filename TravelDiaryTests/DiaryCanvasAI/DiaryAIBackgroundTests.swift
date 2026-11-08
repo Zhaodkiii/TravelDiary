@@ -373,16 +373,24 @@ import SwiftUI
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let log = DiaryAIProductionLog(owner: "test", page: UUID(), root: root)
+        log.registerSecret("secret")
         log.record("request", ["Authorization": "Bearer secret", "prompt": "测试", "image": "data:image/png;base64,AQI="])
         for i in 0..<4000 { log.record("sse", ["delta": "a", "index": i]) }
         let archive = try await log.export()
         let combined = try String(contentsOf: log.directory.appendingPathComponent("events.jsonl"), encoding: .utf8)
-        #expect(!combined.contains("Bearer secret") && combined.contains("attachments"))
+        #expect(!combined.contains("Bearer secret") && combined.contains("attachments") && combined.contains("测试"))
         let rows = combined.split(separator: "\n")
         #expect(rows.count == 4002)
         let files = try FileManager.default.contentsOfDirectory(at: log.directory, includingPropertiesForKeys: nil)
         #expect(files.count == 2)
         #expect(FileManager.default.fileExists(atPath: log.directory.appendingPathComponent("attachments").path))
+        let unpacked = root.appendingPathComponent("export-check")
+        try FileManager.default.createDirectory(at: unpacked, withIntermediateDirectories: true)
+        try FileManager.default.unzipItem(at: archive, to: unpacked)
+        let exported = try FileManager.default.subpathsOfDirectory(atPath: unpacked.path).first { $0.hasSuffix("events.jsonl") }
+        let exportedText = try String(contentsOf: unpacked.appendingPathComponent(try #require(exported)), encoding: .utf8)
+        #expect(exportedText.contains("payload") && exportedText.contains("测试"))
+        #expect(!exportedText.contains("Bearer secret"))
         #expect((try archive.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0)
     }
     @Test func activityGroupsPreserveRequestsErrorsAndBatchBoundaries() {
@@ -494,7 +502,7 @@ import SwiftUI
     }
     @Test func requestContractAndBackwardDecoding() throws {
         let body = DiarySeedreamBackgroundProvider.body(reference: Data([1,2]), prompt: "背景")
-        #expect(body["model"] as? String == "doubao-seedream-5-0-flash-260915")
+        #expect(body["model"] == nil) // Model is injected from the task configuration at transport time.
         #expect(body["watermark"] as? Bool == false)
         #expect(body["stream"] as? Bool == false)
         #expect(body["image"] as? String == "data:image/jpeg;base64,AQI=")

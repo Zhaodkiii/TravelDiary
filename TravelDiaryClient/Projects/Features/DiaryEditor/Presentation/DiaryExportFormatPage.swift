@@ -20,9 +20,9 @@ struct DiaryExportFormatPage: View {
             format("翻页动画 · MP4", detail: "让手帐自动翻阅，保存为一段回忆视频", icon: "film") { onSelectVideo() }
                 .disabled(book.contentPages.isEmpty)
             format("整本 PDF", detail: "按完整目录导出，便于阅读与存档", icon: "doc.richtext") { onSelectPDF() }
-            #if DEBUG
             Divider().padding(.vertical, 4)
             format("装订成册 · 寄到家", detail: "把完成的手帐印成一本，留住值得珍藏的回忆", icon: "shippingbox") { onSelectPrint() }
+            #if DEBUG
             if let onExportSourceFiles {
                 Divider().padding(.vertical, 4)
                 format("导出源文件", detail: "打包整本手帐的页面、图层与素材文件并分享", icon: "doc.zipper") { onExportSourceFiles() }

@@ -108,6 +108,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private var checkpoints: [DiaryAIWorkspaceCheckpoint] = []
     private var quotaPauseTask: Task<Void, Never>?
     private var productionAttempt: UUID?
+    private let aiRuntime = DiaryAITaskRuntime()
     private var productionTask: DiaryProductionTask?
     private var productionDigest: String?
     private var productionOwner: String?
@@ -175,11 +176,11 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         self.automaticSaveOverride = automaticallySavesCompletedProduction ?? ((model == nil && backgroundProvider == nil) ? nil : false)
         self.usesProductionQuota = model == nil && backgroundProvider == nil
         self.parallelExecution = parallelExecution ?? (UserDefaults.standard.object(forKey: "DiaryCanvasAI.parallelExecution") as? Bool ?? true)
-        self.backgroundProvider = backgroundProvider ?? DiarySeedreamBackgroundProvider()
+        self.backgroundProvider = backgroundProvider ?? DiarySeedreamBackgroundProvider(runtime: aiRuntime)
         self.albumSaver = albumSaver ?? DiaryAIBackgroundAlbum()
         productionLog = DiaryAIProductionLog(owner: session.store.ownerID, page: session.document.id, root: root ?? StoragePaths.system.support)
         source = session
-        let client = DiaryArkResponsesClient(); client.workspaceMode = true
+        let client = DiaryArkResponsesClient(runtime: aiRuntime); client.workspaceMode = true
         self.model = model ?? client
         self.efficientExecution = efficientExecution ?? (model == nil || model is DiaryArkResponsesClient)
         archiveURL = (root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
@@ -552,7 +553,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             throw DiaryAIError.invalid("请回到原账号处理当前制作任务")
         }
         if productionTask == nil, let key = productionAttempt, let digest = productionDigest {
-            productionTask = try await service.start(key: key, digest: digest)
+            productionTask = try await service.start(key: key, digest: digest, scenes: requiredRuntimeScenes)
             try await persist()
         }
         if let productionTask {
@@ -562,12 +563,20 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             }
         }
         productionTask = nil
+        aiRuntime.clear()
         productionAttempt = nil
         productionDigest = nil
         productionOwner = nil
         try await persist()
     }
 
+    private var requiredRuntimeScenes: [String] {
+        var scenes = ["diary.layout"]
+        if hasBackgroundRequest || isBackgroundOnly {
+            scenes += ["diary.background.design", "diary.background.generate", "diary.background.review"]
+        }
+        return scenes
+    }
     private func prepareProductionQuota() async throws {
         guard usesProductionQuota else { return }
         await quotaPauseTask?.value
@@ -603,9 +612,13 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             guard let key = productionAttempt, let digest = productionDigest else {
                 throw DiaryAIError.invalid("任务记录不完整，请重新开始")
             }
-            productionTask = try await service.start(key: key, digest: digest)
+            productionTask = try await service.start(key: key, digest: digest, scenes: requiredRuntimeScenes)
         }
         try await persist()
+        if let productionTask {
+            try await aiRuntime.bind(productionTask)
+            productionLog.record("runtime-config", ["task_id": productionTask.id.uuidString, "release_id": aiRuntime.releaseID?.uuidString ?? ""])
+        }
         await service.refresh()
     }
 
@@ -621,6 +634,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         self.productionTask = try await DiaryProductionService.shared.complete(
             task: productionTask, digest: digest)
         try await persist()
+        aiRuntime.clear()
         await DiaryProductionService.shared.refresh()
     }
 
@@ -762,10 +776,6 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             error = "请先添加照片、文字或贴纸，或在制作选项中补充创作要求。尚未发起模型请求。"
             log("error", "画布没有可排版内容", error!); return
         }
-        if model is DiaryArkResponsesClient && !isBackgroundOnly {
-            do { _ = try DiaryAITestConfig.requireAPIKey() }
-            catch { self.error = error.localizedDescription; stage = "AI 服务配置不可用"; return }
-        }
         autoAll = all; running = true; error = nil
         if request.action != .relayout && queue.isEmpty {
             queue = objects.filter { $0.editable && $0.role != "background" && (!request.selectedOnly || $0.id == source?.selectedID) && (request.action != .writing || $0.role == "text") }.map(\.id)
@@ -886,7 +896,6 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                     restartCheckpoint = .init(working.document, pending: pending)
                     try await persist()
                 }
-                _ = try DiaryAITestConfig.requireAPIKey()
                 if regenerate { try await endProductionQuota() }
                 try await prepareProductionQuota()
                 if regenerate { backgroundRecord = nil; backgroundPreview = nil }
@@ -1022,7 +1031,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             stage = "正在生成背景"
             let guideObjects = objects
             let guide = try await DiaryAIImageWork.run { try DiaryAIBackgroundImaging.occupancyGuide(canvas: size, objects: guideObjects) }
-            log("request", "发送背景生成请求", "\(DiarySeedreamBackgroundProvider.model) · 2K · \(style.name) · 水印开启；\(options.isTextOnly ? "纯文本场景描述" : "场景设计说明＋空间占位图")，避免复制前景", images: [.init(id: "background-guide", caption: "浅灰柔和区域是前景避让范围，输出不得保留灰色占位痕迹", data: guide)])
+            log("request", "发送背景生成请求", "服务端配置模型 · \(style.name) · 水印开启；\(options.isTextOnly ? "纯文本场景描述" : "场景设计说明＋空间占位图")，避免复制前景", images: [.init(id: "background-guide", caption: "浅灰柔和区域是前景避让范围，输出不得保留灰色占位痕迹", data: guide)])
             try await persist()
             try check()
             let generationPrompt = DiaryAIBackgroundStyle.generationPrompt(design: backgroundRecord?.generationPrompt ?? "", style: style, strength: options.strength, size: size, textOnly: options.isTextOnly, pageStyle: request.design?.style)
@@ -1384,7 +1393,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         for offset in stride(from: 0, to: photos.count, by: Self.maximumBatchLayers) {
             images += try await bridge.inspect(.init(contextID: context.id, objectIDs: Array(photos.dropFirst(offset).prefix(Self.maximumBatchLayers).map(\.id)), view: "fullAsset"))
         }
-        let client = DiaryArkResponsesClient()
+        let client = DiaryArkResponsesClient(runtime: aiRuntime)
         client.workspaceMode = true; client.productionLog = productionLog
         client.allowedWorkspaceTools = ["report_photo_orientations"]; client.expectedWorkspaceVersion = version
         let reply = try await client.respond(prompt: "逐张检查原照片像素的正立方向，只调用report_photo_orientations，完整返回每张照片objectID和最终绝对angle。正常照片0；侧倒的动物/人物/树木/地平线必须纠正90或-90；倒置180。不要为排版改变方向，不以长宽比判断正立。对象：\(try DiaryAIDraftController.json(photos))", images: images, continuation: nil, results: [])
@@ -1442,7 +1451,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         """
         @MainActor @Sendable func propose(text: Bool) async throws -> BranchProposal {
             let started = Date()
-            let client = DiaryArkResponsesClient()
+            let client = DiaryArkResponsesClient(runtime: aiRuntime)
             client.workspaceMode = true; client.productionLog = productionLog
             client.expectedWorkspaceVersion = baseVersion
             client.allowedWorkspaceTools = text ? ["create_text"] : ["place_layer"]

@@ -49,6 +49,7 @@ final class CreationCoordinator: ObservableObject {
     /// A stable page ID plus persisted per-object mapping makes interrupted import resumable.
     func prepare(allowEmpty: Bool = false) async -> DiaryEditorSession? {
         guard !busy else { return nil }
+        if let activeSession { return activeSession }
         busy = true; defer { busy = false }
         do {
             if !allowEmpty, let error = draft.preflightError { throw DiaryAIError.invalid(error) }
@@ -91,6 +92,7 @@ final class CreationCoordinator: ObservableObject {
             _ = session.applyAIDraft(updated, expected: session.document, additionalImages: [:])
             try await nativeStore.save(session.document)
             let canonical = try await nativeStore.load(draft.documentID)
+            await session.discardCreationSession()
             session = DiaryEditorSession(document: canonical.document, images: canonical.images, store: nativeStore)
             session.aiTransientSession = false
             session.creationPublish = { [weak self, weak session] in
@@ -124,10 +126,13 @@ final class CreationCoordinator: ObservableObject {
               !session.busy, !session.aiWorkspace.addingMaterials else {
             throw DiaryAIError.invalid("正在处理素材，请稍后新建页。")
         }
+        busy = true
+        defer { busy = false }
         await session.aiWorkspace.discardForNewPage()
         await session.canvasAI.stopForDiscard()
         await session.discardCreationSession()
         activeSession = nil
+        lease?.release()
         lease = nil
         do { try await store.remove(draft.id) }
         catch {

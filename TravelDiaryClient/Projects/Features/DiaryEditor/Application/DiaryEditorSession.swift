@@ -420,10 +420,12 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         if let saveTask { await saveTask.value }
         if let imageTask { await imageTask.value }
         saveTask = nil; imageTask = nil
+        storageLease?.release()
         storageLease = nil
     }
 
     func resumeAfterFailedDiscard() {
+        storageLease?.release()
         storageLease = StorageActivity.shared.acquire(store.storageRoot)
         closing = false
     }

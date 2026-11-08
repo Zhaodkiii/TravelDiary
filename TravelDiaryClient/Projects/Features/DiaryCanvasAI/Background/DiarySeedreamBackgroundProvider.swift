@@ -2,24 +2,31 @@ import Foundation
 
 @MainActor final class DiarySeedreamBackgroundProvider: DiaryAIBackgroundProvider {
     weak var productionLog: DiaryAIProductionLog?
-    static let model = "doubao-seedream-5-0-flash-260915"
-    static let endpoint = URL(string: "https://ark.cn-beijing.volces.com/api/v3/images/generations")!
+    let runtime: DiaryAITaskRuntime
     private let session: URLSession
-    init(session: URLSession? = nil) {
+    init(session: URLSession? = nil, runtime: DiaryAITaskRuntime = DiaryAITaskRuntime()) {
+        self.runtime = runtime
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 180
         config.timeoutIntervalForResource = 360
-        self.session = session ?? URLSession(configuration: config)
+        self.session = session ?? URLSession(configuration: config, delegate: DiaryAIRejectRedirects.shared, delegateQueue: nil)
+        runtime.register(self.session)
     }
     static func body(reference: Data, prompt: String) -> [String: Any] {
-        var result: [String: Any] = ["model": model, "prompt": prompt,
+        var result: [String: Any] = ["prompt": prompt,
          "response_format": "url", "size": "2K", "stream": false, "watermark": false]
         if !reference.isEmpty { result["image"] = "data:image/jpeg;base64,\(reference.base64EncodedString())" }
         return result
     }
-    private func post(_ body: [String: Any], to url: URL) async throws -> [String: Any] {
-        let apiKey = try DiaryAITestConfig.requireAPIKey()
-        var request = URLRequest(url: url); request.httpMethod = "POST"
+    private func post(_ input: [String: Any], scene name: String, refreshed: Bool = false) async throws -> [String: Any] {
+        let access = try await runtime.access(name)
+        let apiKey = access.credential.secret
+        productionLog?.registerSecret(apiKey)
+        let url = access.scene.endpoint
+        var body = input
+        body["model"] = access.scene.modelId
+        body.merge(access.scene.parameters.mapValues(\.foundation)) { _, new in new }
+        var request = URLRequest(url: url); request.httpMethod = "POST"; request.timeoutInterval = Double(access.scene.limits.requestTimeoutSeconds)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -29,7 +36,14 @@ import Foundation
         productionLog?.record("response-status", ["status": (response as? HTTPURLResponse)?.statusCode ?? 0, "headers": (response as? HTTPURLResponse)?.allHeaderFields.reduce(into: [String: String]()) { $0[String(describing: $1.key)] = String(describing: $1.value) } ?? [:]])
         productionLog?.data("response-body", data)
         try Task.checkCancellation()
+        try runtime.assertOwner()
         guard let http = response as? HTTPURLResponse else { throw DiaryAIError.invalid("背景服务未返回有效响应") }
+        if http.statusCode == 401, !refreshed {
+            let fresh = try await runtime.access(name, force: true)
+            if fresh.credential.version != access.credential.version {
+                return try await post(input, scene: name, refreshed: true)
+            }
+        }
         guard (200..<300).contains(http.statusCode) else {
             throw DiaryAIServiceError.response(status: http.statusCode, code: http.value(forHTTPHeaderField: "x-error-code"), body: data)
         }
@@ -60,11 +74,11 @@ import Foundation
         \(context)
         """
         let result = try await post([
-            "model": DiaryAITestConfig.model, "stream": false, "store": false,
+            "stream": false, "store": false,
             "input": [["role": "user", "content": [["type": "input_text", "text": instructions], ["type": "input_image", "image_url": "data:image/jpeg;base64,\(reference.base64EncodedString())"]]]],
             "tools": [["type": "function", "name": "background_design", "description": "根据照片主题和真实布局给出一份简短的纯背景设计说明", "parameters": ["type": "object", "properties": ["brief": ["type": "string"], "backdropPrompt": ["type": "string"]], "required": ["brief", "backdropPrompt"], "additionalProperties": false]]],
             "tool_choice": "required", "thinking": ["type": "disabled"], "max_output_tokens": 4096
-        ], to: DiaryAITestConfig.endpoint)
+        ], scene: "diary.background.design")
         try Self.requireComplete(result)
         guard result["status"] as? String == "completed", let output = result["output"] as? [[String: Any]],
               let call = output.first(where: { $0["type"] as? String == "function_call" && $0["name"] as? String == "background_design" }),
@@ -102,10 +116,10 @@ import Foundation
     }
     func repairPrompt(_ text: String) async throws -> String {
         let result = try await post([
-            "model": DiaryAITestConfig.model, "stream": false, "store": false,
+            "stream": false, "store": false,
             "input": [["role": "user", "content": [["type": "input_text", "text": "仅修正文案，不重新分析图片。把以下背景描述中的素材相对位置改为绝对画面分区（左上、中部、右下等），保留已确认场景、色彩和风格，不增加任何新景物；不需要思考过程，直接填写工具参数。删除照片、拍立得、人物、相框、贴纸、书页、书脊、立体本册、手帐、跨页等词及其实体描绘；保留实际来源中的书架、书桌等环境物体，只描述纯背景景物。不要否定词清单。只调用repair_background_prompt，text不超过800字。原描述：" + text]]]],
             "tools": [["type": "function", "name": "repair_background_prompt", "description": "仅修复生图文案", "parameters": ["type": "object", "properties": ["text": ["type": "string"]], "required": ["text"], "additionalProperties": false]]], "tool_choice": "required", "thinking": ["type": "disabled"], "max_output_tokens": 2048
-        ], to: DiaryAITestConfig.endpoint)
+        ], scene: "diary.background.design")
         try Self.requireComplete(result)
         guard result["status"] as? String == "completed", let output = result["output"] as? [[String: Any]], let call = output.first(where: { $0["name"] as? String == "repair_background_prompt" }),
               let args = call["arguments"] as? String, let data = args.data(using: .utf8),
@@ -113,7 +127,7 @@ import Foundation
         return try Self.preparePrompt(repaired)
     }
     func generate(reference: Data, prompt: String) async throws -> URL {
-        let object = try await post(Self.body(reference: reference, prompt: prompt), to: Self.endpoint)
+        let object = try await post(Self.body(reference: reference, prompt: prompt), scene: "diary.background.generate")
         guard let items = object["data"] as? [[String: Any]], items.count == 1,
               let value = items.first?["url"] as? String, let url = URL(string: value), url.scheme == "https", url.host != nil else {
             throw DiaryAIError.invalid("背景服务未返回单张可下载图片")
@@ -126,6 +140,7 @@ import Foundation
         let (file, response) = try await session.download(from: url)
         defer { try? FileManager.default.removeItem(at: file) }
         try Task.checkCancellation()
+        try runtime.assertOwner()
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
               response.url?.scheme == "https" else { throw DiaryAIError.invalid("背景下载失败，可重试下载而不重新生图") }
         let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
@@ -145,7 +160,7 @@ import Foundation
         let emptyCardCheck = "拒绝孤立的规则矩形空白纸卡、浅色占位板或照片空位，即使没有外框和文字；连续纸面明暗变化与有实际主题图案的印刷块不是占位板。"
         let prompt = styleCheck + emptyCardCheck + "图1是手帐前景布局参考，图2是待验收纯背景。图2禁止任何新增人形，包括小型远景游客、背影、剪影和手绘小人；不是只检查复制的人脸。发现明确人形必须拒绝。检查图2是否复制了图1的照片矩形、相框、人物面孔、贴纸或正文，是否含照片占位框、棋盘格、界面、额外标题、实体书脊中缝、书页折角或外部边缘。先核对主题一致性：区分实拍照片与装饰贴纸；图2的主导环境、时段和实体应来自图1的真实照片，不能把古城夜游改成无依据的山林水岸，也不能把室内聚会改成户外旅行。主导场景无依据或与照片冲突时拒绝；抽象纸纹、低对比色块不视为新场景。纸张、来自实际照片的绘画景物、局部丰富景物与来源装饰允许；不能仅因景物丰富、颜色鲜明或不够空白而拒绝，服务水印允许。文字区域应保留可读空间，主体图层应有承托；背景允许场景化，不能包含重复照片的完整海报。只调用 report_background：通过才 accept=true；不确定或发现前景残留则 false；reason 简短中文。不要输出图片数据或长文。"
         let result = try await post([
-            "model": DiaryAITestConfig.model, "stream": false, "store": false,
+            "stream": false, "store": false,
             "input": [["role": "user", "content": [
                 ["type": "input_text", "text": prompt],
                 ["type": "input_image", "image_url": "data:image/jpeg;base64,\(reference.base64EncodedString())"],
@@ -155,7 +170,7 @@ import Foundation
                 "type": "object", "properties": ["accept": ["type": "boolean"], "reason": ["type": "string"]],
                 "required": ["accept", "reason"], "additionalProperties": false]]],
             "tool_choice": "required", "thinking": ["type": "disabled"], "max_output_tokens": 2048
-        ], to: DiaryAITestConfig.endpoint)
+        ], scene: "diary.background.review")
         guard result["status"] as? String == "completed",
               let output = result["output"] as? [[String: Any]],
               let call = output.first(where: { $0["type"] as? String == "function_call" && $0["name"] as? String == "report_background" }),

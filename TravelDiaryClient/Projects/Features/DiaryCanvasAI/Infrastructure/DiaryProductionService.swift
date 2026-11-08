@@ -35,6 +35,7 @@ struct DiaryProductionTask: Codable {
 @MainActor
 final class DiaryProductionService: ObservableObject {
     static let shared = DiaryProductionService()
+    @Published private(set) var runtimeManifestValue: DiaryAITaskRuntime.Manifest?
     @Published private(set) var quota: DiaryProductionQuota?
     @Published private(set) var error: String?
     @Published private(set) var loading = false
@@ -57,6 +58,7 @@ final class DiaryProductionService: ObservableObject {
             owner = account
             generation = UUID()
             quota = nil
+            runtimeManifestValue = nil
             error = nil
             loading = false
         }
@@ -71,7 +73,10 @@ final class DiaryProductionService: ObservableObject {
             let result: DiaryProductionQuota = try await request("quota/")
             guard stamp == generation else { return }
             quota = result
-            error = nil
+            let manifest = try await runtimeManifest()
+            guard stamp == generation else { return }
+            runtimeManifestValue = manifest
+            error = manifest.availableScenes.contains("diary.layout") ? nil : "AI 服务暂不可用，已有进度会保留。"
         } catch {
             guard stamp == generation else { return }
             self.error = error.localizedDescription
@@ -83,8 +88,8 @@ final class DiaryProductionService: ObservableObject {
                           body: ["digest": digest])
     }
 
-    func start(key: UUID, digest: String) async throws -> DiaryProductionTask {
-        try await request("tasks/", body: ["attempt_key": key.uuidString, "input_digest": digest])
+    func start(key: UUID, digest: String, scenes: [String] = ["diary.layout"]) async throws -> DiaryProductionTask {
+        try await request("tasks/", body: ["attempt_key": key.uuidString, "input_digest": digest, "client_capabilities": DiaryAITaskRuntime.capabilities, "required_scenes": scenes])
     }
 
     func task(_ id: UUID) async throws -> DiaryProductionTask {
@@ -95,7 +100,14 @@ final class DiaryProductionService: ObservableObject {
         try await request("tasks/\(task.id.uuidString.lowercased())/\(action)/", body: ["version": task.version])
     }
 
-    private func request<T: Decodable>(_ path: String, body: [String: Any]? = nil) async throws -> T {
+    func runtimeConfiguration(_ taskID: UUID) async throws -> DiaryAITaskRuntime.Configuration {
+        try await request("tasks/\(taskID.uuidString.lowercased())/configuration/", body: ["request_id": UUID().uuidString, "client_capabilities": DiaryAITaskRuntime.capabilities], runtime: true)
+    }
+    func runtimeManifest() async throws -> DiaryAITaskRuntime.Manifest {
+        try await request("manifest/", runtime: true)
+    }
+
+    private func request<T: Decodable>(_ path: String, body: [String: Any]? = nil, runtime: Bool = false) async throws -> T {
         guard owner != nil else { throw DiaryAIError.invalid("登录后可查看制作额度") }
         guard let engine else { throw DiaryAIError.invalid("制作服务尚未初始化") }
         let stamp = generation
@@ -104,7 +116,7 @@ final class DiaryProductionService: ObservableObject {
             name: "AIProduction", apiName: "AIProductionAPI",
             request: .init(
                 method: body == nil ? .get : .post,
-                path: "/api/v1/ai-production/" + path,
+                path: (runtime ? "/api/v1/ai-runtime/" : "/api/v1/ai-production/") + path,
                 body: data.map { .raw($0, contentType: "application/json") } ?? .none,
                 timeoutInterval: 240,
                 strategy: .init(requiresAuth: true, allowETag: false)
@@ -112,6 +124,15 @@ final class DiaryProductionService: ObservableObject {
         )
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let text = try decoder.singleValueContainer().decode(String.self)
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: text) { return date }
+            formatter.formatOptions = [.withInternetDateTime]
+            guard let date = formatter.date(from: text) else { throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid date")) }
+            return date
+        }
         let value = try await SupportBackendConfiguration(engine: engine)
             .executeDecoded(T.self, operation: operation, decoder: decoder)
         guard stamp == generation else { throw CancellationError() }
