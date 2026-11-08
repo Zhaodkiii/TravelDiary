@@ -51,7 +51,8 @@ struct AppCoordinatorView: View {
     @ViewBuilder
     private var sessionContent: some View {
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-diary-ai-book8") { DiaryAIBook8DebugScreen() }
+        if ProcessInfo.processInfo.arguments.contains("-diary-creation-review") { DiaryCreationReviewScreen() }
+        else if ProcessInfo.processInfo.arguments.contains("-diary-ai-book8") { DiaryAIBook8DebugScreen() }
         else { regularSessionContent }
         #else
         regularSessionContent

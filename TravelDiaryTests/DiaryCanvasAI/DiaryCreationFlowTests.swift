@@ -48,6 +48,24 @@ struct DiaryStickerDrawEngineTests {
         let store = DiaryDocumentStore(ownerID: "creation-flow-test", baseDirectory: root)
         return (DiaryEditorSession(document: document, images: [:], store: store), root)
     }
+    @Test func undoPhotoRemovalRestoresOrderHeroAndNote() throws {
+        let (session, root) = fixture()
+        let flow = try DiaryAICreationFlow(session: session)
+        defer { flow.cancelOperation(); try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: flow.directory) }
+        let first = DiaryCreationPhoto(filename: "a", digest: "a", name: "a")
+        let second = DiaryCreationPhoto(filename: "b", digest: "b", name: "b")
+        flow.draft.photos = [first, second]
+        flow.draft.heroID = first.id
+        flow.draft.photoNotes = [first.id.uuidString: "沿途风景"]
+        flow.removePhoto(first.id)
+        #expect(flow.draft.heroID == second.id)
+        flow.undoPhotoRemoval()
+        #expect(flow.draft.photos.map(\.id) == [first.id, second.id])
+        #expect(flow.draft.heroID == first.id)
+        #expect(flow.draft.photoNotes?[first.id.uuidString] == "沿途风景")
+        flow.undoPhotoRemoval()
+        #expect(flow.draft.photos.count == 2)
+    }
     @Test func draftRestoresStableSelectionAndStep() throws {
         let (session, root) = fixture()
         let flow = try DiaryAICreationFlow(session: session)

@@ -597,9 +597,36 @@ struct DiaryAIMaterialRows: View {
 }
 
 /// Local, zero-request composition preview. It never represents a generated background.
+/// A die-cut edge follows the asset alpha, rather than a rectangular image container.
+struct DiaryDieCutSticker: View {
+    let image: UIImage
+    var paperTape = false
+    var body: some View {
+        ZStack {
+            if !paperTape {
+                ForEach(0..<12, id: \.self) { index in
+                    Image(uiImage: image).renderingMode(.template).resizable().scaledToFit()
+                        .foregroundStyle(.white)
+                        .offset(x: cos(Double(index) * .pi / 6) * 2.5,
+                                y: sin(Double(index) * .pi / 6) * 2.5)
+                }
+            }
+            Image(uiImage: image).resizable().scaledToFit()
+        }.compositingGroup()
+            .shadow(color: .black.opacity(paperTape ? 0.06 : 0.16), radius: paperTape ? 1 : 2, x: 0, y: 2)
+            .padding(4)
+    }
+}
+
 struct DiaryAIDesignPreview: View {
     let design: DiaryAIDesignSelection
     var photos: [UIImage] = []
+    var stickers: [UIImage] = []
+    var stickerNames: [String] = []
+    var story: String = ""
+    static func isTape(_ name: String) -> Bool {
+        name.contains("胶带") || ["左上", "右上", "顶部照片左上", "顶部照片右上"].contains(name)
+    }
     private var ink: Color {
         switch design.style {
         case .scenic: Color(red: 0.18, green: 0.32, blue: 0.27)
@@ -610,6 +637,16 @@ struct DiaryAIDesignPreview: View {
         case .gentle: Color(red: 0.57, green: 0.35, blue: 0.36)
         }
     }
+    private var paperColor: Color {
+        switch design.style {
+        case .vintage: Color(red: 0.94, green: 0.88, blue: 0.76)
+        case .clean: Color(red: 0.98, green: 0.99, blue: 0.97)
+        case .gentle: Color(red: 0.99, green: 0.94, blue: 0.91)
+        case .illustrated: Color(red: 0.94, green: 0.97, blue: 0.96)
+        case .playful: Color(red: 1, green: 0.98, blue: 0.90)
+        case .scenic: Color(red: 0.97, green: 0.96, blue: 0.92)
+        }
+    }
     private var frames: [CGRect] {
         if !photos.isEmpty {
             return Self.photoFrames(count: photos.count, layout: design.layout)
@@ -618,19 +655,32 @@ struct DiaryAIDesignPreview: View {
     }
     static func photoFrames(count: Int, layout: DiaryAILayout) -> [CGRect] {
         guard count > 0 else { return [] }
-        let top = layout == .headline ? 0.36 : 0.20
-        let hero = layout == .hero && count > 1
-        var result: [CGRect] = hero ? [CGRect(x: 0.04, y: top, width: 0.55, height: 0.90 - top)] : []
+        let top = layout == .headline ? 0.25 : 0.12
+        let bottom = 0.87
+        if count == 1 { return [CGRect(x: 0.09, y: top, width: 0.82, height: bottom - top)] }
+        let hero = layout == .hero && count <= 6
+        var result = hero ? [CGRect(x: 0.06, y: top, width: 0.53, height: bottom - top)] : []
         let remaining = count - result.count
-        let columns = hero ? (remaining > 4 ? 2 : 1) : (count <= 2 ? count : (count <= 8 ? 3 : 4))
-        let rows = Int(ceil(Double(remaining) / Double(max(1, columns))))
-        let x = hero ? 0.63 : 0.04, width = hero ? 0.33 : 0.92
-        let w = width / Double(max(1, columns)), h = (0.90 - top) / Double(max(1, rows))
+        let columns = hero ? (remaining > 3 ? 2 : 1) : (count <= 4 ? 2 : (count <= 9 ? 3 : 4))
+        let rows = Int(ceil(Double(remaining) / Double(columns)))
+        let left = hero ? 0.62 : 0.06
+        let width = hero ? 0.32 : 0.88
+        let w = width / Double(columns), h = (bottom - top) / Double(rows)
         for index in 0..<remaining {
-            result.append(CGRect(x: x + Double(index % columns) * w, y: top + Double(index / columns) * h,
-                                 width: w * 0.92, height: h * 0.90))
+            let stagger = layout == .collage && index % 2 == 1 ? 0.025 : 0
+            result.append(CGRect(x: left + Double(index % columns) * w,
+                                 y: top + Double(index / columns) * h + stagger,
+                                 width: w - 0.025, height: h - 0.025 - stagger))
         }
         return result
+    }
+    private func fittedFrame(_ rect: CGRect, image: UIImage?, size: CGSize) -> CGRect {
+        let box = CGRect(x: rect.minX * size.width, y: rect.minY * size.height,
+                         width: rect.width * size.width, height: rect.height * size.height)
+        guard let image, image.size.width > 0, image.size.height > 0 else { return box }
+        let scale = min(box.width / image.size.width, box.height / image.size.height)
+        let width = image.size.width * scale, height = image.size.height * scale
+        return CGRect(x: box.midX - width / 2, y: box.midY - height / 2, width: width, height: height)
     }
     private var sampleFrames: [CGRect] {
         switch design.layout {
@@ -646,40 +696,53 @@ struct DiaryAIDesignPreview: View {
         GeometryReader { proxy in
             let size = proxy.size
             ZStack(alignment: .topLeading) {
-                Color(red: 0.97, green: 0.96, blue: 0.92)
-                Ellipse().fill(ink.opacity(0.10)).frame(width: size.width * 0.75, height: size.height * 0.7).offset(x: size.width * 0.4, y: size.height * 0.5)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(design.layout == .headline ? "标题区域" : "照片与故事").font(.system(size: size.width * (design.layout == .headline ? 0.085 : 0.064), weight: .bold, design: .serif))
-                    if design.layout != .headline { Text("照片与故事 · 留下此刻").font(.system(size: size.width * 0.027)) }
-                }.foregroundStyle(ink).offset(x: size.width * 0.07, y: size.height * 0.05)
+                paperColor
+                Canvas { context, canvas in
+                    for index in 0..<180 {
+                        let x = CGFloat((index * 73) % 997) / 997 * canvas.width
+                        let y = CGFloat((index * 137) % 991) / 991 * canvas.height
+                        context.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 1, height: 1)), with: .color(ink.opacity(0.10)))
+                    }
+                }.accessibilityHidden(true)
+                Text(design.layout == .headline ? "旅行手记" : "TRAVEL NOTES")
+                    .font(.system(size: size.width * (design.layout == .headline ? 0.075 : 0.027), weight: .medium, design: .serif))
+                    .tracking(size.width * 0.004).foregroundStyle(ink.opacity(0.8))
+                    .offset(x: size.width * 0.07, y: size.height * 0.045)
                 ForEach(Array(frames.enumerated()), id: \.offset) { index, rect in
-                    ZStack {
-                        Color.white
-                        if photos.indices.contains(index) {
-                            Image(uiImage: photos[index]).resizable().scaledToFit().padding(3)
+                    let image = photos.indices.contains(index) ? photos[index] : nil
+                    let fitted = fittedFrame(rect, image: image, size: size)
+                    Group {
+                        if let image {
+                            Image(uiImage: image).resizable().scaledToFit()
                         } else {
-                            Canvas { context, canvas in
-                                context.fill(Path(CGRect(origin: .zero, size: canvas)), with: .color(ink.opacity(0.12)))
-                                let mountains = Path { path in
-                                    path.move(to: CGPoint(x: 0, y: canvas.height))
-                                    path.addLine(to: CGPoint(x: canvas.width * 0.36, y: canvas.height * 0.3))
-                                    path.addLine(to: CGPoint(x: canvas.width * 0.62, y: canvas.height * 0.68))
-                                    path.addLine(to: CGPoint(x: canvas.width * 0.79, y: canvas.height * 0.46))
-                                    path.addLine(to: CGPoint(x: canvas.width, y: canvas.height)); path.closeSubpath()
-                                }
-                                context.fill(mountains, with: .color(ink.opacity(0.65)))
-                                context.fill(Path(ellipseIn: CGRect(x: canvas.width * 0.72, y: canvas.height * 0.12, width: canvas.width * 0.12, height: canvas.width * 0.12)), with: .color(.white))
-                            }.padding(3)
+                            Rectangle().fill(ink.opacity(0.08))
+                                .overlay(Image(systemName: "photo").foregroundStyle(ink.opacity(0.3)))
                         }
-                    }.frame(width: size.width * rect.width, height: size.height * rect.height)
-                        .rotationEffect(.degrees(design.layout == .collage ? (index == 1 ? 5 : -4) : 0))
-                        .offset(x: size.width * rect.minX, y: size.height * rect.minY)
+                    }.frame(width: fitted.width, height: fitted.height)
+                        .padding(size.width * 0.008).background(.white)
+                        .shadow(color: .black.opacity(0.09), radius: 2, y: 2)
+                        .rotationEffect(.degrees(design.layout == .collage ? (index % 2 == 0 ? -3 : 3) : 0))
+                        .offset(x: fitted.minX - size.width * 0.008, y: fitted.minY - size.width * 0.008)
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(0..<3) { index in Rectangle().fill(ink.opacity(0.55)).frame(width: size.width * (index == 2 ? 0.13 : 0.22), height: 2) }
-                }.offset(x: size.width * (design.layout == .editorial ? 0.59 : 0.08), y: size.height * (design.layout == .editorial ? 0.32 : 0.85))
+                if !story.isEmpty {
+                    Text(story).font(.system(size: max(8, size.width * 0.029), design: .serif)).foregroundStyle(ink)
+                        .lineLimit(2).frame(width: size.width * 0.84, alignment: .leading)
+                        .offset(x: size.width * 0.07, y: size.height * 0.91)
+                }
+                ForEach(Array(stickers.enumerated()), id: \.offset) { index, image in
+                    if !frames.isEmpty {
+                        let photoIndex = index % frames.count
+                        let frame = fittedFrame(frames[photoIndex], image: photos.indices.contains(photoIndex) ? photos[photoIndex] : nil, size: size)
+                        let lowerEdge = index >= frames.count
+                        DiaryDieCutSticker(image: image, paperTape: stickerNames.indices.contains(index) && Self.isTape(stickerNames[index]))
+                            .frame(width: size.width * 0.115, height: size.height * 0.085)
+                            .rotationEffect(.degrees(index % 2 == 0 ? -12 : 9))
+                            .offset(x: min(size.width * 0.86, max(0, frame.minX - size.width * 0.025)),
+                                    y: (lowerEdge ? frame.maxY : frame.minY) - size.height * 0.04)
+                    }
+                }
             }.clipShape(RoundedRectangle(cornerRadius: 12))
-        }.aspectRatio(1.4, contentMode: .fit)
+        }.aspectRatio(1.04, contentMode: .fit)
             .accessibilityLabel("\(design.layout.name)，\(design.style.name)，构图示意，非生成成品")
     }
 }
@@ -711,7 +774,7 @@ struct DiaryAIDesignChooser: View {
                     }
                 }.padding(2)
             }
-            Text("构图与配色示意 · 正式背景将根据你的照片生成，照片数量自适应")
+            Text("正式背景将结合照片生成，保留全部所选照片")
                 .font(.caption2).foregroundStyle(.secondary)
         }
     }
@@ -720,10 +783,10 @@ struct DiaryAIDesignChooser: View {
             VStack(alignment: .leading, spacing: 6) {
                 DiaryAIDesignPreview(design: design, photos: photos)
                 HStack { Text(title).font(.subheadline.weight(.semibold)); Spacer(); if selected { Image(systemName: "checkmark.circle.fill") } }
-                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2).frame(height: 32, alignment: .topLeading)
-            }.padding(10).frame(width: 190)
+
+            }.padding(7).frame(width: 112)
                 .background(selected ? Color(red: 0.24, green: 0.39, blue: 0.34).opacity(0.10) : Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(selected ? Color(red: 0.24, green: 0.39, blue: 0.34) : .clear, lineWidth: 2))
-        }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(selected ? Color(red: 0.24, green: 0.39, blue: 0.34) : .clear, lineWidth: 1))
+        }.buttonStyle(.plain).accessibilityHint(detail).accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

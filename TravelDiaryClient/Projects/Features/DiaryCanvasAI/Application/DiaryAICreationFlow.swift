@@ -130,7 +130,7 @@ nonisolated struct DiaryCreationDraft: Codable {
             try JSONEncoder().encode(draft).write(to: directory.appendingPathComponent("draft.json"), options: .atomic)
             saveError = nil
             if !busy && pendingPhotoIDs.isEmpty {
-                let used = Set(draft.photos.map(\.filename) + draft.stickers.map(\.filename) + stickerStock.map { $0.0.filename } + (undo?.stickers.map(\.filename) ?? []))
+                let used = Set(draft.photos.map(\.filename) + draft.stickers.map(\.filename) + stickerStock.map { $0.0.filename } + (undo?.stickers.map(\.filename) ?? []) + (removedPhoto.map { [$0.filename] } ?? []))
                 for file in (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [] where ["photo", "sticker"].contains(file.pathExtension) && !used.contains(file.lastPathComponent) {
                     try? FileManager.default.removeItem(at: file)
                 }
@@ -168,8 +168,29 @@ nonisolated struct DiaryCreationDraft: Codable {
         if draft.photoNotes == nil { draft.photoNotes = [:] }
         draft.photoNotes?[id.uuidString] = value; save()
     }
+    @Published private(set) var removedPhoto: DiaryCreationPhoto?
+    private var removedPhotoIndex = 0
+    private var removedPhotoNote: String?
+    private var removedPhotoWasHero = false
+    func undoPhotoRemoval() {
+        guard !isSubmitting, selectedPhotoCount < 30, let photo = removedPhoto,
+              !draft.photos.contains(where: { $0.id == photo.id }) else { return }
+        draft.photos.insert(photo, at: min(removedPhotoIndex, draft.photos.count))
+        if let note = removedPhotoNote {
+            if draft.photoNotes == nil { draft.photoNotes = [:] }
+            draft.photoNotes?[photo.id.uuidString] = note
+        }
+        if removedPhotoWasHero { draft.heroID = photo.id }
+        removedPhoto = nil
+        save(); resumePreparation()
+    }
     func removePhoto(_ id: UUID) {
         guard !isSubmitting else { return }
+        if let index = draft.photos.firstIndex(where: { $0.id == id }) {
+            removedPhoto = draft.photos[index]; removedPhotoIndex = index
+            removedPhotoNote = draft.photoNotes?[id.uuidString]
+            removedPhotoWasHero = draft.heroID == id
+        }
         pendingPhotoIDs.removeAll { $0 == id }
         selectedPhotoImages[id] = nil
         draft.photos.removeAll { $0.id == id }; draft.photoNotes?[id.uuidString] = nil

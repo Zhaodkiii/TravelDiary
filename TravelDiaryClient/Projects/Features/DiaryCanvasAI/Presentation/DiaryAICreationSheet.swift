@@ -40,8 +40,9 @@ struct DiaryAICreationSheet: View {
     @State private var appeared = false
     @State private var librarySource = "推荐"
     @State private var discardsDraft = false
+    private let paper = Color(uiColor: .systemBackground)
     private let ink = Color(red: 0.24, green: 0.39, blue: 0.34)
-    private enum Route: Hashable { case stickers, design, library, photo(UUID), sticker(String), story }
+    private enum Route: Hashable { case stickers, design, preview, library, photo(UUID), sticker(String), story }
     private var columns: [GridItem] { Array(repeating: GridItem(.flexible(), spacing: 12), count: typeSize.isAccessibilitySize ? 2 : 3) }
     var body: some View {
         NavigationStack(path: $path) {
@@ -50,6 +51,7 @@ struct DiaryAICreationSheet: View {
                     switch route {
                     case .stickers: stickerPage
                     case .design: designPage
+                    case .preview: page("构图预览", step: nil) { compositionPreview; Text("正式背景将结合照片生成，制作后仍可调整。").font(.footnote).foregroundStyle(.secondary) }
                     case .library: libraryPage
                     case .photo(let id): photoDetail(id)
                     case .sticker(let id): stickerDetail(id)
@@ -87,10 +89,12 @@ struct DiaryAICreationSheet: View {
     private func page<Content: View>(_ title: String, step: String?, @ViewBuilder content: () -> Content) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                if let step { Text(step).font(.subheadline).foregroundStyle(.secondary) }
+                if let step, !["确认照片", "搭配贴纸", "选择排版"].contains(title) {
+                    Text(step).font(.caption).foregroundStyle(.secondary)
+                }
                 content()
                 if !flow.pendingPhotoIDs.isEmpty { Text("照片正在后台读取，可继续下一步。").font(.footnote).foregroundStyle(.secondary) }
-                if flow.busy { HStack { ProgressView(); Text(flow.status).font(.footnote) } }
+                if flow.busy && title != "确认照片" { HStack { ProgressView(); Text(flow.status).font(.footnote) } }
                 if let error = flow.error { Text(error).font(.footnote).foregroundStyle(.orange) }
                 if let error = flow.saveError {
                     Text(error).font(.footnote).foregroundStyle(.red)
@@ -100,30 +104,48 @@ struct DiaryAICreationSheet: View {
             }.padding(20).frame(maxWidth: 700)
                 .frame(maxWidth: .infinity)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
+        .background(paper)
         .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("关闭") { flow.cancelOperation(); if flow.save() { dismiss() } }.disabled(submitting) } }
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 8) {
+                    Text(title).font(.headline)
+                    if ["确认照片", "搭配贴纸", "选择排版"].contains(title) {
+                        Text("\(flow.draft.step + 1)/3").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("保存并关闭", systemImage: "xmark") { flow.cancelOperation(); if flow.save() { dismiss() } }
+                    Button("丢弃草稿", systemImage: "trash", role: .destructive) { discardsDraft = true }
+                } label: { Image(systemName: "ellipsis.circle").accessibilityLabel("草稿操作") }.disabled(submitting)
+            }
+        }
     }
     private func footer(_ title: String, disabled: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Text(title).font(.headline).frame(maxWidth: .infinity, minHeight: 44) }
-            .buttonStyle(.borderedProminent).controlSize(.large).disabled(disabled)
+        Button(action: action) { Text(title).font(.headline).frame(maxWidth: .infinity, minHeight: 52) }
+            .buttonStyle(.plain).foregroundStyle(.white).background(ink.opacity(disabled ? 0.35 : 1), in: RoundedRectangle(cornerRadius: 14)).disabled(disabled)
             .padding(.horizontal, 20).padding(.vertical, 12).background(.regularMaterial)
     }
     private var photoPage: some View {
-        page("确认照片", step: "第 1 步，共 3 步 · 已选 \(flow.selectedPhotoCount)/30 张") {
-            Text("按顺序讲述这次旅行。3–8 张更便于突出重点。").font(.subheadline).foregroundStyle(.secondary)
-            LazyVGrid(columns: columns, spacing: 16) {
+        page("确认照片", step: "照片 · 1/3 · 已选 \(flow.selectedPhotoCount) 张") {
+            Text("轻点查看原图，长按调整顺序。").font(.subheadline).foregroundStyle(.secondary)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: flow.selectedPhotoCount == 1 ? 1 : (flow.selectedPhotoCount > 8 && !typeSize.isAccessibilitySize ? 3 : 2)), spacing: 10) {
                 ForEach(Array(flow.draft.photos.enumerated()), id: \.element.id) { index, photo in
-                    VStack(spacing: 6) {
+                    ZStack(alignment: .topTrailing) {
                         NavigationLink(value: Route.photo(photo.id)) {
-                            thumbnail(photo.filename).frame(height: 110).clipped()
-                                .overlay(alignment: .topLeading) { Text("\(index + 1)").font(.caption.bold()).padding(6).background(.regularMaterial, in: Circle()) }
+                            photoTile(flow.images[photo.filename], index: index)
                         }.accessibilityLabel("第 \(index + 1) 张照片，查看大图")
-                        HStack {
-                            if photo.id == flow.draft.heroID { Label("主照", systemImage: "star.fill").font(.caption) }
-                            Spacer(minLength: 0)
-                            Button { flow.removePhoto(photo.id) } label: { Image(systemName: "xmark.circle.fill").frame(width: 44, height: 44) }.accessibilityLabel("删除第 \(index + 1) 张照片")
-                        }
+                        Button { flow.removePhoto(photo.id) } label: {
+                            Image(systemName: "minus.circle.fill").symbolRenderingMode(.palette)
+                                .foregroundStyle(.black, .white).font(.title3).frame(width: 44, height: 44)
+                        }.accessibilityLabel("移除第 \(index + 1) 张照片")
+                    }
+                    .contextMenu {
+                        Button("设为主照片", systemImage: "star") { flow.setHero(photo.id) }
+                        Button("前移", systemImage: "arrow.left") { flow.movePhoto(photo.id, offset: -1) }.disabled(index == 0)
+                        Button("后移", systemImage: "arrow.right") { flow.movePhoto(photo.id, offset: 1) }.disabled(index == flow.draft.photos.count - 1)
                     }
                     .draggable(photo.id.uuidString)
                     .dropDestination(for: String.self) { values, _ in
@@ -133,30 +155,63 @@ struct DiaryAICreationSheet: View {
                     .accessibilityAction(named: "前移") { flow.movePhoto(photo.id, offset: -1) }
                     .accessibilityAction(named: "后移") { flow.movePhoto(photo.id, offset: 1) }
                 }
-                ForEach(flow.pendingPhotoIDs, id: \.self) { id in
-                    VStack {
-                        if let image = flow.selectedPhotoImages[id] {
-                            Image(uiImage: image).resizable().scaledToFit().frame(height: 110)
-                        } else {
-                            ProgressView("正在从相册读取").frame(maxWidth: .infinity, minHeight: 110)
-                        }
-                        Button("移除") { flow.removePhoto(id) }.font(.caption)
+                ForEach(Array(flow.pendingPhotoIDs.enumerated()), id: \.element) { index, id in
+                    ZStack(alignment: .topTrailing) {
+                        photoTile(flow.selectedPhotoImages[id], index: flow.draft.photos.count + index)
+                        Button { flow.removePhoto(id) } label: {
+                            Image(systemName: "minus.circle.fill").symbolRenderingMode(.palette)
+                                .foregroundStyle(.black, .white).font(.title3).frame(width: 44, height: 44)
+                        }.accessibilityLabel("移除正在读取的照片")
                     }
                 }
-                Button { picking = true } label: {
-                    Label("继续添加", systemImage: "plus").frame(maxWidth: .infinity, minHeight: 110)
-                        .background(ink.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
-                }.disabled(flow.selectedPhotoCount >= 30)
             }.disabled(flow.isSubmitting)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: flow.draft.photos.map(\.id))
+            HStack {
+                Button { picking = true } label: { Label("添加照片", systemImage: "plus") }
+                    .disabled(flow.selectedPhotoCount >= 30)
+                Spacer()
+                Text("已选 \(flow.selectedPhotoCount) 张").font(.subheadline).foregroundStyle(.secondary)
+            }.frame(minHeight: 44)
+            if flow.removedPhoto != nil {
+                HStack {
+                    Text("已移除照片").foregroundStyle(.secondary)
+                    Spacer()
+                    Button("撤销") { flow.undoPhotoRemoval() }.disabled(flow.selectedPhotoCount >= 30)
+                }.font(.subheadline)
+            }
             ForEach(flow.failures.keys.sorted { $0.uuidString < $1.uuidString }, id: \.self) { id in
                 HStack { Text(flow.failures[id] ?? "照片读取失败"); Spacer(); Button("重试") { flow.retryFailure(id) }; Button("移除") { flow.removeFailure(id) } }.font(.footnote).disabled(flow.isSubmitting)
             }
-            NavigationLink(value: Route.story) { Label(flow.draft.story.isEmpty ? "写点故事（选填）" : "编辑故事", systemImage: "square.and.pencil") }
-            Button("丢弃这次草稿", role: .destructive) { discardsDraft = true }.font(.footnote).disabled(flow.isSubmitting)
+            NavigationLink(value: Route.story) {
+                HStack(spacing: 10) {
+                    Image(systemName: "square.and.pencil")
+                    Text(flow.draft.story.isEmpty ? "写点故事（选填）" : flow.draft.story)
+                        .font(.subheadline).foregroundStyle(.primary).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                }.frame(minHeight: 44)
+
+            }
         }
-        .safeAreaInset(edge: .bottom) { footer("下一步 · 搭配贴纸", disabled: !flow.canContinue) { path.append(.stickers) } }
+        .safeAreaInset(edge: .bottom) { footer("继续", disabled: !flow.canContinue) { path.append(.stickers) } }
         .photosPicker(isPresented: $picking, selection: $photos, maxSelectionCount: max(1, 30 - flow.selectedPhotoCount), selectionBehavior: .ordered, matching: .images, preferredItemEncoding: .current)
         .onChange(of: photos) { _, values in guard !values.isEmpty else { return }; photos = []; flow.importPhotos(values) }
+    }
+    private func photoTile(_ image: UIImage?, index: Int) -> some View {
+        GeometryReader { proxy in
+            ZStack {
+                Color(uiColor: .secondarySystemBackground)
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill()
+                        .frame(width: proxy.size.width, height: proxy.size.height).clipped()
+                } else { ProgressView().accessibilityLabel("正在读取照片") }
+            }
+        }.aspectRatio(0.94, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(alignment: .topLeading) {
+                Text("\(index + 1)").font(.caption.bold()).foregroundStyle(.white)
+                    .padding(7).background(.black.opacity(0.65), in: Circle()).padding(8)
+            }
     }
     @ViewBuilder private func thumbnail(_ file: String) -> some View {
         if let image = flow.images[file] { Image(uiImage: image).resizable().scaledToFit() }
@@ -182,7 +237,9 @@ struct DiaryAICreationSheet: View {
         }
     }
     private var stickerPage: some View {
-        page("搭配贴纸", step: "第 2 步，共 3 步") {
+        page("搭配贴纸", step: "点缀 · 2/3") {
+            compositionPreview
+
             HStack {
                 Picker("主题", selection: Binding(get: { flow.draft.theme }, set: { flow.setTheme($0) })) {
                     ForEach(availableThemes, id: \.self) { Text($0) }
@@ -190,28 +247,29 @@ struct DiaryAICreationSheet: View {
                 Spacer(); Text("已选 \(flow.selectedStickerCount)/8").font(.subheadline.monospacedDigit())
             }.disabled(flow.isSubmitting)
             VStack(spacing: 12) {
-                HStack { Image(systemName: "sparkles"); Text("今天的贴纸搭配").font(.headline); Spacer(); Circle().fill(ink).frame(width: 7, height: 7) }.foregroundStyle(ink)
-                LazyVGrid(columns: columns, spacing: 14) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
                     ForEach(flow.draft.stickers) { sticker in
-                        stickerCard(sticker)
+                        stickerCard(sticker).frame(width: 76)
                     }
-                    NavigationLink(value: Route.library) { Label("添加", systemImage: "plus").frame(maxWidth: .infinity, minHeight: 110) }.disabled(flow.draft.stickers.count >= 8)
+                    NavigationLink(value: Route.library) { Image(systemName: "plus").frame(width: 52, height: 76).accessibilityLabel("添加贴纸") }.disabled(flow.draft.stickers.count >= 8)
                 }.disabled(flow.isSubmitting)
+                }
                 if flow.draft.stickers.isEmpty { Text("也可以不加贴纸，留白同样好看。").font(.footnote).foregroundStyle(.secondary) }
-            }.padding(16).background(ink.opacity(0.08), in: RoundedRectangle(cornerRadius: 24))
-                .overlay(RoundedRectangle(cornerRadius: 24).stroke(ink.opacity(0.15), lineWidth: 2))
+            }
                 .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.38, dampingFraction: 0.78), value: flow.draft.stickers.map(\.id))
                 .sensoryFeedback(.selection, trigger: flow.draft.batch)
             HStack {
-                Button("换一批", systemImage: "arrow.clockwise") { flow.draw() }.buttonStyle(.borderedProminent).controlSize(.large).disabled(flow.busy || flow.loadingCatalog || flow.allKept || flow.candidates.isEmpty)
-                Text(flow.allKept ? "取消保留后可换新" : "保留喜欢的，其余换新").font(.footnote).foregroundStyle(.secondary)
+                Button("换一组", systemImage: "arrow.clockwise") { flow.draw() }.buttonStyle(.bordered).disabled(flow.busy || flow.loadingCatalog || flow.allKept || flow.candidates.isEmpty)
+                Spacer()
+                Button("暂不添加") { flow.skipStickers(); path.append(.design) }.font(.subheadline)
             }
             if flow.loadingCatalog { ProgressView("正在寻找贴纸…") }
             if flow.candidates.isEmpty && !flow.loadingCatalog { Button("重新加载贴纸") { flow.loadCatalog() } }
-            HStack { Button("撤销上次操作") { flow.undoLast() }.disabled(!flow.undoAvailable || flow.isSubmitting); Spacer(); Button("不用贴纸") { flow.skipStickers(); path.append(.design) }.disabled(flow.isSubmitting) }.font(.footnote)
+            if flow.undoAvailable { Button("撤销上次操作") { flow.undoLast() }.font(.footnote).disabled(flow.isSubmitting) }
             if flow.busy { Button("取消本次准备") { flow.cancelStickerOperation() } }
         }
-        .safeAreaInset(edge: .bottom) { footer("下一步 · 选择排版", disabled: flow.isSubmitting || flow.saveError != nil) { path.append(.design) } }
+        .safeAreaInset(edge: .bottom) { footer("继续", disabled: flow.isSubmitting || flow.saveError != nil) { path.append(.design) } }
         .task { flow.loadCatalog() }
     }
     private var availableThemes: [String] {
@@ -221,21 +279,42 @@ struct DiaryAICreationSheet: View {
         let index = flow.draft.stickers.firstIndex { $0.id == sticker.id } ?? 0
         return reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.35, dampingFraction: 0.8).delay(Double(index) * 0.035)
     }
+    private func stickerName(_ name: String) -> String {
+        if name.contains("胶带") || ["左上", "右上", "顶部照片左上", "顶部照片右上"].contains(name) { return "纸胶带" }
+        return name.replacingOccurrences(of: "插画_", with: "").replacingOccurrences(of: "_", with: " ")
+    }
     private func stickerCard(_ sticker: DiaryCreationSticker) -> some View {
-VStack(spacing: 4) {
-                            NavigationLink(value: Route.sticker(sticker.id)) {
-                                thumbnail(sticker.filename).frame(height: 92)
-                            }.accessibilityLabel("查看贴纸：" + sticker.item.name)
-                            Text(sticker.item.name).font(.caption).lineLimit(1)
-                            HStack(spacing: 0) {
-                                Button { flow.toggleKeep(sticker.id) } label: { Image(systemName: sticker.kept ? "pin.fill" : "pin").frame(minWidth: 44, minHeight: 44) }
-                                    .accessibilityLabel(sticker.kept ? "取消保留：" + sticker.item.name : "保留：" + sticker.item.name)
-                                Button { flow.removeSticker(sticker.id) } label: { Image(systemName: "xmark.circle").frame(minWidth: 44, minHeight: 44) }.accessibilityLabel("删除：" + sticker.item.name)
-                            }
-                        }.padding(4).background(.background.opacity(sticker.kept ? 0.9 : 0.45), in: RoundedRectangle(cornerRadius: 14))
-                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(sticker.kept ? ink.opacity(0.6) : .clear))
-                            .animation(stickerAnimation(sticker), value: flow.draft.batch)
-                            .transition(reduceMotion ? .opacity : .asymmetric(insertion: .scale(scale: 0.94).combined(with: .opacity).combined(with: .offset(y: -12)), removal: .scale(scale: 0.9).combined(with: .opacity)))
+        NavigationLink(value: Route.sticker(sticker.id)) {
+            VStack(spacing: 6) {
+                Group {
+                    if let image = flow.images[sticker.filename] {
+                        DiaryDieCutSticker(image: image, paperTape: DiaryAIDesignPreview.isTape(sticker.item.name))
+                            .rotationEffect(.degrees(sticker.kept ? -4 : 3))
+                    } else { ProgressView() }
+                }.frame(height: 68)
+                Text(stickerName(sticker.item.name))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }.frame(maxWidth: .infinity).padding(6)
+                .overlay(alignment: .topTrailing) {
+                    if sticker.kept { Image(systemName: "pin.circle.fill").foregroundStyle(ink).accessibilityLabel("已保留") }
+                }
+        }.buttonStyle(.plain)
+            .contextMenu {
+                Button(sticker.kept ? "取消保留" : "换一组时保留", systemImage: "pin") { flow.toggleKeep(sticker.id) }
+                Button("移除贴纸", systemImage: "trash", role: .destructive) { flow.removeSticker(sticker.id) }
+            }
+            .accessibilityAction(named: sticker.kept ? "取消保留" : "保留") { flow.toggleKeep(sticker.id) }
+            .accessibilityAction(named: "移除") { flow.removeSticker(sticker.id) }
+            .animation(stickerAnimation(sticker), value: flow.draft.batch)
+            .transition(.opacity)
+    }
+    private var compositionPreview: some View {
+        DiaryAIDesignPreview(design: flow.design, photos: flow.photoPreviews,
+                             stickers: flow.draft.stickers.compactMap { flow.images[$0.filename] },
+                             stickerNames: flow.draft.stickers.filter { flow.images[$0.filename] != nil }.map { $0.item.name }, story: flow.draft.story)
+            .frame(maxWidth: .infinity)
+            .shadow(color: .black.opacity(0.07), radius: 8, y: 4)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: flow.design)
     }
     private func stickerDetail(_ id: String) -> some View {
         page("贴纸预览", step: nil) {
@@ -299,11 +378,8 @@ VStack(spacing: 4) {
         .task(id: librarySource) { if librarySource == "我的" { await flow.loadPersonal() } }
     }
     private var designPage: some View {
-        page("选择排版", step: "第 3 步，共 3 步 · 照片 \(flow.draft.photos.count) 张 · 贴纸 \(flow.draft.stickers.count) 张") {
-            DiaryAIDesignPreview(design: flow.design, photos: flow.photoPreviews).frame(height: 180).frame(maxWidth: .infinity)
-            if !flow.draft.stickers.isEmpty {
-                ScrollView(.horizontal) { HStack { ForEach(flow.draft.stickers) { sticker in thumbnail(sticker.filename).frame(width: 48, height: 48) } } }
-            }
+        page("选择排版", step: "成品 · 3/3") {
+            NavigationLink(value: Route.preview) { compositionPreview }.buttonStyle(.plain).accessibilityLabel("放大构图预览")
             if flow.preparingMaterials {
                 ProgressView("正在准备素材 \(flow.preparedCount)/\(flow.draft.photos.count + flow.draft.stickers.count)")
                     .font(.caption)
@@ -311,14 +387,14 @@ VStack(spacing: 4) {
                 Text("有 \(flow.preparationFailures.count) 项素材准备失败，可重试或返回移除。").font(.caption).foregroundStyle(.orange)
                 Button("重试准备素材") { flow.resumePreparation() }
             }
-            Text("排版示意，制作后可继续调整。贴纸会融入正式构图。").font(.caption).foregroundStyle(.secondary)
+            Text("构图预览 · 制作后仍可调整").font(.caption).foregroundStyle(.secondary)
             if flow.draft.photos.count > 8 { Text("照片较多，成品中会较小；可返回删减或调整主照。").font(.footnote).foregroundStyle(.orange) }
             DiaryAIDesignChooser(selection: Binding(get: { flow.design }, set: { flow.setDesign($0) }), photos: flow.photoPreviews)
             NavigationLink(value: Route.story) { Label("故事与制作说明（选填）", systemImage: "square.and.pencil") }
         }
         .navigationBarBackButtonHidden(submitting)
         .safeAreaInset(edge: .bottom) {
-            footer(submitting ? (flow.preparingMaterials ? "正在准备素材 \(flow.preparedCount)/\(flow.draft.photos.count + flow.draft.stickers.count)…" : flow.status) : "开始制作", disabled: !flow.canContinue || submitting) {
+            footer(submitting ? (flow.preparingMaterials ? "正在准备素材 \(flow.preparedCount)/\(flow.draft.photos.count + flow.draft.stickers.count)…" : flow.status) : "制作这页手账", disabled: !flow.canContinue || submitting) {
                 submitting = true
                 Task {
                     if await flow.submit() { submitted() } else { submitting = false }
@@ -353,3 +429,41 @@ private struct DiaryCreationAssetPreview: View {
         }
     }
 }
+
+#if DEBUG
+/// Local-only visual fixture; never participates in the release app or uploads photos.
+struct DiaryCreationReviewScreen: View {
+    @State private var flow: DiaryAICreationFlow?
+    @State private var session: DiaryEditorSession?
+    @State private var failure: String?
+    var body: some View {
+        Group {
+            if let flow { DiaryAICreationSheet(flow: flow, submitted: {}) }
+            else if let failure { Text(failure) }
+            else { ProgressView() }
+        }.task {
+            guard flow == nil else { return }
+            do {
+                let owner = "creation-visual-review"
+                MaterialCatalogRepository.shared.activate(owner)
+                let store = DiaryDocumentStore(ownerID: owner, baseDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(owner))
+                let session = DiaryEditorSession(document: DiaryDocument(), images: [:], store: store)
+                self.session = session
+                let flow = try DiaryAICreationFlow(session: session)
+                for index in 0..<4 {
+                    let url = URL(fileURLWithPath: "/tmp/diary-review-photo-\(index).jpg")
+                    guard let image = UIImage(contentsOfFile: url.path), let data = image.jpegData(compressionQuality: 0.9) else { continue }
+                    let name = "review-\(index).photo"
+                    try data.write(to: flow.directory.appendingPathComponent(name))
+                    flow.draft.photos.append(.init(filename: name, digest: name, name: name))
+                    flow.images[name] = image
+                }
+                flow.draft.didDraw = true
+                if let value = ProcessInfo.processInfo.environment["DIARY_REVIEW_STEP"], let step = Int(value) { flow.draft.step = step }
+                flow.save()
+                self.flow = flow
+            } catch { failure = error.localizedDescription }
+        }
+    }
+}
+#endif
