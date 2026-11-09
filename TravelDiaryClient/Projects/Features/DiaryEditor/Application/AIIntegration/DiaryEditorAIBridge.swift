@@ -6,6 +6,8 @@ import CoreText
 @MainActor final class DiaryEditorAIBridge: DiaryAIEditorBridge {
     private weak var session: DiaryEditorSession?
     var autoFitPhotoRegions = false
+    var fitsTextToPlannedRegions = false
+    var rendersDraftPreview = true
     private var pendingStickerPlacements = Set<UUID>()
     var layoutRegions: [DiaryAILayoutRegion] = []
     var allowedBatchIDs: Set<UUID>?
@@ -248,7 +250,9 @@ import CoreText
             style.vertical = false; style.titleLayout = .headline; layer.textAppearance = style
             let longest = layer.text.split(separator: "\n").map(\.count).max() ?? 4
             let insets = DiaryPageRenderer.textInsets(layer)
-            layer.size.width = min(context.size.width * 0.44, max(layer.size.width, layer.fontSize * CGFloat(min(longest, 9)) + insets.left + insets.right))
+            if !fitsTextToPlannedRegions {
+                layer.size.width = min(context.size.width * 0.44, max(layer.size.width, layer.fontSize * CGFloat(min(longest, 9)) + insets.left + insets.right))
+            }
         }
         try require(DiaryFontCatalog.shared.warning(layer.font, text: layer.text) == nil, "所选字体不可用或缺少字符，请选择另一字体")
         if request?.design != nil, request?.background != nil, request?.instruction.isEmpty == true,
@@ -263,7 +267,16 @@ import CoreText
                 layer.textAppearance = style
             }
         }
-        if request?.design != nil, request?.instruction.isEmpty == true {
+        if fitsTextToPlannedRegions, let center = operation.center,
+           let region = layoutRegions.first(where: { $0.role == "text" && $0.bounds.contains(center) }) {
+            // Keep the measured paper inside its allocated box, including shadow and padding.
+            layer.size.width = max(40, min(layer.size.width, region.width - 24))
+            let preferred = layer.fontSize
+            let minimum = min(preferred, context.size.width * (operation.textRole == "title" ? 0.03 : 0.014))
+            while DiaryPageRenderer.textBounds(layer).height > region.height - 24 && layer.fontSize > minimum {
+                layer.fontSize = max(minimum, layer.fontSize - 2)
+            }
+        } else if request?.design != nil, request?.instruction.isEmpty == true {
             Self.avoidOrphanLine(&layer, maximumWidth: context.size.width * 0.44)
         }
         layer.size.height = DiaryPageRenderer.textBounds(layer).height
@@ -525,7 +538,10 @@ import CoreText
         }
         // Measure the complete decorated card before validating planned regions. Preserve typography and paper.
         var autoPositionedText = Set<UUID>()
-        for id in changed {
+        let newTextIDs = operations.filter { $0.type == "createText" }.sorted {
+            ($0.textRole == "title" ? 0 : 1) < ($1.textRole == "title" ? 0 : 1)
+        }.compactMap { $0.clientObjectKey.flatMap { createdIDs[$0] } }
+        for id in newTextIDs + changed.subtracting(newTextIDs).sorted(by: { $0.uuidString < $1.uuidString }) {
             guard let layer = copy.layer(id), role(layer, in: copy) == "text" else { continue }
             let siblings = copy.objects[context.contentID]!.layers
             let bounds = DiaryPageRenderer.bounds(layer, document: copy, siblings: siblings).applying(DiaryPageRenderer.matrix(layer, siblings: siblings))
@@ -577,14 +593,42 @@ import CoreText
             }
         }
         if autoFitPhotoRegions {
-            for id in changed.sorted(by: { $0.uuidString < $1.uuidString }) {
-                guard let layer = copy.layer(id), role(layer, in: copy) == "decoration",
-                      let placement = operations.last(where: { $0.objectID == id && $0.type == "setPlacement" }) else { continue }
-                // Resolve again after native text measurement, without reapplying scale/rotation.
-                var resolved = placement
-                resolved.scale = nil; resolved.width = nil; resolved.angle = nil; resolved.center = nil
-                try place(resolved, id: id, document: &copy, context: context, finalStickerPlacement: true)
+            let stickers = changed.filter { id in
+                copy.layer(id).map { role($0, in: copy) == "decoration" } == true
+                    && operations.contains { $0.objectID == id && $0.type == "setPlacement" }
+            }.sorted { left, right in
+                let a = copy.layer(left)!, b = copy.layer(right)!
+                let siblings = copy.objects[context.contentID]!.layers
+                let first = DiaryPageRenderer.bounds(a, document: copy, siblings: siblings).applying(a.transform.matrix)
+                let second = DiaryPageRenderer.bounds(b, document: copy, siblings: siblings).applying(b.transform.matrix)
+                let areaA = first.width * first.height, areaB = second.width * second.height
+                return areaA == areaB ? left.uuidString < right.uuidString : areaA > areaB
             }
+            let original = copy
+            var placementError: Error?
+            // Retry bounded orderings from the same candidate so an early small
+            // sticker cannot permanently consume the only large free region.
+            for attempt in 0..<max(1, stickers.count * 2) {
+                try Task.checkCancellation()
+                copy = original
+                pendingStickerPlacements = Set(stickers)
+                var order = attempt < stickers.count ? stickers : Array(stickers.reversed())
+                if !order.isEmpty {
+                    let offset = attempt % order.count
+                    order = Array(order.dropFirst(offset)) + Array(order.prefix(offset))
+                }
+                do {
+                    for id in order {
+                        var resolved = operations.last { $0.objectID == id && $0.type == "setPlacement" }!
+                        resolved.scale = nil; resolved.width = nil; resolved.angle = nil; resolved.center = nil
+                        try place(resolved, id: id, document: &copy, context: context, finalStickerPlacement: true)
+                    }
+                    placementError = nil
+                    break
+                } catch is CancellationError { throw CancellationError() }
+                catch { placementError = error }
+            }
+            if let placementError { throw placementError }
         }
         let siblings = copy.objects[context.contentID]!.layers
         for id in changed {
@@ -641,7 +685,7 @@ import CoreText
         }
         try Task.checkCancellation()
         _ = try DiaryDocumentStore.validate(copy)
-        let preview = try await pageImage(copy)
+        let preview = rendersDraftPreview ? try await pageImage(copy) : Data()
         let revision = (draft?.revision ?? 0) + 1
         let archiveValue = Archive(base: base, candidate: copy, drawings: base.objects.mapValues(\.drawing), request: request, context: context, revision: revision, summary: plan.summary, warnings: warnings, newImages: localNew)
         let archive = try await DiaryAIImageWork.run { try JSONEncoder().encode(archiveValue) }

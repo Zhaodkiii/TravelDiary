@@ -40,6 +40,7 @@ struct DiaryAICreationSheet: View {
     @State private var appeared = false
     @State private var librarySource = "推荐"
     @State private var discardsDraft = false
+    @AppStorage(DiaryAILayoutMode.preferenceKey) private var preferredLayoutMode: DiaryAILayoutMode = .native
     private let paper = Color(uiColor: .systemBackground)
     private let ink = Color(red: 0.24, green: 0.39, blue: 0.34)
     private enum Route: Hashable { case stickers, design, preview, library, photo(UUID), sticker(String), story }
@@ -389,6 +390,9 @@ struct DiaryAICreationSheet: View {
             }
             Text("构图预览 · 制作后仍可调整").font(.caption).foregroundStyle(.secondary)
             if flow.draft.photos.count > 8 { Text("照片较多，成品中会较小；可返回删减或调整主照。").font(.footnote).foregroundStyle(.orange) }
+            Picker("排版方式", selection: Binding(get: { flow.draft.request.layoutMode ?? preferredLayoutMode }, set: { flow.setLayoutMode($0) })) {
+                ForEach(DiaryAILayoutMode.allCases) { Text($0.title).tag($0) }
+            }.pickerStyle(.menu)
             DiaryAIDesignChooser(selection: Binding(get: { flow.design }, set: { flow.setDesign($0) }), photos: flow.photoPreviews)
             NavigationLink(value: Route.story) { Label("故事与制作说明（选填）", systemImage: "square.and.pencil") }
         }

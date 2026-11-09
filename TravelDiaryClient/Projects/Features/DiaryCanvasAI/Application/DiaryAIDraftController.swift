@@ -30,7 +30,9 @@ import Combine
     }
     func form(_ action: DiaryAIAction) -> DiaryAIRequest { forms[action] ?? .editorDefaults(action) }
     func setForm(_ value: DiaryAIRequest) {
-        forms[value.action] = value.coordinated()
+        var form = value.coordinated()
+        form.layoutMode = nil
+        forms[value.action] = form
         formSaveTask?.cancel()
         formSaveTask = Task { do { try await Task.sleep(for: .milliseconds(350)); persist() } catch {} }
     }

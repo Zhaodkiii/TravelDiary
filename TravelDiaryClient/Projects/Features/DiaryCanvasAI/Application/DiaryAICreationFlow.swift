@@ -107,13 +107,16 @@ nonisolated struct DiaryCreationDraft: Codable {
             guard draft.schema == 1, draft.owner == session.store.ownerID, draft.documentID == session.document.id else { throw DiaryAIError.invalid("制作草稿版本或账号不匹配") }
         } else {
             var request = session.canvasAI.form(.relayout)
+            request.layoutMode = nil
             if request.design == nil { request.design = .init() }
             draft = .init(owner: session.store.ownerID, documentID: session.document.id,
                           baseline: try DiaryEditorAIBridge.digest(session.document), request: request)
         }
         if draft.submitted && session.aiWorkspace.objects.isEmpty {
+            var request = session.canvasAI.form(.relayout)
+            request.layoutMode = nil
             draft = .init(owner: session.store.ownerID, documentID: session.document.id,
-                          baseline: try DiaryEditorAIBridge.digest(session.document), request: session.canvasAI.form(.relayout))
+                          baseline: try DiaryEditorAIBridge.digest(session.document), request: request)
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for file in draft.photos.map(\.filename) + draft.stickers.map(\.filename) {
@@ -166,6 +169,7 @@ nonisolated struct DiaryCreationDraft: Codable {
     func resumePreparation() { preparationSuspended = false; schedulePreparation() }
     func setStep(_ step: Int) { draft.step = step; resumePreparation(); save() }
     func setDesign(_ value: DiaryAIDesignSelection) { draft.request.design = value; save() }
+    func setLayoutMode(_ value: DiaryAILayoutMode) { draft.request.layoutMode = value; save() }
     func setStory(_ value: String) { draft.story = value; save() }
     func setTheme(_ value: String) { draft.theme = value; save() }
     func setHero(_ id: UUID) { draft.heroID = id; save() }
@@ -636,6 +640,12 @@ nonisolated struct DiaryCreationDraft: Codable {
             for sticker in draft.stickers where sticker.item.revision > 0 { _ = try await PresetDownloadManager.shared.materialData(sticker.item) { _ in } }
             guard ownerValid else { throw CancellationError() }
             var request = draft.request
+            request.layoutMode = request.layoutMode ?? DiaryAILayoutMode.preferred
+            if request.layoutMode == .native && (draft.photos.count > 8 || !draft.story.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || draft.photoNotes?.values.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) == true
+                || !request.instruction.isEmpty) {
+                throw DiaryAIError.invalid("当前照片数量或自定义说明需要使用 AI 自由排版，请切换排版方式。")
+            }
             request.selectedOnly = false
             if !draft.story.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { request.instruction += "\n用户故事：" + draft.story }
             let photoURLs = draft.photos.map { directory.appendingPathComponent($0.filename) }

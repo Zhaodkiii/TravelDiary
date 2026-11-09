@@ -96,7 +96,7 @@ struct SettingsView: View {
 
 private struct DiaryAIMakingSettingsView: View {
     @AppStorage("DiaryCanvasAI.autoSaveCompletedWork") private var autoSaveCompletedWork = true
-    @AppStorage("DiaryCanvasAI.parallelExecution") private var parallel = false
+    @AppStorage(DiaryAILayoutMode.preferenceKey) private var layoutMode: DiaryAILayoutMode = .native
     @AppStorage("DiaryCanvasAI.backgroundMode") private var mode = "guided"
     var body: some View {
         Form {
@@ -107,9 +107,25 @@ private struct DiaryAIMakingSettingsView: View {
                 Text("开启后，AI 制作完成会自动保存作品。关闭后保留制作结果，点击“保存作品”后保存；草稿进度仍会保留。此设置不影响背景保存到相册。")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("运行方式") {
-                Toggle("并行制作", isOn: $parallel)
-                Text("背景与图层排版同时进行，对新打开的任务生效。").font(.caption).foregroundStyle(.secondary)
+            Section("排版方式") {
+                ForEach(DiaryAILayoutMode.allCases) { mode in
+                    Button {
+                        layoutMode = mode
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(mode.title).foregroundStyle(.primary)
+                                Text(mode.explanation).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if layoutMode == mode { Image(systemName: "checkmark") }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(layoutMode == mode ? .isSelected : [])
+                }
+                Text("默认设置在下次开始制作时生效。").font(.caption).foregroundStyle(.secondary)
             }
             Section("背景生成") {
                 Picker("生成方式", selection: $mode) {

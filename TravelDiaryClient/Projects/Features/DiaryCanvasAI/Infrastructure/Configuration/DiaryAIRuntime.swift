@@ -33,6 +33,21 @@ import Combine
         let scenes: [String: Scene]
         let credentials: [String: Credential]
     }
+    #if DEBUG
+    private static var testConfiguration: Configuration?
+    static func installTestConfiguration(_ data: Data) throws {
+        guard NSClassFromString("XCTestCase") != nil else {
+            throw DiaryAIError.invalid("此配置仅支持 XCTest 运行")
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .iso8601
+        let value = try decoder.decode(Configuration.self, from: data)
+        try validate(value, task: value.taskId)
+        testConfiguration = value
+    }
+    static func clearTestConfiguration() { testConfiguration = nil }
+    #endif
     struct Access {
         let scene: Scene
         let credential: Credential
@@ -82,9 +97,15 @@ import Combine
         return Access(scene: scene, credential: credential)
     }
     func assertOwner() throws {
+        #if DEBUG
+        if Self.testConfiguration != nil { return }
+        #endif
         guard owner != nil, owner == DiaryProductionService.shared.owner else { throw CancellationError() }
     }
     private func obtain(force: Bool) async throws -> Configuration {
+        #if DEBUG
+        if let value = Self.testConfiguration { return value }
+        #endif
         try assertOwner()
         if !force, !needsRefresh, let configuration, ProcessInfo.processInfo.systemUptime < deadline - 60 { return configuration }
         guard let taskID else { throw DiaryAIError.invalid("请先创建制作任务，再获取 AI 服务配置。") }

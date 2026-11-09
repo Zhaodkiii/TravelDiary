@@ -7,6 +7,7 @@ import Foundation
     var requiresBackgroundDesign = false
     var workspaceMode = false
     var planning = false
+    var contentTextCount: ClosedRange<Int>?
     var allowedLayerReferences: [String]?
     var allowedWorkspaceTools: Set<String>?
     var onTransportEvent: ((String, String) -> Void)?
@@ -72,6 +73,7 @@ import Foundation
             guard let name = tool["name"] as? String else { return false }
             return planning ? name == "plan_composition" : name != "plan_composition" && (allowedWorkspaceTools?.contains(name) ?? true)
         } : Self.tools()
+        if let contentTextCount { selectedTools = [DiaryNativeContent.schema(textCount: contentTextCount)] }
         if workspaceMode, planning, let references = allowedLayerReferences, !references.isEmpty {
             for index in selectedTools.indices {
                 guard var parameters = selectedTools[index]["parameters"] as? [String: Any], var properties = parameters["properties"] as? [String: Any], var regions = properties["regions"] as? [String: Any], var items = regions["items"] as? [String: Any], var fields = items["properties"] as? [String: Any] else { continue }

@@ -11,10 +11,34 @@ nonisolated enum DiaryAIAction: String, CaseIterable, Identifiable, Codable, Sen
     }
 }
 
+nonisolated enum DiaryAILayoutMode: String, CaseIterable, Codable, Sendable, Identifiable {
+    case native, ai
+
+    static let preferenceKey = "DiaryCanvasAI.layoutMode"
+    static var preferred: Self {
+        UserDefaults.standard.string(forKey: preferenceKey).flatMap(Self.init(rawValue:)) ?? .native
+    }
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .native: "智能快速排版"
+        case .ai: "AI 自由排版"
+        }
+    }
+    var explanation: String {
+        switch self {
+        case .native: "本机安排照片、文字和贴纸，AI 生成文案与背景。适合 1–8 张照片的整页制作。"
+        case .ai: "AI 规划整页构图与素材位置，制作通常需要更长时间。"
+        }
+    }
+}
+
 nonisolated struct DiaryAIRequest: Codable, Equatable, Sendable {
     var creationBrief: CreationBrief? = nil
     var creationNotes: [String: String]? = nil
     var design: DiaryAIDesignSelection? = nil
+    var layoutMode: DiaryAILayoutMode? = nil
     var background: DiaryAIBackgroundOptions? = nil
     var action: DiaryAIAction
     var style = "保持当前风格"

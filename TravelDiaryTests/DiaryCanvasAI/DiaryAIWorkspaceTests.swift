@@ -79,6 +79,31 @@ import SwiftUI
         await restored.enter(.defaults(.relayout))
         #expect(restored.canRestartProduction && Set(restored.pending) == inputs)
     }
+    @Test func resumedProductionKeepsItsLayoutMode() async throws {
+        let (session, root) = try await fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = ScriptedWorkspaceModel { _, _, _, _, _ in throw URLError(.timedOut) }
+        var request = DiaryAIRequest.defaults(.relayout)
+        request.layoutMode = .ai
+        let workspace = DiaryAIWorkspace(session: session, model: model, root: root)
+        await workspace.enter(request, preparingNewCreation: true)
+        workspace.processAll()
+        try await wait(workspace)
+        #expect(workspace.error != nil)
+        await workspace.keepForLater()
+
+        request.layoutMode = .native
+        let restored = DiaryAIWorkspace(session: session, model: model, root: root)
+        await restored.enter(request)
+        #expect(restored.currentRequest.layoutMode == .ai)
+        #expect(restored.hasStartedWork)
+        restored.processAll()
+        try await wait(restored)
+        #expect(restored.events.filter { $0.kind == "layout-mode" }.map(\.title) == [
+            DiaryAILayoutMode.ai.title, DiaryAILayoutMode.ai.title
+        ])
+    }
+
     @Test func failedModelCanResumeSuccessfullyAfterManualClick() async throws {
         let (session, root) = try await fixture(count: 1)
         defer { try? FileManager.default.removeItem(at: root) }

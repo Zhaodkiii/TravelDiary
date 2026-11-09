@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 struct DiaryAIStyle: Identifiable {
     let id: String
@@ -93,7 +94,7 @@ nonisolated struct DiaryAIDesignSelection: Codable, Equatable, Sendable {
 
 extension DiaryAIDesignSelection {
     /// Safe fallback preserves layout intent and never crosses a spread spine.
-    func fallbackRegions(context: DiaryAIContext, allowsText: Bool) -> [DiaryAILayoutRegion] {
+    func fallbackRegions(context: DiaryAIContext, allowsText: Bool, variation: Int = 0) -> [DiaryAILayoutRegion] {
         let photos = context.objects.filter { $0.role == "photo" && $0.editable }
         let w = Double(context.size.width), h = Double(context.size.height)
         guard w > 0, h > 0, !photos.isEmpty else { return [] }
@@ -110,7 +111,7 @@ extension DiaryAIDesignSelection {
             var top = h * 0.06
             var height = h * 0.88
             if allowsText {
-                if layout == .editorial || (layout == .story && pageIndex == 0) {
+                if (layout == .editorial && variation % 3 == 0) || (layout == .story && pageIndex == 0) {
                     // Give the photo group a neighboring reading column.
                     let railWidth = width * 0.36
                     let railOnLeft = pageIndex > 0
@@ -131,11 +132,27 @@ extension DiaryAIDesignSelection {
                 }
             }
             let hero = [.hero, .story, .automatic, .collage].contains(layout) && group.count > 1
+            if hero && variation % 3 == 2 {
+                let heroHeight = height * (layout == .hero ? 0.58 : 0.52)
+                let heroWidth = width * (layout == .collage ? 0.76 : 1)
+                result.append(.init(role: "photo", objectID: group[0].id.uuidString,
+                                    x: x, y: top, width: heroWidth, height: heroHeight))
+                let railY = top + heroHeight + height * 0.045
+                let railHeight = top + height - railY
+                let cellWidth = width / Double(group.count - 1)
+                for (index, photo) in group.dropFirst().enumerated() {
+                    result.append(.init(role: "photo", objectID: photo.id.uuidString,
+                                        x: x + Double(index) * cellWidth + cellWidth * 0.025,
+                                        y: railY, width: cellWidth * 0.95, height: railHeight))
+                }
+                continue
+            }
             let remaining = hero ? Array(group.dropFirst()) : group
             if hero {
                 result.append(.init(role: "photo", objectID: group[0].id.uuidString, x: x, y: top, width: width * 0.59, height: height * (layout == .collage && group.count > 2 ? 0.78 : 1)))
             }
-            let columns = hero ? 1 : (layout == .editorial ? 1 : (group.count == 1 ? 1 : 2))
+            let columns = hero || group.count == 1 ? 1
+                : (layout == .editorial && variation % 3 != 2 ? 1 : 2)
             let rows = max(1, Int(ceil(Double(remaining.count) / Double(columns))))
             let areaX = hero ? x + width * 0.64 : x
             let areaWidth = hero ? width * 0.36 : width
@@ -150,5 +167,119 @@ extension DiaryAIDesignSelection {
             }
         }
         return result
+    }
+}
+
+/// Content survives interruption independently of the generated geometry.
+nonisolated struct DiaryNativeContent: Codable, Sendable {
+    struct Photo: Codable, Sendable {
+        var objectID: String
+        var rotation: Double
+    }
+    struct Text: Codable, Sendable {
+        var text: String
+        var textRole: String
+        var sourceIDs: [String]
+        var fontID: String?
+        var paper: String?
+    }
+    static let titleFonts = ["display.tsanger-heading", "display.douyin-bold", "display.zcool-kuaile",
+                             "display.smiley-sans", "calligraphy.ma-shan-zheng"]
+    static let bodyFonts = ["handwriting.lxgw.wenkai", "handwriting.yozai", "system"]
+    static let readablePapers = ["torn", "note", "kraftStrip", "blueTape", "lavenderStrip", "botanicalLine", "coralUnderline"]
+    var heroID: String
+    var photos: [Photo]
+    var texts: [Text]
+    var backgroundBrief: String
+    var backgroundPrompt: String
+
+    static func schema(textCount: ClosedRange<Int>) -> [String: Any] {
+        func object(_ fields: [String: Any]) -> [String: Any] {
+            ["type": "object", "properties": fields, "required": fields.keys.sorted(), "additionalProperties": false]
+        }
+        let string: [String: Any] = ["type": "string"]
+        return ["type": "function", "name": "compose_content",
+                "description": "识别来源照片方向、生成最终文案和背景场景内容，坐标由客户端计算。",
+                "parameters": object([
+                    "heroID": string,
+                    "photos": ["type": "array", "minItems": 1, "maxItems": 8,
+                               "items": object(["objectID": string, "rotation": ["type": "number", "enum": [-90, 0, 90, 180]]])],
+                    "texts": ["type": "array", "minItems": textCount.lowerBound, "maxItems": textCount.upperBound,
+                              "items": object(["text": string, "textRole": ["type": "string", "enum": ["title", "caption", "body"]],
+                                               "sourceIDs": ["type": "array", "items": string],
+                                               "fontID": ["type": "string", "enum": titleFonts + bodyFonts],
+                                               "paper": ["type": "string", "enum": readablePapers + ["none"]]])],
+                    "backgroundBrief": string, "backgroundPrompt": string])]
+    }
+}
+
+extension DiaryAIDesignSelection {
+    /// Deterministic candidates vary page order, reading direction and group proportions.
+    /// The saved seed is reused on resume. Every candidate contains all source photos.
+    func nativeRegions(context: DiaryAIContext, allowsText: Bool, seed: UUID) -> [DiaryAILayoutRegion] {
+        let photos = context.objects.filter { $0.role == "photo" && $0.editable }
+        guard (1...8).contains(photos.count) else { return [] }
+        let bytes = Array(seed.uuidString.utf8)
+        let variants: [DiaryAILayout] = layout == .automatic ? [.hero, .story, .headline, .collage, .editorial] : [layout]
+        var candidates: [(regions: [DiaryAILayoutRegion], score: Double)] = []
+        for (styleIndex, style) in variants.enumerated() {
+            for variant in 0..<48 {
+                var design = self
+                design.layout = style
+                var regions = design.fallbackRegions(context: context, allowsText: allowsText, variation: variant)
+                if variant % 4 >= 2, let spine = context.spineX, abs(spine * 2 - Double(context.size.width)) < 0.01 {
+                    for index in regions.indices {
+                        regions[index].x += regions[index].x < spine
+                            ? Double(context.size.width) - spine + 24
+                            : -(spine + 24)
+                    }
+                }
+                let flip = (Int(bytes[(variant + styleIndex) % bytes.count]) + variant).isMultiple(of: 2)
+                let bottomTitle = (variant % 3 == 1 && style != .story) != (variant >= 24)
+                for index in regions.indices {
+                    var region = regions[index]
+                    if flip {
+                        let pageStart = context.spineX.map { region.x > $0 ? $0 + 24 : 0 } ?? 0
+                        let pageEnd = context.spineX.map { region.x > $0 ? Double(context.size.width) : $0 - 24 } ?? Double(context.size.width)
+                        region.x = pageStart + pageEnd - region.x - region.width
+                    }
+                    if bottomTitle { region.y = Double(context.size.height) - region.y - region.height }
+                    // Keep all zones disjoint while changing the side with more breathing room.
+                    let pageStart = context.spineX.map { region.x > $0 ? $0 + 24 : 0 } ?? 0
+                    let pageEnd = context.spineX.map { region.x > $0 ? Double(context.size.width) : $0 - 24 } ?? Double(context.size.width)
+                    let horizontalBias = Double((variant / 3) % 8) / 7
+                    let verticalBias = Double((variant + styleIndex) % 4) / 3
+                    region.x = pageStart + (region.x - pageStart) * 0.94 + (pageEnd - pageStart) * 0.06 * horizontalBias
+                    region.y = region.y * 0.96 + Double(context.size.height) * 0.04 * verticalBias
+                    region.width *= 0.94
+                    region.height *= 0.96
+                    if region.role == "photo" {
+                        let inset = Double((Int(bytes[(index + variant) % bytes.count]) + variant) % 4) * 0.006
+                        region.x += region.width * inset
+                        region.y += region.height * inset
+                        region.width *= 1 - inset * 2
+                        region.height *= 1 - inset * 2
+                    }
+                    regions[index] = region
+                }
+                var score = 0.0
+                var smallest = Double.infinity
+                for region in regions where region.role == "photo" {
+                    guard let photo = photos.first(where: { $0.id.uuidString == region.objectID }) else { continue }
+                    let ratio = max(0.01, photo.bounds.height / max(1, photo.bounds.width))
+                    let width = min(region.width, region.height / ratio)
+                    let area = width * width * ratio
+                    score += area
+                    smallest = min(smallest, area)
+                }
+                // Prefer readability across all photographs over filling only the hero.
+                score += smallest * Double(photos.count)
+                candidates.append((regions, score))
+            }
+        }
+        guard let bestScore = candidates.map(\.score).max() else { return [] }
+        let qualified = candidates.filter { $0.score >= bestScore * 0.92 }
+        let seedValue = bytes.reduce(UInt64(0)) { ($0 &* 31) &+ UInt64($1) }
+        return qualified[Int(seedValue % UInt64(qualified.count))].regions
     }
 }

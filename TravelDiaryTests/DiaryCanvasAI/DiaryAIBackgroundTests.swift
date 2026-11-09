@@ -182,11 +182,20 @@ import SwiftUI
             try await runFullFlow(parallel, design: .init(layout: layouts[designIndex], style: DiaryAIPageStyle.allCases[designIndex]), dataset: index >= 8 ? datasets[designIndex] : index >= 6 ? (index == 6 ? "wedding" : "coast") : nil, mode: (14..<20).contains(index) ? "textOnly" : "guided")
         }
     }
-    private func runFullFlow(_ parallel: Bool, design: DiaryAIDesignSelection? = nil, dataset: String? = nil, mode: String = "guided", storyCase: Int? = nil) async throws {
+    @Test(arguments: [DiaryAILayoutMode.native, .ai])
+    func liveSelectableLayoutModes(_ layoutMode: DiaryAILayoutMode) async throws {
+        let marker = "/tmp/traveldiary-dual-layout-enabled"
+        guard FileManager.default.fileExists(atPath: marker) else { return }
+        let selection = try String(contentsOfFile: marker, encoding: .utf8)
+        guard selection.isEmpty || selection == layoutMode.rawValue else { return }
+        try await runFullFlow(true, design: .init(layout: .hero, style: .scenic),
+                              dataset: "archive-city", mode: "textOnly", layoutMode: layoutMode)
+    }
+    private func runFullFlow(_ parallel: Bool, design: DiaryAIDesignSelection? = nil, dataset: String? = nil, mode: String = "guided", storyCase: Int? = nil, layoutMode: DiaryAILayoutMode? = nil) async throws {
         guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-fullflow-benchmark-enabled") else { return }
-        let output = URL(fileURLWithPath: "/tmp/TravelDiaryBook8Validation/fullflow-benchmark")
+        let output = URL(fileURLWithPath: "/tmp/TravelDiaryBook8Validation/fullflow-benchmark").resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        let parent = output.deletingLastPathComponent()
+        let parent = URL(fileURLWithPath: "/tmp/TravelDiaryBook8Validation")
         let input = try #require(FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil).first { $0.lastPathComponent.hasPrefix("已排版项目-") })
         let root = output.appendingPathComponent("sandbox-" + UUID().uuidString)
         let owner = "background-live"
@@ -216,8 +225,14 @@ import SwiftUI
             }
         }
         let fixtureInfo = dataset.map { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("DesignFixtures/" + $0 + "/fixture-info.json") }
+        defer { withExtendedLifetime(session) {} }
         let before = session.document
-        let w = DiaryAIWorkspace(session: session, root: root, parallelExecution: parallel)
+        let testConfig = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("DiaryIntegrationTest/runtime.json")
+        try DiaryAITaskRuntime.installTestConfiguration(Data(contentsOf: testConfig))
+        defer { DiaryAITaskRuntime.clearTestConfiguration() }
+        let runtimeClient = DiaryArkResponsesClient()
+        runtimeClient.workspaceMode = true
+        let w = DiaryAIWorkspace(session: session, model: runtimeClient, root: root, parallelExecution: parallel)
         let measuredStart = Date()
         var r = DiaryAIRequest.defaults(.relayout); r.allowsText = true; r.background = .init(saveToAlbum: false); r.scene = "山野徒步"; r.location = "雨崩"
         if dataset != nil { r.scene = "不指定"; r.location = "" }
@@ -234,10 +249,11 @@ import SwiftUI
             r.creationBrief = brief
         }
         r.background?.generationMode = mode
-        r.design = design; r = r.coordinated()
+        r.design = design; r.layoutMode = layoutMode; r = r.coordinated()
         print("DESIGN_DATASET \(dataset ?? "book8")")
         print("DESIGN_CASE \(design?.layout.rawValue ?? "legacy") \(design?.style.rawValue ?? "legacy")")
-        await w.enter(r); w.processAll()
+        await w.enter(r, preparingNewCreation: true); w.configureAndStart(r)
+        print("NATIVE_ENTRY active=\(w.active) running=\(w.running) pending=\(w.pending.count) error=\(w.error ?? "none")")
         let deadline = Date().addingTimeInterval(1200)
         var count = 0
         while w.running && Date() < deadline {
@@ -248,6 +264,7 @@ import SwiftUI
             }
             try await Task.sleep(for: .milliseconds(250))
         }
+        try JSONEncoder().encode(w.events).write(to: output.appendingPathComponent("events.json"), options: .atomic)
         // Test-only explicit retries: production never automatically repeats a paid image.
         var backgroundRetries = 0
         while w.error != nil && w.pending.isEmpty && !w.needsTextCompletion && w.backgroundRecord?.layerID == nil && w.canGenerateBackground && backgroundRetries < 2 {
@@ -270,7 +287,13 @@ import SwiftUI
         if let diagnostics = try? await w.exportProductionLog() {
             try FileManager.default.copyItem(at: diagnostics, to: runFolder.appendingPathComponent("production-log.zip"))
         }
-        try JSONSerialization.data(withJSONObject: ["execution": parallel ? "parallel" : "serial", "finalModelReview": false, "mode": mode, "dataset": dataset ?? "book8", "layout": design?.layout.rawValue ?? "legacy", "style": design?.style.rawValue ?? "legacy", "elapsed": Date().timeIntervalSince(measuredStart), "error": w.error ?? "", "backgroundRetries": backgroundRetries], options: [.prettyPrinted, .sortedKeys]).write(to: runFolder.appendingPathComponent("metrics.json"))
+        try JSONSerialization.data(withJSONObject: ["layoutMode": layoutMode?.rawValue ?? "legacy", "execution": parallel ? "parallel" : "serial", "finalModelReview": false, "mode": mode, "dataset": dataset ?? "book8", "layout": design?.layout.rawValue ?? "legacy", "style": design?.style.rawValue ?? "legacy", "elapsed": Date().timeIntervalSince(measuredStart), "error": w.error ?? "", "backgroundRetries": backgroundRetries], options: [.prettyPrinted, .sortedKeys]).write(to: runFolder.appendingPathComponent("metrics.json"))
+        if let layoutMode {
+            #expect(w.events.contains { $0.kind == "layout-mode" && $0.title == layoutMode.title })
+            #expect(w.events.contains { $0.title == "整体构图规划" } == (layoutMode == .ai))
+            #expect(w.events.contains { $0.title == "文字与贴纸并行生成提案" } == (layoutMode == .ai))
+            #expect(w.events.contains { $0.kind == "native-layout" } == (layoutMode == .native))
+        }
         if !parallel {
             #expect(!w.events.contains { $0.title == "背景与图层排版同时开始" || $0.title == "文字与贴纸并行生成提案" })
         }
@@ -310,7 +333,7 @@ import SwiftUI
         guard FileManager.default.fileExists(atPath: "/tmp/traveldiary-background-live-enabled") else { return }
         let output = URL(fileURLWithPath: "/tmp/TravelDiaryBook8Validation/background")
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        let parent = output.deletingLastPathComponent()
+        let parent = URL(fileURLWithPath: "/tmp/TravelDiaryBook8Validation")
         let input = try #require(FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil).first { $0.lastPathComponent.hasPrefix("已排版项目-") })
         let root = output.appendingPathComponent("sandbox-" + UUID().uuidString)
         let owner = "background-live"
@@ -322,7 +345,8 @@ import SwiftUI
         let before = session.document
         let w = DiaryAIWorkspace(session: session, root: root)
         var r = request(); r.scene = "山野徒步"; r.location = "雨崩"
-        await w.enter(r); w.processAll()
+        await w.enter(r, preparingNewCreation: true); w.configureAndStart(r)
+        print("NATIVE_ENTRY active=\(w.active) running=\(w.running) pending=\(w.pending.count) error=\(w.error ?? "none")")
         let deadline = Date().addingTimeInterval(650)
         var count = 0
         while w.running && Date() < deadline {

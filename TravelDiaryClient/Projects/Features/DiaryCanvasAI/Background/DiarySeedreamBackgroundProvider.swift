@@ -105,7 +105,7 @@ import Foundation
         ] { text = text.replacingOccurrences(of: source, with: target) }
         // A model may append a negative list despite the positive-only contract.
         // Remove that prohibition sentence, never a positive subject description.
-        text = text.replacingOccurrences(of: "(?:不出现|不包含|不得出现|禁止出现)[^。；\\n]*[。；]?", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?:不出现|不包含|不得出现|禁止出现|不绘制|不生成|不添加|避免出现|画面不含|画面没有)[^。；\\n]*[。；]?", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "无(?:任何)?(?:人物|人形)[^。；\\n]*[。；]?", with: "", options: .regularExpression)
         let banned = ["照片", "拍立得", "人物", "相框", "贴纸", "书页", "书脊", "立体书", "相册", "本册", "手帐", "跨页"].filter(text.contains)
         guard banned.isEmpty else {

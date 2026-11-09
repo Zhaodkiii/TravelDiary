@@ -24,6 +24,8 @@ nonisolated struct DiaryAIWorkspaceCheckpoint: Codable, Sendable {
     }
 }
 nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
+    var nativeContent: DiaryNativeContent? = nil
+    var layoutSeed: UUID? = nil
     var productionAttempt: UUID? = nil
     var productionTask: DiaryProductionTask? = nil
     var productionOwner: String? = nil
@@ -70,6 +72,8 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     @Published private(set) var selected: Set<UUID> = []
     private weak var source: DiaryEditorSession?
     @Published private(set) var displaySession: DiaryEditorSession?
+    private var nativeContent: DiaryNativeContent?
+    private var layoutSeed = UUID()
     private var working: DiaryEditorSession?
     @Published private(set) var preparingPhotos: [UUID] = []
     func beginPreparingPhotos(_ count: Int) -> [UUID] {
@@ -87,9 +91,10 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         else if pending.isEmpty, value.background?.backgroundOnly != true, let working {
             pending = objects.filter { $0.editable && $0.role != "background" && (!value.selectedOnly || $0.id == source?.selectedID) }.map(\.id)
             checkpoints.append(.init(working.document, pending: pending))
-            composition = ""; layoutRegions = []; textDone = false
+            composition = ""; nativeContent = nil; layoutSeed = UUID(); layoutRegions = []; textDone = false
             awaitingConfirmation = false; visualRevision = nil; confirmationScope = nil
         }
+        guard validateLayoutMode(all: true) else { return }
         running = true
         Task {
             do {
@@ -131,6 +136,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private var backgroundTask: Task<Void, Error>?
     private var albumTask: Task<Void, Never>?
     private var parallelExecution: Bool
+    private var runsParallel: Bool { request.layoutMode != nil || parallelExecution }
     private var generation = UUID()
     private var discarded = false
     private var queue: [UUID] = []
@@ -151,7 +157,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         !pending.isEmpty || needsTextCompletion || visualRevision != nil || awaitingConfirmation ||
         (hasBackgroundRequest && backgroundRecord?.layerID == nil)
     }
-    var hasStartedWork: Bool { running || version > 0 && pending.isEmpty || !composition.isEmpty }
+    var hasStartedWork: Bool { running || (request.layoutMode != nil && restartCheckpoint != nil) || version > 0 && pending.isEmpty || !composition.isEmpty }
     var hasBackgroundRequest: Bool { request.background != nil }
     var isBackgroundOnly: Bool { request.background?.backgroundOnly == true }
     var needsTextCompletion: Bool { request.action == .relayout && request.canCreateText && !textDone && !isBackgroundOnly }
@@ -223,6 +229,8 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                try DiaryEditorAIBridge.digest(saved.baseline.restoredDocument) == DiaryEditorAIBridge.digest(source.document) {
                 enteredFromDraft = true
                 productionAttempt = saved.productionAttempt
+                nativeContent = saved.nativeContent
+                layoutSeed = saved.layoutSeed ?? UUID()
                 productionTask = saved.productionTask
                 productionOwner = saved.productionOwner
                 productionDigest = saved.productionDigest
@@ -235,8 +243,9 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 backgroundRecord = saved.background
                 baseline = saved.baseline; checkpoints = saved.checkpoints; pending = last.pending
                 self.request = saved.request.coordinated(); events = saved.events; composition = saved.composition; version = saved.version; textDone = saved.textDone ?? false
-                if saved.creationSubmissionID == nil && request.action == saved.request.action && request.selectedOnly == saved.request.selectedOnly {
+                if saved.request.layoutMode == nil && saved.creationSubmissionID == nil && request.action == saved.request.action && request.selectedOnly == saved.request.selectedOnly {
                     self.request = request.coordinated()
+                    self.request.layoutMode = nil
                     if request.canCreateText && !saved.request.canCreateText { textDone = false }
                     if request.background != saved.request.background && backgroundRecord?.layerID == nil { backgroundRecord = nil }
                     if request != saved.request { log("settings", "已将新设置应用到恢复任务", "保留已提交布局和批次进度；后续操作使用本次面板设置。") }
@@ -419,7 +428,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             let added = DiaryEditorAIBridge(candidate).objectChoices.filter { !before.contains($0.id) && $0.role != "background" }.map(\.id)
             pending += added
             checkpoints.append(.init(candidate.document, pending: pending))
-            composition = ""; layoutRegions = []; awaitingConfirmation = false; visualRevision = nil; confirmationScope = nil
+            composition = ""; nativeContent = nil; layoutSeed = UUID(); layoutRegions = []; awaitingConfirmation = false; visualRevision = nil; confirmationScope = nil
             version += 1
             try await persist()
             try await setup(candidate.document)
@@ -466,7 +475,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         guard active, !running, !addingMaterials, let working else { return }
         pending = objects.filter { $0.editable && $0.role != "background" }.map(\.id)
         textDone = false
-        composition = ""; layoutRegions = []; awaitingConfirmation = false; visualRevision = nil; confirmationScope = nil
+        composition = ""; nativeContent = nil; layoutSeed = UUID(); layoutRegions = []; awaitingConfirmation = false; visualRevision = nil; confirmationScope = nil
         checkpoints.append(.init(working.document, pending: pending))
         do { try await persist(); try await refresh() }
         catch { self.error = error.localizedDescription }
@@ -483,7 +492,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             checkpoints.append(.init(document, pending: pending))
             try await persist(); try await setup(document); try await refresh()
             version += 1
-            composition = ""; layoutRegions = []
+            composition = ""; nativeContent = nil; layoutSeed = UUID(); layoutRegions = []
             log("remove", "已移除待排素材", "原始恢复点保留，可回退上一批。")
             try await persist()
         } catch {
@@ -525,10 +534,11 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         task = nil; backgroundTask = nil; albumTask = nil; watchdog = nil
         do {
             try await setup(checkpoint.restoredDocument)
+            if request.layoutMode != nil { restartCheckpoint = nil }
             pending = checkpoint.pending
             queue = []; selected = []; processing = []
             productionAttempt = nil; productionTask = nil; productionOwner = nil; productionDigest = nil
-            composition = ""; layoutRegions = []; textDone = false
+            composition = ""; nativeContent = nil; layoutSeed = UUID(); layoutRegions = []; textDone = false
             visualRevision = nil; confirmationScope = nil; awaitingConfirmation = false
             backgroundRecord = nil; backgroundPreview = nil
             checkpoints = [checkpoint]
@@ -757,7 +767,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         try await productionLog.flush()
         guard !discarded, let baseline else { return }
         storageSequence += 1
-        let value = DiaryAIWorkspaceArchive(productionAttempt: productionAttempt, productionTask: productionTask, productionOwner: productionOwner, productionDigest: productionDigest, restartCheckpoint: restartCheckpoint, creationSubmissionID: creationSubmissionID, parallelExecution: parallelExecution, awaitingConfirmation: awaitingConfirmation, logSession: productionLog.directory.lastPathComponent, baseline: baseline, checkpoints: checkpoints, request: request, events: events, composition: composition, version: version, textDone: textDone, background: backgroundRecord, layoutRegions: layoutRegions, visualRevision: visualRevision, confirmationScope: confirmationScope)
+        let value = DiaryAIWorkspaceArchive(nativeContent: nativeContent, layoutSeed: layoutSeed, productionAttempt: productionAttempt, productionTask: productionTask, productionOwner: productionOwner, productionDigest: productionDigest, restartCheckpoint: restartCheckpoint, creationSubmissionID: creationSubmissionID, parallelExecution: parallelExecution, awaitingConfirmation: awaitingConfirmation, logSession: productionLog.directory.lastPathComponent, baseline: baseline, checkpoints: checkpoints, request: request, events: events, composition: composition, version: version, textDone: textDone, background: backgroundRecord, layoutRegions: layoutRegions, visualRevision: visualRevision, confirmationScope: confirmationScope)
         try await storage.save(value, sequence: storageSequence)
     }
     private func removeArchive() async throws {
@@ -765,7 +775,8 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         try await storage.remove(sequence: storageSequence)
     }
     private func run(all: Bool) {
-        guard active, !running, !addingMaterials, preparingPhotos.isEmpty else { return }
+        guard active, !running, !addingMaterials, preparingPhotos.isEmpty else { log("diagnostic", "制作入口未就绪", "active=\(active), running=\(running), adding=\(addingMaterials)"); return }
+        log("timing", "制作入口已启动")
         if isBackgroundOnly || (hasBackgroundRequest && pending.isEmpty && !composition.isEmpty && !needsTextCompletion && visualRevision == nil && !awaitingConfirmation) { generateBackground(); return }
         if hasBackgroundRequest && objects.contains(where: { $0.role == "background" && $0.locked }) {
             error = "背景已锁定：请退出后解除背景锁定，或关闭生成背景再开始。尚未发起模型请求。"
@@ -776,6 +787,11 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             error = "请先添加照片、文字或贴纸，或在制作选项中补充创作要求。尚未发起模型请求。"
             log("error", "画布没有可排版内容", error!); return
         }
+        if usesProductionQuota && all && request.action == .relayout && !request.selectedOnly
+            && request.design != nil && request.layoutMode == nil && restartCheckpoint == nil {
+            request.layoutMode = DiaryAILayoutMode.preferred
+        }
+        guard validateLayoutMode(all: all) else { return }
         autoAll = all; running = true; error = nil
         if request.action != .relayout && queue.isEmpty {
             queue = objects.filter { $0.editable && $0.role != "background" && (!request.selectedOnly || $0.id == source?.selectedID) && (request.action != .writing || $0.role == "text") }.map(\.id)
@@ -784,6 +800,10 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         task = Task {
             defer { if generation == token { running = false; processing = []; backgroundTask?.cancel(); backgroundTask = nil; watchdog?.cancel() } }
             do {
+                log("timing", "制作任务开始执行")
+                if let mode = request.layoutMode {
+                    log("layout-mode", mode.title, "mode=\(mode.rawValue)，pipelineVersion=1")
+                }
                 if awaitingConfirmation { try await finishConfirmation() }
                 if restartCheckpoint == nil, let working {
                     restartCheckpoint = .init(working.document, pending: pending)
@@ -801,7 +821,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                         log("plan", "进入文字处理", "跳过整页构图规划，直接创建或修改可编辑文字。")
                     } else { try await plan(token: token) }
                 }
-                if parallelExecution && autoAll && request.background != nil && !isBackgroundOnly { try await startBackgroundBranch(token: token) }
+                if nativeContent == nil && runsParallel && autoAll && request.background != nil && !isBackgroundOnly { try await startBackgroundBranch(token: token) }
                 if model is DiaryArkResponsesClient && request.action == .relayout && pending.filter({ id in objects.first(where: { $0.id == id })?.role == "photo" }).count > Self.maximumBatchLayers {
                     try await verifySourceOrientations(token: token)
                 }
@@ -823,14 +843,14 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                     if autoAll && request.action == .relayout && request.canCreateText && !textDone && !pending.contains(where: { id in objects.first { $0.id == id }?.role == "photo" }) {
                         ids = []
                     }
-                    if ids.isEmpty {
-                        if request.action != .relayout && batches == 0 && !request.canCreateText {
-                            ids = Array(objects.filter { $0.editable && $0.role != "background" && (!request.selectedOnly || $0.id == source?.selectedID) && (request.action != .writing || $0.role == "text") }.prefix(Self.maximumBatchLayers).map(\.id))
-                        } else if !(request.canCreateText && !textDone && pending.allSatisfy { id in objects.first { $0.id == id }?.role != "photo" }) { break }
-                    }
-                    if parallelExecution && efficientExecution && autoAll && request.action == .relayout && needsTextCompletion && ids.isEmpty && model is DiaryArkResponsesClient {
+                    if runsParallel && efficientExecution && autoAll && request.action == .relayout
+                        && model is DiaryArkResponsesClient
+                        && !pending.contains(where: { id in objects.first { $0.id == id }?.role == "photo" }) {
                         let decorations = pending.filter { id in objects.first { $0.id == id }?.role == "decoration" }
-                        if !decorations.isEmpty {
+                        let proposesForeground = (request.layoutMode == .ai && (needsTextCompletion || !decorations.isEmpty))
+                            || (nativeContent != nil && !textDone)
+                            || (needsTextCompletion && ids.isEmpty && !decorations.isEmpty)
+                        if proposesForeground {
                             do {
                                 try await parallelForeground(ids: decorations, token: token)
                                 queue.removeAll { decorations.contains($0) }; batches += 1
@@ -842,11 +862,21 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                             }
                         }
                     }
-                    if efficientExecution && autoAll && revisionFreePhotoBatch(ids),
+                    if ids.isEmpty {
+                        if request.action != .relayout && batches == 0 && !request.canCreateText {
+                            ids = Array(objects.filter { $0.editable && $0.role != "background" && (!request.selectedOnly || $0.id == source?.selectedID) && (request.action != .writing || $0.role == "text") }.prefix(Self.maximumBatchLayers).map(\.id))
+                        } else if !((request.canCreateText || nativeContent != nil) && !textDone && pending.allSatisfy { id in objects.first { $0.id == id }?.role != "photo" }) { break }
+                    }
+                    if efficientExecution && request.layoutMode != .ai && autoAll && revisionFreePhotoBatch(ids),
                        try await applyPlannedPhotoBatch(ids: ids, token: token) {
                         queue.removeAll { ids.contains($0) }
                         batches += 1
                         continue
+                    }
+                    if request.layoutMode == .native && autoAll && ids.contains(where: { id in
+                        objects.contains { $0.id == id && $0.role == "photo" }
+                    }) {
+                        throw DiaryAIError.invalid("本地照片排版缺少有效区域，请重新开始制作。")
                     }
                     processing = ids; stage = ids.isEmpty ? "正在添加文字" : "正在处理 \(ids.compactMap { id in objects.first { $0.id == id }?.shortID }.joined(separator: "、"))"
                     try await batch(ids: ids, token: token)
@@ -861,7 +891,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
 
                 if generation == token { stage = needsTextCompletion ? "照片排版已保留，待补充文字" : pending.isEmpty ? (events.contains { $0.kind == "warning" } ? "处理完成，仍有视觉问题需检查" : "本轮处理完成，可以保存") : "等待选择下一批素材"; log("complete", stage); try await persist() }
                 await saveCompletedProduction(token: token)
-            } catch is CancellationError {} catch {
+            } catch is CancellationError { log("cancel", "制作任务取消", "token=\(token), current=\(generation)") } catch {
                 if generation == token {
                     if visualRevision != nil { stage = "局部修复未完成，已提交排版保留" }
                     else if awaitingConfirmation { stage = "排版已保存，待确认效果" }
@@ -869,6 +899,12 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                     else { stage = "已提交排版保留；待排素材 \(pending.count) 项" }
                     let message = (error as? URLError)?.code == .timedOut ? "模型连接等待超时，已提交批次保留。手动重试会发起新请求，可能再次计费。" : error.localizedDescription; self.error = message; log("error", needsTextCompletion && pending.isEmpty ? "文字阶段未完成，已有排版保留" : pending.isEmpty && hasBackgroundRequest ? "背景阶段未完成，已有排版保留" : "当前批次未完成，已提交批次保留", message); try? await persist() }
             }
+        }
+    }
+    private var hasFixedForeground: Bool {
+        guard let working else { return true }
+        return !working.content.drawing.isEmpty || objects.contains {
+            $0.visible && !pending.contains($0.id) && $0.role != "background" && $0.role != "frame"
         }
     }
     private var hasRetainedVisualContent: Bool {
@@ -904,7 +940,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                 stage = "背景已完成，可以保存"
                 await saveCompletedProduction(token: token)
             }
-            catch is CancellationError {} catch {
+            catch is CancellationError { log("cancel", "制作请求已取消") } catch {
                 if generation == token { self.error = error.localizedDescription; log("error", "背景尚未完成，排版已保留", error.localizedDescription); try? await persist() }
             }
         }
@@ -913,22 +949,30 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private func startBackgroundBranch(token: UUID) async throws {
         guard backgroundTask == nil, backgroundRecord?.remoteURL == nil,
               let options = request.background, let working else { return }
-        let inputBridge = DiaryEditorAIBridge(working)
-        inputBridge.excludedRenderIDs = Set(objects.filter { $0.role == "background" }.map(\.id))
-        _ = try await inputBridge.capture(request)
-        let reference = try await inputBridge.originalPreview()
+        var reference = Data()
+        if backgroundRecord?.generationPrompt == nil {
+            let inputBridge = DiaryEditorAIBridge(working)
+            inputBridge.excludedRenderIDs = Set(objects.filter { $0.role == "background" }.map(\.id))
+            _ = try await inputBridge.capture(request)
+            reference = try await inputBridge.originalPreview()
+        }
         let size = working.content.referenceSize
         let plannedObjects = objects.map { object -> DiaryAIObject in
+            guard nativeContent == nil else { return object }
             var copy = object
             if let region = layoutRegions.first(where: { $0.objectID == object.id.uuidString || $0.objectID == object.shortID }) { copy.bounds = region.bounds }
             return copy
         }
         let textRegions = layoutRegions.filter { $0.role == "text" }.map(\.bounds)
-        let guide = try await DiaryAIImageWork.run { try DiaryAIBackgroundImaging.occupancyGuide(canvas: size, objects: plannedObjects, textRegions: textRegions) }
+        let guide = options.isTextOnly ? Data() : try await DiaryAIImageWork.run { try DiaryAIBackgroundImaging.occupancyGuide(canvas: size, objects: plannedObjects, textRegions: textRegions) }
         let style = DiaryAIBackgroundStyle.resolve(options.style)
         let context = "整页设计：\(request.designBrief)。共同构图：\(composition)。区域：\(try DiaryAIDraftController.json(layoutRegions))。场景：\(request.scene)。用户要求：\(request.instruction)。创作资料：\(request.creationBrief?.modelInstructions ?? "")。风格：\(style.name)，\(style.brief)。\(style.sceneDirection(options.strength))。这是排版前的素材参考，背景空间必须按共同构图预留，不按旧照片坐标。"
         if backgroundRecord == nil { backgroundRecord = .init(inputDigest: try DiaryEditorAIBridge.digest(working.document)) }
-        log("parallel", "背景与图层排版同时开始", "按同一构图区域生成背景；前景继续分批处理。")
+        if nativeContent != nil {
+            log("parallel", "按实测排版生成背景", "照片、文字和贴纸位置已确认。")
+        } else {
+            log("parallel", "背景与图层排版同时开始", "按同一构图区域生成背景；前景继续分批处理。")
+        }
         backgroundTask = Task { [self] in
             let design: DiaryAIBackgroundDesign
             if let prompt = backgroundRecord?.generationPrompt, let brief = backgroundRecord?.designBrief {
@@ -1162,7 +1206,214 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         }
         return String(decoding: try JSONSerialization.data(withJSONObject: raw, options: [.sortedKeys]), as: UTF8.self)
     }
+    private func planNativeContent(token: UUID) async throws {
+        guard let bridge, let design = request.design, let client = model as? DiaryArkResponsesClient else { throw DiaryAIError.invalid("算法制作上下文已失效，请重新打开制作") }
+        log("phase", "照片理解、文案与背景场景")
+        bridge.excludedRenderIDs = Set(pending)
+        let context = try await bridge.capture(request)
+        let photos = context.objects.filter { $0.role == "photo" && $0.editable }
+        let images = try await bridge.inspect(.init(contextID: context.id, objectIDs: photos.map(\.id), view: "fullAsset"))
+        let requiredTextCount = request.creationBrief?.requiredStoryTexts.count ?? 0
+        let requestedTextCount = request.textDensity == "丰富记录" ? 3 : 2
+        let maximumTextCount = min(requestedTextCount, max(2, photos.count + 1))
+        let textCount = request.canCreateText
+            ? max(1, requiredTextCount)...max(maximumTextCount, requiredTextCount)
+            : 0...0
+        client.contentTextCount = textCount
+        client.planning = true
+        defer { client.contentTextCount = nil; client.planning = false }
+        let prompt = """
+        只调用compose_content一次。读取编号原图，逐张返回objectID及正立方向rotation（0、90、-90、180），以照片实际内容判断。
+        heroID从照片中选取，用户指定优先：\(request.heroID?.uuidString ?? "自动")。
+        按交付手帐的留白方式写文案：一处4至9字标题，加一条8至20字照片短注。丰富记录可再加一条短注。短注只写一个可辨识的细节，不逐张说明、不写泛泛结语。用户原样文字按原要求完整保留。每段绑定sourceIDs。
+        仅使用可见事实与用户明确提供的信息。照片只证明画面中出现的物体、姿态与颜色。避免描述风吹、温度、声音、运动速度、先后次序或推断地点、亲属关系、日期。
+        用户原样文字完整保留，每项独立成段，仅调整换行。本轮 texts 必须返回 \(textCount.lowerBound) 至 \(textCount.upperBound) 段。
+        用户资料：\(request.creationBrief?.modelInstructions ?? "")
+        必须完整写入：\(request.creationBrief?.requiredStoryTexts.joined(separator: " | ") ?? "")
+        地点写入权限=\(request.writesLocation)。用户要求：\(request.instruction)。文字量：\(request.textDensity)。
+        backgroundBrief用一句话说明唯一来源主题；backgroundPrompt用120至220字描述1至3个来源明确的无人环境意象、具体形态、颜色和光线。
+        场景描述只写要画的景物，用肯定句结束。示例：浅赭色山坡沿青绿河岸延展，石径旁有细密草叶，薄雾中山影柔和。客户端负责画法、留白和限制条件。
+        为标题选择一种展示字体，为正文选择一种清晰字体。同角色统一字体。标题优先直接落纸（none），短注可用细纸条、短便签或手撕纸。每页最多一种强调纸卡，避免用整栏白卡承托短句。使用工具定义中的fontID和paper，按\(design.style.name)风格选择。版式与所有坐标由客户端计算。照片编号：\(photos.map { $0.id.uuidString }.joined(separator: ","))
+        """
+        let response = try await timedRequest(prompt: prompt, images: images, continuation: nil, results: [], token: token)
+        guard response.calls.count == 1, let call = response.calls.first, call.name == "compose_content" else {
+            throw DiaryAIError.invalid("内容提案缺少统一结果，请重试。")
+        }
+        var content = try JSONDecoder().decode(DiaryNativeContent.self, from: Data(call.arguments.utf8))
+        if content.texts.isEmpty && textCount.lowerBound > 0 {
+            log("recovery", "补全缺失的文案", "首次内容结果没有文字，使用同一素材重试一次。")
+            let retry = try await timedRequest(prompt: prompt + "\n上次遗漏了全部文案。本次必须返回标题和对应旁注。", images: images, continuation: nil, results: [], token: token)
+            guard retry.calls.count == 1, let call = retry.calls.first, call.name == "compose_content" else {
+                throw DiaryAIError.invalid("文案补全缺少内容结果")
+            }
+            content = try JSONDecoder().decode(DiaryNativeContent.self, from: Data(call.arguments.utf8))
+        }
+        let ids = Set(photos.map { $0.id.uuidString })
+        guard content.photos.count == photos.count, Set(content.photos.map(\.objectID)) == ids,
+              content.photos.allSatisfy({ [-90.0, 0, 90, 180].contains($0.rotation) }),
+              ids.contains(content.heroID), content.texts.count >= textCount.lowerBound,
+              request.background == nil || (!content.backgroundBrief.isEmpty && !content.backgroundPrompt.isEmpty) else {
+            throw DiaryAIError.invalid("内容提案遗漏照片、文字或背景，请重试。")
+        }
+        var ordered = context
+        let hero = request.heroID?.uuidString ?? content.heroID
+        ordered.objects.sort { ($0.id.uuidString == hero ? 0 : 1) < ($1.id.uuidString == hero ? 0 : 1) }
+        for index in ordered.objects.indices {
+            if let orientation = content.photos.first(where: { $0.objectID == ordered.objects[index].id.uuidString }),
+               abs(orientation.rotation) == 90 {
+                let size = ordered.objects[index].bounds.size
+                ordered.objects[index].bounds.size = CGSize(width: size.height, height: size.width)
+            }
+        }
+        var regions = design.nativeRegions(context: ordered, allowsText: request.canCreateText, seed: layoutSeed)
+        for index in regions.indices where regions[index].role == "photo" {
+            regions[index].rotation = content.photos.first { $0.objectID == regions[index].objectID }?.rotation
+        }
+        layoutRegions = try Self.validatedRegions(regions, context: context, allowsText: request.canCreateText)
+        let textSlots = layoutRegions.filter { $0.role == "text" }.count
+        let supportedTextCount = min(textCount.upperBound, max(textSlots, requiredTextCount))
+        if content.texts.count > supportedTextCount {
+            let required = request.creationBrief?.requiredStoryTexts ?? []
+            let mandatory = content.texts.indices.filter { index in
+                let value = content.texts[index].text.filter { !$0.isWhitespace }
+                return required.contains { value == $0.filter { !$0.isWhitespace } }
+            }
+            let titles = content.texts.indices.filter { content.texts[$0].textRole == "title" }
+            let preferred = mandatory + Array(titles.prefix(1)) + Array(content.texts.indices)
+            var kept = Set<Int>()
+            for index in preferred where kept.count < supportedTextCount { kept.insert(index) }
+            content.texts = content.texts.indices.filter(kept.contains).map { content.texts[$0] }
+        }
+        for text in content.texts {
+            guard !text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  ["title", "body", "caption"].contains(text.textRole),
+                  Set(text.sourceIDs).isSubset(of: ids) else { throw DiaryAIError.invalid("文字来源无效") }
+            try DiaryAIWorkspaceTools.validateTextEvidence(["text": text.text, "textRole": text.textRole, "sourceIDs": text.sourceIDs], request: request)
+        }
+        if let brief = request.creationBrief {
+            try DiaryAIWorkspaceTools.validateRequiredStoryTexts(content.texts.map(\.text), brief: brief)
+        }
+        composition = "客户端算法排版：\(design.layout.name)，种子\(layoutSeed)。所有位置以最终区域为准。主题：\(content.backgroundBrief)"
+        nativeContent = content
+        if request.background != nil, let working {
+            backgroundRecord = .init(inputDigest: try DiaryEditorAIBridge.digest(working.document),
+                                     designBrief: content.backgroundBrief, generationPrompt: content.backgroundPrompt)
+        }
+        log("native-layout", "算法构图已确定", composition)
+        try await persist()
+    }
+
+    private func nativeOperations(content: DiaryNativeContent, text: Bool, ids: [UUID], context: DiaryAIContext) throws -> [DiaryAIOperation] {
+        if text {
+            let regions = layoutRegions.filter { $0.role == "text" }
+            guard content.texts.isEmpty || !regions.isEmpty else { throw DiaryAIError.invalid("缺少文字区域") }
+            var available = regions
+            var selectedFonts: [Bool: String] = [:]
+            let orderedText = content.texts.filter { $0.textRole == "title" } + content.texts.filter { $0.textRole != "title" }
+            return orderedText.enumerated().map { index, item in
+                if available.isEmpty { available = regions }
+                let title = item.textRole == "title"
+                let sources = context.objects.filter { item.sourceIDs.contains($0.id.uuidString) }
+                func distance(_ region: DiaryAILayoutRegion) -> Double {
+                    sources.map { hypot(region.bounds.midX - $0.bounds.midX, region.bounds.midY - $0.bounds.midY) }.min() ?? 0
+                }
+                let textSize = Double(context.size.width) * 0.016
+                let preferred = available.indices.filter { index in
+                    let region = available[index]
+                    let columns = max(1, Int(region.width / textSize) - 2)
+                    let rows = max(0, Int(region.height / (textSize * 1.5)) - 1)
+                    return columns * rows >= item.text.count
+                }
+                let regionIndex = (title || preferred.isEmpty ? Array(available.indices) : preferred).min { lhs, rhs in
+                    if title { return available[lhs].width > available[rhs].width }
+                    return distance(available[lhs]) < distance(available[rhs])
+                } ?? 0
+                let region = available.remove(at: regionIndex)
+                let font: String
+                switch request.design?.style {
+                case .clean: font = "display.douyin-bold"
+                case .playful: font = "display.zcool-kuaile"
+                case .gentle, .illustrated: font = "calligraphy.ma-shan-zheng"
+                default: font = "display.tsanger-heading"
+                }
+                let allowedFonts = title ? DiaryNativeContent.titleFonts : DiaryNativeContent.bodyFonts
+                let chosenFont = selectedFonts[title] ?? item.fontID.flatMap { allowedFonts.contains($0) && context.fonts.contains(where: { $0.id == item.fontID }) ? $0 : nil }
+                    ?? (title ? font : "handwriting.lxgw.wenkai")
+                selectedFonts[title] = chosenFont
+                let paperChoices: [String]
+                switch request.design?.style {
+                case .vintage: paperChoices = ["kraftStrip", "torn"]
+                case .clean: paperChoices = ["blueTape", "note"]
+                case .playful: paperChoices = ["coralUnderline", "blueTape"]
+                case .gentle: paperChoices = ["lavenderStrip", "note"]
+                case .illustrated: paperChoices = ["botanicalLine", "torn"]
+                default: paperChoices = ["torn", "kraftStrip", "note", "botanicalLine"]
+                }
+                let seed = Array(layoutSeed.uuidString.utf8)
+                let layoutIndex = DiaryAILayout.allCases.firstIndex(of: request.design?.layout ?? .automatic) ?? 0
+                let seedOffset = (Int(seed[0]) + Int(seed[1])) % 2
+                let paperIndex = (layoutIndex + seedOffset) % paperChoices.count
+                let suggestedPaper = item.paper.flatMap { paperChoices.contains($0) ? $0 : nil }
+                let chosenPaper: String
+                if title {
+                    chosenPaper = request.background != nil && (layoutIndex + seedOffset) % 4 == 1 ? "torn" : "none"
+                } else if index > 1, let suggestedPaper, suggestedPaper != paperChoices[paperIndex] {
+                    chosenPaper = suggestedPaper
+                } else {
+                    chosenPaper = paperChoices[paperIndex]
+                }
+                let titleCharacters = Double(max(1, item.text.count))
+                let titleSize = min(Double(context.size.width) * 0.045,
+                                    region.width / (titleCharacters + 1.8),
+                                    region.height / 2.8)
+                let fontSize = title ? titleSize : textSize
+                let preferredColumns = title ? titleCharacters : min(Double(item.text.count), 14)
+                let compactWidth = min(region.width, max(fontSize * 5, fontSize * (preferredColumns + 3.2)))
+                return DiaryAIOperation(operationID: "native-text-\(index)", type: "createText",
+                                        clientObjectKey: "native-text-\(index)", textRole: item.textRole, center: CGPoint(x: region.bounds.midX, y: region.bounds.midY), text: item.text,
+                                        fontID: chosenFont,
+                                        fontSize: fontSize,
+                                        width: compactWidth, color: "#35443C",
+                                        paper: chosenPaper)
+            }
+        }
+        let photos = context.objects.filter { $0.role == "photo" && $0.visible }
+        return ids.enumerated().compactMap { index, id in
+            guard let object = context.objects.first(where: { $0.id == id }), !photos.isEmpty else { return nil }
+            let photo = photos[index % photos.count].bounds
+            let width = min(Double(context.size.width) * 0.09, max(120, photo.width * 0.30))
+            let seed = Array(layoutSeed.uuidString.utf8)
+            let corner = (Int(seed[index % seed.count]) + index) % 4
+            let center = CGPoint(x: corner.isMultiple(of: 2) ? photo.minX : photo.maxX,
+                                 y: corner < 2 ? photo.maxY : photo.minY)
+            return DiaryAIOperation(operationID: "native-sticker-\(index)", type: "setPlacement", objectID: object.id,
+                                    center: center, scale: object.scale, angle: index.isMultiple(of: 2) ? -6 : 6, width: width)
+        }
+    }
+
+    private var supportsNativeLayout: Bool {
+        let photoCount = objects.filter { $0.role == "photo" && $0.editable }.count
+        return efficientExecution && request.action == .relayout && request.design != nil
+            && !request.selectedOnly && request.instruction.isEmpty && !hasFixedForeground && (1...8).contains(photoCount)
+            && model is DiaryArkResponsesClient
+    }
+
+    private func validateLayoutMode(all: Bool) -> Bool {
+        guard request.layoutMode == .native, composition.isEmpty, !isBackgroundOnly else { return true }
+        guard all && supportsNativeLayout else {
+            error = "智能快速排版适用于 1–8 张照片的整页制作。当前素材或要求需要使用 AI 自由排版。"
+            return false
+        }
+        return true
+    }
+
     private func plan(token: UUID) async throws {
+        log("timing", "开始规划路由")
+        nativeContent = nil
+        if request.layoutMode != .ai && runsParallel && supportsNativeLayout {
+            try await planNativeContent(token: token)
+            return
+        }
         log("phase", "整体构图规划")
         guard let bridge else { return }
         bridge.allowedBatchIDs = nil; bridge.excludedRenderIDs = Set(pending).union(request.background == nil ? [] : objects.filter { $0.role == "background" }.map(\.id))
@@ -1433,10 +1684,12 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         adapter.excludedRenderIDs = Set(pending)
         adapter.layoutRegions = layoutRegions
         adapter.autoFitPhotoRegions = true
+        adapter.fitsTextToPlannedRegions = nativeContent != nil
+        adapter.rendersDraftPreview = nativeContent == nil
         var req = request; req.selectedOnly = false
         let context = try await adapter.capture(req)
-        let canvas = try await adapter.originalPreview()
-        let assets = try await adapter.inspect(.init(contextID: context.id, objectIDs: ids, view: "fullAsset"))
+        let canvas = nativeContent == nil ? try await adapter.originalPreview() : Data()
+        let assets = nativeContent == nil ? try await adapter.inspect(.init(contextID: context.id, objectIDs: ids, view: "fullAsset")) : []
         let shared = """
         本轮runID=\(token)，planID=\(planID)，基础版本=\(baseVersion)。
         \(req.designBrief)
@@ -1450,7 +1703,15 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         保持共同字体、配色、阅读方向。只输出工具调用，客户端原生测量与合并。
         """
         @MainActor @Sendable func propose(text: Bool) async throws -> BranchProposal {
+            guard text ? needsTextCompletion : !ids.isEmpty else {
+                return .init(runID: token, planID: planID, baseVersion: baseVersion, operations: [])
+            }
             let started = Date()
+            if let content = nativeContent {
+                let operations = try nativeOperations(content: content, text: text, ids: ids, context: context)
+                log("native-layout", text ? "客户端文字落位完成" : "客户端贴纸候选完成", "操作\(operations.count)项")
+                return .init(runID: token, planID: planID, baseVersion: baseVersion, operations: operations)
+            }
             let client = DiaryArkResponsesClient(runtime: aiRuntime)
             client.workspaceMode = true; client.productionLog = productionLog
             client.expectedWorkspaceVersion = baseVersion
@@ -1493,14 +1754,22 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                         operation.width = min(max(operation.width ?? 0, target), width * 0.44)
                         if title && raw["paper"] == nil { operation.paper = "none" }
                     }
+                    // The generated background can extend beyond the planned quiet areas.
+                    if req.layoutMode == .ai, req.background != nil, text, operation.textRole != "title",
+                       operation.paper == nil || operation.paper == "none" {
+                        operation.paper = "note"
+                    }
                     operations.append(operation)
                 }
                 guard !operations.isEmpty, operations.count <= 30 else { throw DiaryAIError.invalid("提案为空或过多") }
+                if text, let brief = req.creationBrief {
+                    try DiaryAIWorkspaceTools.validateRequiredStoryTexts(operations.compactMap(\.text), brief: brief)
+                }
                 log("parallel-proposal", text ? "文字提案完成" : "贴纸提案完成", "planID=\(planID)，操作\(operations.count)项，用时\(String(format: "%.2f", Date().timeIntervalSince(started)))秒")
                 return .init(runID: token, planID: planID, baseVersion: baseVersion, operations: operations)
         }
 
-        log("parallel", "文字与贴纸并行生成提案", "runID=\(token)，planID=\(planID)，baseVersion=\(baseVersion)；两路使用同一照片画布。")
+        log("parallel", nativeContent == nil ? "文字与贴纸并行生成提案" : "文字与贴纸开始本地排版", "runID=\(token)，planID=\(planID)，baseVersion=\(baseVersion)；两路使用同一照片画布。")
         let textBranch = Task { @MainActor in try await propose(text: true) }
         let decorationBranch = Task { @MainActor in try await propose(text: false) }
         let text: BranchProposal
@@ -1527,6 +1796,15 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         try Task.checkCancellation()
         guard generation == token, version == baseVersion, self.working?.document == expected else { throw CancellationError() }
         let oldPending = pending, oldTextDone = textDone, oldScope = confirmationScope, oldConfirmation = awaitingConfirmation
+        if nativeContent != nil {
+            try adapter.apply()
+            let measured = adapter.objectChoices.filter { $0.role == "text" && $0.visible }
+            layoutRegions.removeAll { $0.role == "text" }
+            layoutRegions += measured.map { .init(role: "text", x: $0.bounds.minX, y: $0.bounds.minY, width: $0.bounds.width, height: $0.bounds.height) }
+            if request.background != nil {
+                try await startBackgroundBranch(token: token)
+            }
+        }
         var backgroundFailure: Error?
         if let backgroundTask {
             do { try await backgroundTask.value }
@@ -1544,7 +1822,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         let commitStarted = Date()
         log("timing", "统一画布提交开始")
         defer { log("timing", "统一画布提交结束", "用时\(String(format: "%.2f", Date().timeIntervalSince(commitStarted)))秒；含导入背景、持久化和预览刷新。") }
-        try adapter.apply()
+        if nativeContent == nil { try adapter.apply() }
         let oldBackground = backgroundRecord
         if backgroundRecord?.verified == true, backgroundRecord?.layerID == nil, let filename = backgroundRecord?.filename {
             let url = backgroundFile(filename)
@@ -1577,7 +1855,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
 
     private func revisionFreePhotoBatch(_ ids: [UUID]) -> Bool {
         request.action == .relayout && request.design != nil && model is DiaryArkResponsesClient
-            && !request.allowsCrop && !request.allowsFrames && visualRevision == nil
+            && (nativeContent != nil || (!request.allowsCrop && !request.allowsFrames)) && visualRevision == nil
             && !ids.isEmpty && ids.allSatisfy { id in
                 objects.contains { $0.id == id && $0.role == "photo" && $0.editable }
                     && layoutRegions.contains { $0.role == "photo" && $0.objectID == id.uuidString && $0.rotation != nil }
@@ -1596,6 +1874,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         adapter.excludedRenderIDs = Set(pending).subtracting(ids)
         adapter.layoutRegions = layoutRegions
         adapter.autoFitPhotoRegions = true
+        adapter.rendersDraftPreview = nativeContent == nil
         var req = request
         req.selectedOnly = false
         req.allowsText = false
@@ -1620,6 +1899,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                                                    summary: "按已校验构图原生摆放照片", operations: operations))
         } catch is CancellationError { throw CancellationError() }
         catch {
+            if request.layoutMode == .native { throw error }
             log("recovery", "原生照片约束未通过，使用模型局部处理", error.localizedDescription)
             return false
         }
@@ -1647,7 +1927,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         }
         bridge = adapter
         objects = adapter.objectChoices
-        preview = UIImage(data: draft.preview)
+        if !draft.preview.isEmpty { preview = UIImage(data: draft.preview) }
         log("timing", "原生照片排版结束", "用时\(String(format: "%.2f", Date().timeIntervalSince(started)))秒；\(ids.count)张照片，本地几何校验通过。")
         return true
     }

@@ -247,6 +247,11 @@ struct DiaryAIInlinePanel: View {
     @State private var instruction = ""
     @State private var photoNote = ""
     @State private var started = false
+    @State private var selectedLayoutMode: DiaryAILayoutMode?
+    @AppStorage(DiaryAILayoutMode.preferenceKey) private var preferredLayoutMode: DiaryAILayoutMode = .native
+    private var layoutMode: DiaryAILayoutMode {
+        selectedLayoutMode ?? workspace.currentRequest.layoutMode ?? preferredLayoutMode
+    }
     private var photos: [DiaryAIObject] { workspace.objects.filter { $0.role == "photo" } }
     private var stickers: [DiaryAIObject] { workspace.objects.filter { ["decoration", "group", "textImage"].contains($0.role) } }
     private var materialPhotos: [DiaryAIObject] {
@@ -265,6 +270,9 @@ struct DiaryAIInlinePanel: View {
                 VStack(spacing: 16) {
                     HStack { Text(workspace.stage).font(.headline); Spacer(); Button("详情") { showingDetails = true }.accessibilityIdentifier("diary.ai.details") }
                     if workspace.running { ProgressView() }
+                    if let mode = workspace.currentRequest.layoutMode {
+                        Text(mode.title).font(.caption).foregroundStyle(.secondary)
+                    }
                     Text("已放入画布 \(max(0, workspace.objects.count - workspace.pending.count)) 项 · 待处理 \(workspace.pending.count) 项").font(.caption).foregroundStyle(.secondary)
                     if let error = workspace.error { Text(error).font(.caption).foregroundStyle(.orange).lineLimit(3) }
                     HStack {
@@ -280,6 +288,14 @@ struct DiaryAIInlinePanel: View {
                 ScrollView(.vertical, showsIndicators: false) {
                   VStack(spacing: 10) {
                     materialPage
+                    Picker("排版方式", selection: Binding(get: { layoutMode }, set: { selectedLayoutMode = $0 })) {
+                        ForEach(DiaryAILayoutMode.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if let error = workspace.error {
+                        Text(error).font(.caption).foregroundStyle(.orange)
+                    }
                     HStack(spacing: 8) {
                         designToggle("排版 · " + design.layout.name, symbol: "rectangle.3.group", value: 1)
                         designToggle("风格 · " + design.style.name, symbol: "paintpalette", value: 2)
@@ -325,6 +341,7 @@ struct DiaryAIInlinePanel: View {
                         Task {
                             guard await workspace.prepareStoryAdjustment() else { return }
                             var request = controller.form(action); request.design = design
+                            request.layoutMode = workspace.currentRequest.layoutMode ?? layoutMode
                             workspace.configureAndStart(request)
                         }
                     }
@@ -339,7 +356,8 @@ struct DiaryAIInlinePanel: View {
                             let lines = notes.filter { valid.contains($0.key) && !$0.value.isEmpty }.sorted { $0.key < $1.key }.map { "照片\($0.key)：\($0.value)" }
                             if !lines.isEmpty { request.instruction += "\n用户逐照片说明：\n" + lines.joined(separator: "\n") }
                         }
-                        started = true; workspace.configureAndStart(request)
+                        request.layoutMode = layoutMode
+                        workspace.configureAndStart(request)
                     }
                 }.buttonStyle(.borderedProminent).controlSize(.large)
                 .fixedSize(horizontal: true, vertical: false)
