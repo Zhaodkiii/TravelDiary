@@ -71,6 +71,10 @@ nonisolated struct DiaryPageEntry: Codable, Identifiable, Equatable, Sendable {
     /// 完整不可变快照的标识；本目录是当前版本唯一发布入口。
     var revisionID: UUID
     var size: CGSize
+    var aiSaveAnchor: String? = nil
+    var aiOriginBook: UUID? = nil
+    var aiOriginTask: UUID? = nil
+    var aiFirstSavedAt: Date? = nil
     var presetSource: DiaryPresetSource? = nil
     /// Explicit imported spread membership survives reopening and user edits.
     var presetSpreadID: UUID? = nil

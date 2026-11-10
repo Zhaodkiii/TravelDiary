@@ -61,6 +61,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
         let assets: [String: DiaryAsset]
         let objects: [ObjectReference]
         var bookID: UUID? = nil
+        var aiPageOrigin: DiaryAIPageOrigin? = nil
         var creation: CreationProvenance? = nil
     }
     /// 收藏与最近使用按账号保存，跨本共享。
@@ -239,6 +240,14 @@ nonisolated final class DiaryDocumentStore: Sendable {
                           !book.trashedPages.contains(where: { $0.id == document.id }) else { throw DiaryEditorError.pageConflict.logged() }
                     book.pages.append(DiaryPageEntry(id: document.id, title: "", revisionID: revision, size: document.root.referenceSize))
                 }
+                if let i = book.pages.firstIndex(where: { $0.id == document.id }),
+                   let origin = document.aiPageOrigin, origin.page == document.id,
+                   book.pages[i].aiOriginTask != origin.task {
+                    book.pages[i].aiOriginBook = bookID
+                    book.pages[i].aiOriginTask = origin.task
+                    book.pages[i].aiFirstSavedAt = Date()
+                    book.pages[i].aiSaveAnchor = UserDefaults.standard.string(forKey: "print.ai.anchor.\(self.ownerID).\(bookID.uuidString)")
+                }
                 try self.publish(book)
                 self.opened.values[document.id] = revision
             } else {
@@ -372,7 +381,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
         }
         let assets = Dictionary(uniqueKeysWithValues: document.assets.map { ($0.key.uuidString, $0.value) })
         let manifest = Manifest(format: "TravelDiary.SmartCanvas", schemaVersion: 1, documentID: document.id,
-                                title: document.title, rootContentID: document.rootContentID, assets: assets, objects: refs, bookID: bookID, creation: document.creation)
+                                title: document.title, rootContentID: document.rootContentID, assets: assets, objects: refs, bookID: bookID, aiPageOrigin: document.aiPageOrigin, creation: document.creation)
         let path = relative + "/manifest.json"
         try encoder.encode(manifest).write(to: directory.appendingPathComponent(path), options: .atomic)
         return path
@@ -399,6 +408,7 @@ nonisolated final class DiaryDocumentStore: Sendable {
         }
         var document = DiaryDocument(id: documentID, title: manifest.title, rootContentID: manifest.rootContentID, assets: assets, objects: contents, bookID: bookID)
         document.creation = manifest.creation
+        document.aiPageOrigin = manifest.aiPageOrigin
         _ = try Self.validate(document)
         return document
     }
@@ -958,6 +968,27 @@ extension DiaryDocumentStore {
         return source
     }
     /// 活动申报只读取已发布的内页快照。素材和用户原文留在设备上。
+    func printActivityEvidence(_ book: DiaryBook) async throws -> [[String: String]] {
+        try await run {
+            var records: [[String: String]] = []
+            for page in book.bodyPages where page.aiOriginBook == book.id {
+                let doc = try self.readSnapshot("revisions/\(page.revisionID.uuidString)/manifest.json",
+                                                directory: self.directory(page.id), documentID: page.id)
+                guard let origin = doc.aiPageOrigin, origin.page == page.id, origin.task == page.aiOriginTask,
+                      let saved = page.aiFirstSavedAt else { continue }
+                let current = doc.productionFaces(excluding: [])
+                for side in origin.layers.keys.sorted() {
+                    guard !Set(current[side] ?? []).isDisjoint(with: origin.layers[side] ?? []) else { continue }
+                    var record = ["task": origin.task.uuidString, "page": page.id.uuidString, "face": side,
+                                    "revision": page.revisionID.uuidString, "first_saved": ISO8601DateFormatter().string(from: saved)]
+                    record["save_anchor"] = page.aiSaveAnchor
+                    records.append(record)
+                }
+            }
+            return records
+        }
+    }
+
     func printActivityPageCount(_ book: DiaryBook) async throws -> Int {
         try await run {
             var faces = Set<[String]>()

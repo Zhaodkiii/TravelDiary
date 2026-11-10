@@ -44,13 +44,7 @@ struct DiaryBookExportSheet: View {
     @State private var message: String?
     private let ink = Color(red: 0.23, green: 0.36, blue: 0.31)
 
-    private var exportTitle: String {
-        #if DEBUG
-        "导出与印制"
-        #else
-        "导出"
-        #endif
-    }
+    private var exportTitle: String { "导出与印制" }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -64,13 +58,11 @@ struct DiaryBookExportSheet: View {
                         videoOptions.lastSpread = max(0, DiaryBookImageExporter.spreadPages(book).count - 1)
                         path.append(.video)
                     }, onSelectPrint: {
-                        #if DEBUG
                         if accountLoginContext?.isDeviceAccount == true {
                             showingLogin = true
                         } else {
                             showingPrint = true
                         }
-                        #endif
                     }, onExportSourceFiles: {
                         #if DEBUG
                         startSourceExport()
@@ -115,9 +107,7 @@ struct DiaryBookExportSheet: View {
                 }
             }
         }
-        #if DEBUG
         .fullScreenCover(isPresented: $showingPrint) { PrintCheckoutScreen(book: book, store: store) }
-        #endif
         .sheet(isPresented: $showingLogin) {
             if let accountLoginContext {
                 LoginView(viewModel: accountLoginContext.viewModel, mode: .upgradeDeviceAccount)

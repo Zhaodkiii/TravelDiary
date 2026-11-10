@@ -83,9 +83,11 @@ final class DiaryProductionService: ObservableObject {
         }
     }
 
-    func complete(task: DiaryProductionTask, digest: String) async throws -> DiaryProductionTask {
-        try await request("tasks/\(task.id.uuidString.lowercased())/complete/",
-                          body: ["digest": digest])
+    func complete(task: DiaryProductionTask, digest: String, page: UUID? = nil, faces: [String] = []) async throws -> DiaryProductionTask {
+        var body: [String: Any] = ["digest": digest]
+        if let page { body["page_id"] = page.uuidString; body["faces"] = faces }
+        return try await request("tasks/\(task.id.uuidString.lowercased())/complete/",
+                          body: body)
     }
 
     func start(key: UUID, digest: String, scenes: [String] = ["diary.layout"]) async throws -> DiaryProductionTask {

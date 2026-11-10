@@ -675,7 +675,9 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
         stage = "正在确认制作次数"
         self.productionTask = try await DiaryProductionService.shared.complete(
-            task: productionTask, digest: digest)
+            task: productionTask, digest: digest,
+            page: request.action == .relayout && !request.selectedOnly && !composition.isEmpty && pending.isEmpty ? working.document.id : nil,
+            faces: Array(working.document.productionFaces(excluding: Set(pending)).keys))
         try await persist()
         aiRuntime.clear()
         await DiaryProductionService.shared.refresh()
@@ -766,6 +768,11 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             try await confirmProductionCompletion()
             guard source.document == baseline.restoredDocument else { throw DiaryAIError.invalid("原作品已变化，不能覆盖。请退出后重新进入。") }
             var published = working.document
+            if let task = productionTask, task.state == "completed", request.action == .relayout,
+               !request.selectedOnly, !composition.isEmpty, pending.isEmpty {
+                published.aiPageOrigin = DiaryAIPageOrigin(task: task.id, page: published.id,
+                    layers: published.productionFaces(excluding: []))
+            }
             // Pending objects remain fully editable assets in the document, hidden from the exported page.
             for id in pending { published.update(id) { $0.visible = false } }
             _ = try DiaryDocumentStore.validate(published)

@@ -23,6 +23,9 @@ struct DiaryPhysicalBookScreen: View {
     @State private var spread = 0
     @State private var turningCover = false
     private struct Campaign: Decodable {
+        let save_anchor: String?
+        let ai_pages_only: Bool?
+        let assessed_faces: [AssessedFace]?
         let id: Int?
         let title: String?
         let product: String?
@@ -36,6 +39,11 @@ struct DiaryPhysicalBookScreen: View {
         let unrestricted: Bool?
         let experience: Experience?
         let previous_campaigns: [PreviousCampaign]?
+    }
+    private struct AssessedFace: Decodable {
+        let page: String
+        let face: String
+        let reason: String
     }
     private struct PreviousCampaign: Decodable {
         let title: String
@@ -108,6 +116,7 @@ struct DiaryPhysicalBookScreen: View {
     @State private var lastAutomaticPrintKey = ""
     @State private var printRequestID = UUID()
     @State private var campaignDestination: CampaignDestination?
+    @State private var localAIFaces: Int?
     @State private var campaignPages: Int?
     private enum CampaignDestination { case checkout, wallet, orders, order }
     private var printOfferSeenKey: String { "print.offer.\(store.ownerID).lastSeen" }
@@ -588,6 +597,9 @@ struct DiaryPhysicalBookScreen: View {
                     if loadingPrintContext { ProgressView("正在确认进度与优惠") }
                     if let error = printContextError {
                         Text(error).font(.footnote)
+                        if let localAIFaces {
+                            Text("本册有 \(localAIFaces) 个 AI 内页面待联网核对，制作记录已保存在本机。").font(.footnote)
+                        }
                         Button("重新加载") { Task { await refreshPrintCenter() } }
                     }
                     if let offer = campaign, let experience, offer.id != nil {
@@ -696,6 +708,17 @@ struct DiaryPhysicalBookScreen: View {
                 ProgressView(value: experience.progress).tint(Color(red: 0.17, green: 0.25, blue: 0.19))
             }
             Text(experience.detail).font(.footnote)
+            if campaign?.ai_pages_only == true {
+                let faces = campaign?.assessed_faces ?? []
+                Text("仅累计活动期间在本册保存的 AI 制作内页。请在截止前联网提交。").font(.footnote)
+                DisclosureGroup("本期 AI 有效内页 · \(faces.filter { $0.reason.isEmpty }.count) 页") {
+                    ForEach(Array(faces.enumerated()), id: \.offset) { _, item in
+                        let index = book.bodyPages.firstIndex { $0.id.uuidString.lowercased() == item.page.lowercased() }
+                        Text("内页 \((index ?? 0) + 1) · \(item.face == "right" ? "右页" : "左页") · \(item.reason.isEmpty ? "已计入" : item.reason)")
+                    }
+                    Text("手工页、复制页和缺少制作记录的旧页不自动累计。")
+                }.font(.footnote)
+            }
             if let raw = experience.coupon_expires_at, let expiry = PrintText.date(raw) {
                 Text("券有效期至 \(expiry.formatted(date: .abbreviated, time: .shortened))").font(.footnote)
             }
@@ -769,7 +792,8 @@ struct DiaryPhysicalBookScreen: View {
     private func refreshPrintCenter() async {
         loadingPrintContext = true
         printContextError = nil
-        do { campaignPages = try await store.printActivityPageCount(book) }
+        do { localAIFaces = try await store.printActivityEvidence(book).count
+            if campaign?.ai_pages_only != true { campaignPages = try await store.printActivityPageCount(book) } }
         catch { printContextError = error.localizedDescription }
         let countError = printContextError
         await loadPrintOffer(manual: true)
@@ -795,7 +819,17 @@ struct DiaryPhysicalBookScreen: View {
         printRequestID = requestID
         do {
             let path = "campaign/?book=\(book.id.uuidString)&pages=\(campaignPages ?? 0)"
-            let offer: Campaign = try await PrintOrderService.shared.request(path, owner: store.ownerID)
+            let service = PrintOrderService.shared
+            var offer: Campaign = try await service.request(path, owner: store.ownerID)
+            guard printRequestID == requestID else { return }
+            if let anchor = offer.save_anchor {
+                UserDefaults.standard.set(anchor, forKey: "print.ai.anchor.\(store.ownerID).\(book.id.uuidString)")
+            }
+            if offer.ai_pages_only == true {
+                let faces = try await store.printActivityEvidence(book)
+                localAIFaces = faces.count
+                offer = try await service.request(path, owner: store.ownerID, body: try service.json(["faces": faces]))
+            }
             guard printRequestID == requestID else { return }
             campaign = offer
             printReadKey = UserDefaults.standard.string(forKey: printReadStorageKey) ?? ""
@@ -828,10 +862,12 @@ struct DiaryPhysicalBookScreen: View {
         defer { enrolling = false }
         do {
             let service = PrintOrderService.shared
-            let count = try await store.printActivityPageCount(book)
-            let payload = try service.json(["book_id": book.id.uuidString, "pages": count,
+            let count = campaign?.ai_pages_only == true ? 0 : try await store.printActivityPageCount(book)
+            var fields: [String: Any] = ["book_id": book.id.uuidString, "pages": count,
                                             "rejoin": campaign?.enrollment?.withdrawn_at != nil,
-                                            "attempt": campaign?.enrollment?.attempt ?? 1])
+                                            "attempt": campaign?.enrollment?.attempt ?? 1]
+            if campaign?.ai_pages_only == true { fields["faces"] = try await store.printActivityEvidence(book) }
+            let payload = try service.json(fields)
             let result: EnrollmentResult = try await service.request("campaign/\(id)/join/", owner: store.ownerID, body: payload)
             campaignPages = count
             if let enrollment = result.enrollment { campaign?.enrollment = enrollment }

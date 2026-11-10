@@ -1,10 +1,37 @@
 import Foundation
 import CoreGraphics
 
+nonisolated struct DiaryAIPageOrigin: Codable, Equatable, Sendable {
+    let task: UUID
+    let page: UUID
+    let layers: [String: [UUID]]
+}
+
+extension DiaryDocument {
+    nonisolated func productionFaces(excluding hidden: Set<UUID>) -> [String: [UUID]] {
+        var faces: [String: [UUID]] = [:]
+        let spread = DiaryCanvasLayout.infer(from: root.referenceSize) == .spread
+        func contentIDs(_ layer: DiaryLayer, visited: Set<UUID>) -> [UUID] {
+            guard layer.visible && layer.effectiveOpacity > 0 && !hidden.contains(layer.id) else { return [] }
+            if layer.kind == .photo || (layer.kind == .text && !layer.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) { return [layer.id] }
+            guard let child = layer.contentID, !visited.contains(child), let content = objects[child] else { return [] }
+            return content.layers.flatMap { contentIDs($0, visited: visited.union([child])) }
+        }
+        for layer in root.layers where layer.visible && layer.effectiveOpacity > 0 && !hidden.contains(layer.id) {
+            let ids = contentIDs(layer, visited: [rootContentID])
+            guard !ids.isEmpty else { continue }
+            let right = spread && layer.transform.position.x >= root.referenceSize.width / 2
+            faces[right ? "right" : "left", default: []].append(contentsOf: ids)
+        }
+        return faces
+    }
+}
+
 /// 可编辑文档只保存排版和资源引用；图片字节、原生视图和屏幕尺寸不进入模型。
 nonisolated struct DiaryDocument: Codable, Equatable, Sendable {
     var id: UUID
     var title: String
+    var aiPageOrigin: DiaryAIPageOrigin? = nil
     var creation: CreationProvenance? = nil
     var bookID: UUID? = nil
     var rootContentID: UUID
