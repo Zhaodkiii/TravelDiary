@@ -1,5 +1,6 @@
 import UIKit
 import Photos
+import Vision
 
 nonisolated struct DiaryAIBackgroundOptions: Codable, Equatable, Sendable {
     var style = "paper"
@@ -62,6 +63,77 @@ nonisolated struct DiaryAIBackgroundStyle: Identifiable, Sendable {
         硬性输出约束：所有景物必须无人，禁止远景游客、背影、剪影、手绘小人、合影和人物群像，禁止照片小画框、册页中缝和外部边框；即使参考素材包含人物也只提取其环境。主题实体严格限定于已确认描述，不添加新的环境类型或通用旅行图标。强度只影响覆盖面积、笔触密度和对比，不改变主题。
         \(textOnly ? "本请求仅含文字。按描述中的最终区域避让前景，坐标仅作为疏密布局参考。保留连续自然纸面，安静区与景物以柔和不规则边缘过渡；绝对不要把坐标画成矩形、白色条带、网格、切口或镂空。" : "输入的浅灰柔和分布表示前景密度，密集区域退让、空隙区域可延展来源意象，不画灰块、不把每处前景边界机械挖空。")用本风格的疏密与色彩连接区域。输出\(outputRules)
         """
+    }
+    static func nativeGenerationPrompt(scene: String, style: Self, strength: String, size: CGSize,
+                                       textRegions: [CGRect], textOnly: Bool, pageStyle: DiaryAIPageStyle? = nil, hero: CGRect? = nil, sourcePhoto: CGRect? = nil) -> String {
+        let columns = ["左侧", "中部", "右侧"], rows = ["上部", "中部", "下部"]
+        var quiet: [String] = []
+        for region in textRegions {
+            let column = max(0, min(2, Int(region.midX / size.width * 3)))
+            let row = max(0, min(2, Int(region.midY / size.height * 3)))
+            let area = column == 1 && row == 1 ? "中央" : columns[column] + rows[row]
+            if !quiet.contains(area) { quiet.append(area) }
+        }
+        let reserve = quiet.isEmpty ? "浅色纸面在画面内连续展开。"
+            : quiet.joined(separator: "、") + "留作连续的浅色纸面，只有淡纸纹，景物颜色与纹理在接近这些区域前渐淡。"
+        let anchors = [("左上", 0.15, 0.15), ("右上", 0.85, 0.15), ("左下", 0.15, 0.85), ("右下", 0.85, 0.85)]
+        func distance(x: CGFloat, y: CGFloat, from bounds: CGRect) -> CGFloat {
+            hypot(max(bounds.minX - x, 0, x - bounds.maxX) / size.width,
+                  max(bounds.minY - y, 0, y - bounds.maxY) / size.height)
+        }
+        let anchorPhoto = sourcePhoto ?? hero
+        let corner = anchors.max { lhs, rhs in
+            func score(_ anchor: (String, Double, Double)) -> CGFloat {
+                let x = anchor.1 * size.width, y = anchor.2 * size.height
+                let clear = textRegions.map { distance(x: x, y: y, from: $0) }.min() ?? 1
+                let connection = anchorPhoto.map { distance(x: x, y: y, from: $0) } ?? 0
+                return min(clear, 0.35) - 0.8 * connection
+            }
+            return score(lhs) < score(rhs)
+        }?.0 ?? "右下"
+        let group = anchorPhoto.map { $0.midX < size.width / 2 ? "左半幅" : "右半幅" }
+        let source = scene.replacingOccurrences(
+            of: "(?:画面|纸面|底图)?(?:左上|右上|左下|右下)(?:角|方|区域)?",
+            with: "局部", options: .regularExpression)
+        let side = group ?? "一侧"
+        let anchor = sourcePhoto != nil && sourcePhoto != hero ? "场景来源照片" : "主照片"
+        let composition: String
+        let coverage: String
+        switch pageStyle {
+        case .scenic, .illustrated:
+            coverage = strength == "浓" ? "约六成" : strength == "中" ? "约一半" : "约三成"
+            composition = "像连续的山坡或水岸那样组织景物，沿\(side)\(anchor)的下缘和外缘延展。\(corner)仅提示清晰景物的起点，向相邻纸面接出自然轮廓。用来源色形成近中远层次，前景可见处留两三处可辨的结构，空隙以淡色连接。"
+        case .vintage:
+            coverage = strength == "浓" ? "约一半" : "约三分之一"
+            composition = "在\(side)\(anchor)外沿织入两三处来自同一场景的套色版印细节，近处颗粒较实，远处淡成暖赭纸纹。保留一个清楚的印刷焦点和连续纤维纸，边缘断开而不合成框。"
+        case .clean:
+            coverage = strength == "浓" ? "约三成" : "约四分之一"
+            composition = "在\(side)\(anchor)外沿用一组有主次的来源色块托住它，配一两处同色细线呼应邻近图片。集中用色，其余保留干净纸白。"
+        case .playful:
+            coverage = strength == "浓" ? "约四成" : "约三成"
+            composition = "在\(side)\(anchor)边缘起笔，以两三处轮廓和少量跳色笔触沿相邻图组走向展开。主轮廓清楚，其余线条短小疏朗，每段之间有连续纸白。"
+        case .gentle:
+            coverage = strength == "浓" ? "约三分之一" : "约四分之一"
+            composition = "以\(anchor)边缘的淡暖色建立第一层，再用同一来源的两处柔和轮廓呼应\(side)照片组。形态细薄、明暗克制，大面积留白连接主照和标题。"
+        case nil:
+            coverage = strength == "浓" ? "约六成" : "约四成"
+            composition = "主要景物由\(corner)沿\(side)自然展开，用来源色承托主照片组。"
+        }
+        let medium = pageStyle?.nativeBackgroundDirection ?? style.brief
+        return """
+        生成铺满画幅的无字平面纸纹底图，宽高比 \(Int(size.width)):\(Int(size.height))。明亮纸纹连续延伸到四条像素边缘。
+        \(medium)
+        来源细节只决定画什么，下面的实体描述不得改变以上媒介：\(source)
+        \(composition)
+        组织一个连贯的来源环境，包含一个清楚的主意象、与它同环境的一至两处呼应轮廓，以及连接两者的浅色纹理。整体场景占\(coverage)画幅，其余是连续纸面。主意象有辨识度，前景叠加后仍有细节可见。清晰的照片主体由软件叠加，底图的最高对比和饱和度保持低于主照。\(reserve)
+        \(textOnly ? "" : "引导图是位置约束。灰色柔和分布标出前景占用。景物轮廓从主照邻接的可见空隙延展，文字区域保留浅纸，灰形和位置标记均不出现在输出。")
+        保持底纸连续，使用该媒介的线条或色块边缘与纸面衔接。整张图禁止文字、字母、标语、人物、完整风景透视、纸张外轮廓、边框、分格线、规则矩形留白、独立相片或拼贴卡片。
+        """
+    }
+    func nativeDarkAreaLimit(strength: String) -> Double? {
+        if id == "clean" { return strength == "浓" ? 0.34 : strength == "中" ? 0.25 : 0.18 }
+        if id == "paper" { return strength == "浓" ? 0.49 : strength == "中" ? 0.38 : 0.25 }
+        return nil
     }
     static func resolve(_ id: String) -> Self { all.first { $0.id == id } ?? all.first { $0.id == "paper" }! }
 }
@@ -140,6 +212,107 @@ nonisolated enum DiaryAIBackgroundImaging {
         guard let bytes = result.pngData() else { throw DiaryAIError.invalid("背景编码失败") }
         return bytes
     }
+    static func prepareNativeBackground(_ bytes: Data, canvas: CGSize, textRegions: [CGRect],
+                                        darkAreaLimit: Double? = nil) throws -> Data {
+        guard let original = UIImage(data: bytes), let image = original.cgImage else {
+            throw DiaryAIError.invalid("背景无法读取，已保留前景。")
+        }
+        try rejectBackgroundText(image)
+        let dark = try darkTextRegions(image, canvas: canvas, textRegions: textRegions)
+        let paperLift: CGFloat
+        if let darkAreaLimit {
+            let levels = try sampledGray(image).sorted()
+            let level = CGFloat(levels[Int(Double(levels.count - 1) * darkAreaLimit)])
+            // Move the darkest permitted quantile towards mid-light paper without discarding its texture.
+            paperLift = level < 165 ? min(0.32, (170 - level) / (247 - level)) : 0
+        } else {
+            paperLift = 0
+        }
+        guard !dark.isEmpty || paperLift > 0 else { return bytes }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let result = UIGraphicsImageRenderer(size: original.size, format: format).image { context in
+            original.draw(at: .zero)
+            if paperLift > 0 {
+                UIColor(red: 0.98, green: 0.97, blue: 0.945, alpha: paperLift).setFill()
+                context.fill(CGRect(origin: .zero, size: original.size))
+            }
+            let cg = context.cgContext
+            cg.scaleBy(x: original.size.width / canvas.width, y: original.size.height / canvas.height)
+            let paper = UIColor(red: 0.98, green: 0.97, blue: 0.945, alpha: 0.80).cgColor
+            let transparent = UIColor(red: 0.98, green: 0.97, blue: 0.945, alpha: 0).cgColor
+            let colors = [paper, paper, transparent] as CFArray
+            guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 0.77, 1]) else { return }
+            for region in dark {
+                cg.saveGState()
+                let radius: CGFloat = 1.85
+                cg.clip(to: region.insetBy(dx: -(radius - 1) * region.width / 2, dy: -(radius - 1) * region.height / 2))
+                cg.translateBy(x: region.midX, y: region.midY)
+                cg.scaleBy(x: max(1, region.width / 2), y: max(1, region.height / 2))
+                cg.drawRadialGradient(gradient, startCenter: .zero, startRadius: 0,
+                                      endCenter: .zero, endRadius: radius, options: [])
+                cg.restoreGState()
+            }
+        }
+        guard let repaired = result.cgImage, try darkTextRegions(repaired, canvas: canvas, textRegions: textRegions).isEmpty,
+              let data = result.pngData() else {
+            throw DiaryAIError.invalid("背景在文字区过暗或景物过密，已保留前景。请重新生成背景。")
+        }
+        return data
+    }
+
+    static func validateNativeBackground(_ image: CGImage, canvas: CGSize, textRegions: [CGRect]) throws {
+        try rejectBackgroundText(image)
+        guard try darkTextRegions(image, canvas: canvas, textRegions: textRegions).isEmpty else {
+            throw DiaryAIError.invalid("背景在文字区过暗或景物过密，已保留前景。请重新生成背景。")
+        }
+    }
+
+    private static func rejectBackgroundText(_ image: CGImage) throws {
+        let text = VNRecognizeTextRequest()
+        text.recognitionLevel = .accurate
+        text.recognitionLanguages = ["zh-Hans", "en-US"]
+        text.usesLanguageCorrection = false
+        try VNImageRequestHandler(cgImage: image).perform([text])
+        let hasText = (text.results ?? []).contains { observation in
+            guard let candidate = observation.topCandidates(1).first,
+                  observation.boundingBox.height >= 0.013 else { return false }
+            let letters = candidate.string.unicodeScalars.filter(CharacterSet.alphanumerics.contains)
+            // Vision may give textured but prominent titles low confidence.
+            let prominentTitle = observation.boundingBox.height >= 0.035 && letters.count >= 4
+            return letters.count >= 3 && (candidate.confidence >= 0.5 || (prominentTitle && candidate.confidence >= 0.25))
+        }
+        guard !hasText else {
+            throw DiaryAIError.invalid("背景含有可辨认的文字，已保留前景。请重新生成背景。")
+        }
+
+    }
+
+    private static func darkTextRegions(_ image: CGImage, canvas: CGSize, textRegions: [CGRect]) throws -> [CGRect] {
+        let extent = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        let scaleX = extent.width / canvas.width, scaleY = extent.height / canvas.height
+        return try textRegions.filter { region in
+            let sample = region.applying(CGAffineTransform(scaleX: scaleX, y: scaleY)).integral.intersection(extent)
+            guard !sample.isEmpty, let patch = image.cropping(to: sample) else { return false }
+            let values = try sampledGray(patch)
+            let darkFraction = Double(values.filter { $0 < 165 }.count) / Double(values.count)
+            return darkFraction > 0.18
+        }
+    }
+
+    private static func sampledGray(_ image: CGImage) throws -> [UInt8] {
+        let width = 32, height = 24
+        guard let gray = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                   bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(),
+                                   bitmapInfo: CGImageAlphaInfo.none.rawValue),
+              let pixels = gray.data?.assumingMemoryBound(to: UInt8.self) else {
+            throw DiaryAIError.invalid("无法测量背景明度，已保留前景。")
+        }
+        gray.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return Array(UnsafeBufferPointer(start: pixels, count: width * height))
+    }
+
     /// Spatial conditioning only. Original photography is sent to the design/review model, not baked into the image-editing input.
     static func occupancyGuide(canvas: CGSize, objects: [DiaryAIObject], textRegions: [CGRect] = []) throws -> Data {
         let scale = min(1, 1536 / max(canvas.width, canvas.height))

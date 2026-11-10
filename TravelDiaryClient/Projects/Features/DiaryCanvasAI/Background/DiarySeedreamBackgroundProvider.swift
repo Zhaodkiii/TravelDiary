@@ -101,11 +101,12 @@ import Foundation
             ("在照片后方", "的空白处"), ("照片后方", "空白区域"),
             ("照片边缘外", "区域边缘外"), ("照片周围", "预留区域周围"),
             ("照片旁边", "预留区外侧"), ("照片上方", "预留区上方"),
-            ("照片下方", "预留区下方"), ("照片右侧", "预留区右侧"), ("照片左侧", "预留区左侧")
+            ("照片下方", "预留区下方"), ("照片右侧", "预留区右侧"), ("照片左侧", "预留区左侧"),
+            ("照片里的", "来源的"), ("照片中的", "来源的"), ("原照片的", "来源的"), ("原片的", "来源的")
         ] { text = text.replacingOccurrences(of: source, with: target) }
         // A model may append a negative list despite the positive-only contract.
         // Remove that prohibition sentence, never a positive subject description.
-        text = text.replacingOccurrences(of: "(?:不出现|不包含|不得出现|禁止出现|不绘制|不生成|不添加|避免出现|画面不含|画面没有)[^。；\\n]*[。；]?", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?:不出现|不包含|不得出现|禁止出现|不绘制|不画|不生成|不添加|避免出现|画面不含|画面没有)[^。；\\n]*[。；]?", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "无(?:任何)?(?:人物|人形)[^。；\\n]*[。；]?", with: "", options: .regularExpression)
         let banned = ["照片", "拍立得", "人物", "相框", "贴纸", "书页", "书脊", "立体书", "相册", "本册", "手帐", "跨页"].filter(text.contains)
         guard banned.isEmpty else {
@@ -113,6 +114,17 @@ import Foundation
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.count <= 800 else { throw DiaryAIError.invalid("生图提示词为空或超长，分析结果已保留。") }
         return text
+    }
+    static func prepareNativeScene(_ original: String) throws -> String {
+        let person = "(?:[一二两三四几数][名位个人]|游客|行人|旅人|旅行者|徒步者|球员|运动员|观众|路人|人群|人形|人影|背影|人物|穿着|穿[深浅红蓝白黑黄绿橙]|背着|戴着)"
+        let environment = original.components(separatedBy: CharacterSet(charactersIn: "。！？；\n"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0.range(of: person, options: .regularExpression) == nil }
+            .joined(separator: "。")
+        let graphic = environment.replacingOccurrences(
+            of: "(?:粗壮的|醒目的|清晰的)?([红蓝黄绿黑白橙紫]?色?)(?:大字(?:笔迹)?|字样|字迹|汉字|标语|字母)",
+            with: "$1抽象色块", options: .regularExpression)
+        return try preparePrompt(graphic)
     }
     func repairPrompt(_ text: String) async throws -> String {
         let result = try await post([

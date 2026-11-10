@@ -73,6 +73,14 @@ nonisolated enum DiaryAIPageStyle: String, Codable, CaseIterable, Identifiable, 
     case .scenic: "paper"; case .illustrated, .gentle: "watercolor"
     case .vintage: "vintage"; case .clean: "clean"; case .playful: "doodle"
     } }
+    var nativeBackgroundDirection: String { switch self {
+    case .scenic: "暖白纤维纸上保留一处可辨认的真实环境局部，细线和透明纸上色层保留原色，局部毛边自然消融。"
+    case .illustrated: "明亮冷压纸、透明水彩叠色和少量钢笔轮廓。景物集中于一侧，有清晰结构和水痕边缘，留白连成一片。"
+    case .vintage: "暖赭纸纤维、低饱和深棕套色版印网点和少量暗红来源色。用同色版印短线和颗粒概括单一景物，避免写实光影与透明水彩晕染。"
+    case .clean: "明亮中性白纸。把来源景物整理成两到三组相连的平涂形和稀疏细线，以主照附近的色层衬托主照，纸白占大部分，边缘简洁。使用平涂印刷图形，禁止水彩晕染、灰雾、摄影光影和泛黄旧纸。"
+    case .playful: "主体媒介是黑色记号笔速写线条，粗细跳跃，保留大片白纸。把景物简化为几根轮廓和两三笔饱满来源色，线条之间露出纸白。禁止水彩、晕染、夜景铺色、渐变和写实插画；深色只用于轮廓，禁止填满轮廓内部。"
+    case .gentle: "暖米白纸占六成以上。来源颜色化成低饱和暖色水彩薄层，纤细边缘与浅纸纹轻柔相接，明暗反差克制。"
+    } }
     var rules: String { switch self {
     case .scenic: "来源场景以细致纸上插画质感融入暖白纤维纸，局部撕纸连接；保持实体形态清楚、色彩自然，避免摄影感三维桌面、浓黑横带或巨大透视空间；深绿或来源墨色，主标题可用马善政，正文轻；纸卡titleParchment或kraftStrip，旁注可none，不生成孤立风景卡片。"
     case .illustrated: "以照片内已确认建筑、植物、山水作透明水彩与钢笔手绘；墨色标题、清楚手写正文，botanicalLine或coralUnderline少量承托，来源场景互相连接。保留一处轮廓清晰、颜色有层次的来源环境插画，集中在一侧并从纸边延伸，占可见画面约四分之一至三分之一；背景主要建筑或景物的可见体量小于主照片组，避免背景把同一建筑放大成全页最大重心；文字预留区轻淡，其余可露出的环境保持清晰，避免全页漂白和大块无主题淡色。"
@@ -192,6 +200,28 @@ nonisolated struct DiaryNativeContent: Codable, Sendable {
     var texts: [Text]
     var backgroundBrief: String
     var backgroundPrompt: String
+    var backgroundSourceID: String? = nil
+
+    static func selectTexts(_ texts: [Text], required: [String], photoIDs: Set<String>,
+                            heroID: String, limit: Int, allowsUserStory: Bool = false) -> [Text] {
+        let exact = Set(required.map { $0.filter { !$0.isWhitespace } })
+        let valid = texts.indices.filter { index in
+            let text = texts[index]
+            return !text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && ["title", "body", "caption"].contains(text.textRole)
+                && Set(text.sourceIDs).isSubset(of: photoIDs)
+        }
+        let mandatory = valid.filter { exact.contains(texts[$0].text.filter { !$0.isWhitespace }) }
+        let titles = valid.filter { texts[$0].textRole == "title" }
+        let notes = valid.filter { texts[$0].textRole != "title" && texts[$0].sourceIDs.count == 1 }
+        let story = allowsUserStory ? valid.filter { texts[$0].textRole == "body" && texts[$0].sourceIDs.isEmpty } : []
+        let preferred = mandatory + Array(titles.prefix(1)) + story
+            + notes.filter { texts[$0].sourceIDs.first == heroID }
+            + notes.filter { texts[$0].sourceIDs.first != heroID }
+        var kept = Set<Int>()
+        for index in preferred where kept.count < limit { kept.insert(index) }
+        return valid.filter(kept.contains).map { texts[$0] }
+    }
 
     static func schema(textCount: ClosedRange<Int>) -> [String: Any] {
         func object(_ fields: [String: Any]) -> [String: Any] {
@@ -209,19 +239,45 @@ nonisolated struct DiaryNativeContent: Codable, Sendable {
                                                "sourceIDs": ["type": "array", "items": string],
                                                "fontID": ["type": "string", "enum": titleFonts + bodyFonts],
                                                "paper": ["type": "string", "enum": readablePapers + ["none"]]])],
-                    "backgroundBrief": string, "backgroundPrompt": string])]
+                    "backgroundBrief": string, "backgroundPrompt": string, "backgroundSourceID": string])]
     }
 }
 
 extension DiaryAIDesignSelection {
+    static func nativeTitleRegionIndex(_ regions: [DiaryAILayoutRegion], hero: CGRect?, canvas: CGSize,
+                                       spineX: Double?) -> Int? {
+        regions.indices.max { lhs, rhs in
+            func score(_ region: DiaryAILayoutRegion) -> CGFloat {
+                let rect = region.bounds
+                let capacity = min(rect.width, rect.height * 4.8)
+                guard let hero else { return capacity }
+                let distance = hypot((rect.midX - hero.midX) / canvas.width, (rect.midY - hero.midY) / canvas.height)
+                let samePage = spineX.map { (rect.midX < $0) == (hero.midX < $0) } ?? true
+                let entry = rect.midY < hero.midY ? 1.22 : 0.94
+                return capacity * (samePage ? 1.2 : 0.85) * entry / (1 + 0.35 * distance)
+            }
+            return score(regions[lhs]) < score(regions[rhs])
+        }
+    }
+
     /// Deterministic candidates vary page order, reading direction and group proportions.
     /// The saved seed is reused on resume. Every candidate contains all source photos.
-    func nativeRegions(context: DiaryAIContext, allowsText: Bool, seed: UUID) -> [DiaryAILayoutRegion] {
+    func nativeRegions(context: DiaryAIContext, allowsText: Bool, seed: UUID,
+                       captionPhotoIDs: Set<String> = []) -> [DiaryAILayoutRegion] {
         let photos = context.objects.filter { $0.role == "photo" && $0.editable }
         guard (1...8).contains(photos.count) else { return [] }
         let bytes = Array(seed.uuidString.utf8)
         let variants: [DiaryAILayout] = layout == .automatic ? [.hero, .story, .headline, .collage, .editorial] : [layout]
-        var candidates: [(regions: [DiaryAILayoutRegion], score: Double)] = []
+        let preferred: Set<DiaryAILayout>
+        switch style {
+        case .scenic: preferred = [.hero, .story]
+        case .illustrated: preferred = [.story, .collage]
+        case .vintage: preferred = [.editorial, .collage]
+        case .clean: preferred = [.editorial, .headline]
+        case .playful: preferred = [.collage, .hero]
+        case .gentle: preferred = [.story, .headline]
+        }
+        var candidates: [(regions: [DiaryAILayoutRegion], score: Double, heroRatio: Double)] = []
         for (styleIndex, style) in variants.enumerated() {
             for variant in 0..<48 {
                 var design = self
@@ -264,6 +320,7 @@ extension DiaryAIDesignSelection {
                 }
                 var score = 0.0
                 var smallest = Double.infinity
+                var heroArea = 0.0, supportingArea = 0.0
                 for region in regions where region.role == "photo" {
                     guard let photo = photos.first(where: { $0.id.uuidString == region.objectID }) else { continue }
                     let ratio = max(0.01, photo.bounds.height / max(1, photo.bounds.width))
@@ -271,14 +328,45 @@ extension DiaryAIDesignSelection {
                     let area = width * width * ratio
                     score += area
                     smallest = min(smallest, area)
+                    if photo.id == photos.first?.id { heroArea = area }
+                    else { supportingArea = max(supportingArea, area) }
                 }
-                // Prefer readability across all photographs over filling only the hero.
+                // Protect readable supporting photos while keeping the main photo visually dominant.
                 score += smallest * Double(photos.count)
-                candidates.append((regions, score))
+                let heroRatio = supportingArea > 0 ? heroArea / supportingArea : 1.7
+                score *= 1 + 0.14 * min(1.7, heroRatio)
+                if layout == .automatic && preferred.contains(style) { score *= 1.08 }
+                let heroRegion = regions.first { $0.role == "photo" && $0.objectID == photos.first?.id.uuidString }
+                let textRegions = regions.filter { $0.role == "text" }
+                if let titleIndex = Self.nativeTitleRegionIndex(textRegions, hero: heroRegion?.bounds,
+                                                                 canvas: context.size, spineX: context.spineX) {
+                    let title = textRegions[titleIndex].bounds
+                    if let hero = heroRegion?.bounds {
+                        let samePage = context.spineX.map { (title.midX < $0) == (hero.midX < $0) } ?? true
+                        let distance = hypot((title.midX - hero.midX) / context.size.width,
+                                             (title.midY - hero.midY) / context.size.height)
+                        let leading = title.midY < hero.midY ? 0.16 : 0.08
+                        score *= 1 + (samePage ? leading : 0.02) * max(0, 1 - distance)
+                    }
+                    if !captionPhotoIDs.isEmpty {
+                        let text = textRegions.indices.filter { $0 != titleIndex }.map { textRegions[$0].bounds }
+                        let sources = regions.filter { $0.objectID.map(captionPhotoIDs.contains) == true }
+                        let distance = sources.compactMap { source in
+                            text.map { hypot($0.midX - source.bounds.midX, $0.midY - source.bounds.midY) }.min()
+                        }.min()
+                        if let distance { score *= 1 + 0.10 * max(0, 1 - distance / context.size.width) }
+                    }
+                }
+                candidates.append((regions, score, heroRatio))
             }
         }
         guard let bestScore = candidates.map(\.score).max() else { return [] }
-        let qualified = candidates.filter { $0.score >= bestScore * 0.92 }
+        let strongHero = layout == .automatic
+            ? candidates.filter { $0.score >= bestScore * 0.87 && $0.heroRatio >= 1.28 }
+            : []
+        let pool = strongHero.isEmpty ? candidates : strongHero
+        let poolBest = pool.map(\.score).max() ?? bestScore
+        let qualified = pool.filter { $0.score >= poolBest * 0.92 }
         let seedValue = bytes.reduce(UInt64(0)) { ($0 &* 31) &+ UInt64($1) }
         return qualified[Int(seedValue % UInt64(qualified.count))].regions
     }

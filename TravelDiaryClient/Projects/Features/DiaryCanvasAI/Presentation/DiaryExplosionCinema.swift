@@ -45,9 +45,9 @@ struct DiaryExplosionCinema: View {
                     }.font(.subheadline).buttonStyle(.bordered).tint(.white)
                     Spacer()
                     VStack(spacing: 10) {
-                        Text(finish >= 0 ? "星辰落下，回忆成册" : time < 5 ? "让回忆，化作星辰" : "你的旅途，正在凝聚")
+                        Text(finish >= 2.17 ? "星辰落下，回忆成册" : finish >= 0 ? "让所有回忆，汇聚此刻" : "让回忆，化作星辰")
                             .font(.system(size: 23, weight: .medium, design: .serif))
-                        Text(finish >= 0 ? "正在呈现你的作品" : pause == nil ? "动画预览" : stage)
+                        Text(finish >= 0 ? "正在呈现你的作品" : pause == nil ? "持续预览中，点击下方按钮模拟制作完成" : stage)
                             .font(.caption).foregroundStyle(.white.opacity(0.65)).lineLimit(2)
                         if let pause, finish < 0 { Button("暂停制作", action: pause).font(.caption).tint(.white) }
                         if pause == nil, finish < 0 {
@@ -55,7 +55,7 @@ struct DiaryExplosionCinema: View {
                                 .font(.caption).buttonStyle(.bordered).tint(.white)
                         }
                     }.foregroundStyle(.white).padding(20)
-                        .opacity(finish > 0.4 && finish < 3.8 ? 0 : 1)
+                        .opacity(finish > 1.25 && finish < 4.82 ? 0 : 1)
                 }.padding(.horizontal, 20).padding(.top, 8)
             }
         }
@@ -66,18 +66,9 @@ struct DiaryExplosionCinema: View {
         .task(id: scenePhase == .active ? ending : nil) {
             guard let ending, pause != nil, scenePhase == .active else { return }
             do {
-                let duration = reduceMotion || rendererFailed ? 0.9 : 5.9
+                let duration = reduceMotion || rendererFailed ? 0.9 : 6.92
                 try await Task.sleep(for: .seconds(max(0, duration - Date().timeIntervalSince(ending))))
                 close()
-            } catch {}
-        }
-        .task(id: started) {
-            guard pause == nil else { return }
-            do {
-                try await Task.sleep(for: .seconds(reduceMotion ? 1 : 12))
-                guard previewResult == nil else { return }
-                previewResult = Self.sampleArtwork(photos)
-                ending = Date()
             } catch {}
         }
         .onChange(of: scenePhase) { _, phase in

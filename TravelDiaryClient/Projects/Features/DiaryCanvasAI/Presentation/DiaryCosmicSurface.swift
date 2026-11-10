@@ -106,7 +106,11 @@ struct DiaryCosmicSurface: UIViewRepresentable {
         let fitWidth = min(frame.width, frame.height * CGFloat(resultAspect))
         let fitHeight = fitWidth / CGFloat(resultAspect)
         // Twelve floats, matching the Metal uniform layout exactly.
-        var uniforms: [Float] = [time, ending, Float(view.drawableSize.width / max(1, view.drawableSize.height)),
+        // Freeze the source constellation at completion; the finale owns its motion.
+        let sourceTime = ending >= 0 ? max(0, time - ending) : time
+        // Stretch only contraction to 1.5 seconds; preserve the subsequent reveal rhythm.
+        let finaleTime: Float = ending < 0 ? -1 : ending <= 1.5 ? ending * (0.48 / 1.5) : ending - 1.02
+        var uniforms: [Float] = [sourceTime, finaleTime, Float(view.drawableSize.width / max(1, view.drawableSize.height)),
                                  cardCount, photoCount, resultAspect, Float(view.drawableSize.width), 0, centerX, centerY, Float(fitWidth / width), Float(fitHeight / height)]
         encoder.setVertexBytes(&uniforms, length: 48, index: 0)
         encoder.setFragmentBytes(&uniforms, length: 48, index: 0)
@@ -119,7 +123,7 @@ struct DiaryCosmicSurface: UIViewRepresentable {
             encoder.setRenderPipelineState(artwork)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
         }
-        if time < 5 && ending < 0 && cardCount > 0 {
+        if (ending < 0 || ending < 1.5) && cardCount > 0 {
             encoder.setRenderPipelineState(cards)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: Int(cardCount))
         }
@@ -188,6 +192,9 @@ float deposit(float2 uv) {
     return 1.5+1.2*mix(mix(hash(n),hash(n+1),f.x),mix(hash(n+17),hash(n+18),f.x),f.y);
 }
 float ease(float a, float b, float t) { return smoothstep(a,b,t); }
+// Replenish photo-to-star streams while production is running, with no timed finish.
+// Each material has its own phase so the scene never resets as a whole.
+float materialTime(float index, float time) { return fmod(max(0.,time)+index*.85,14.); }
 float2 resultSize(constant Uniforms &u) { if(u.extentX>0 && u.extentY>0) return float2(u.extentX,u.extentY); return float2(min(.88,.56*u.resultAspect/u.aspect),min(.56,.88*u.aspect/u.resultAspect)); }
 float2 atlasUV(float index,float2 uv) { return (float2(fmod(index,4.0),floor(index/4.0))+uv)/4.; }
 float3 project(float3 p,constant Uniforms &u) { float depth=max(.7,3.2-p.z); return float3(p.x/depth/u.aspect,p.y/depth,p.z); }
@@ -203,9 +210,8 @@ fragment float4 cosmicSpace(Quad in [[stage_in]],constant Uniforms &u [[buffer(0
     float r=length(p);
     float cloud=sin(p.x*9+u.time*.03)*sin(p.y*7-p.x*4)+sin(p.x*21+p.y*11)*.2;
     float3 color=float3(.005,.009,.025)+float3(.028,.016,.068)*exp(-r*3)*(cloud*.3+.6);
-    float waiting=ease(5,12,u.time);
-    float core=exp(-r*r/(.004-waiting*.0035));
-    color+=float3(.22,.32,.6)*core*(.3+waiting*.5);
+    float core=exp(-r*r/.004);
+    color+=float3(.22,.32,.6)*core*.22;
     if(u.ending>=0) {
         float e=u.ending;
         float flash=exp(-pow((e-.65)*8,2));
@@ -219,13 +225,21 @@ vertex Quad cosmicCard(uint id [[vertex_id]],uint instance [[instance_id]],const
     Quad out; float3 center=orbit(float(instance),u); float a=sin(u.time*.4+instance)*.18;
     float2 q=corners[id]*.34;
     q=float2(q.x*cos(a)-q.y*sin(a),q.x*sin(a)+q.y*cos(a));
-    float3 position=project(center+float3(q,0),u);
+    float3 p=center+float3(q,0);
+    float contraction=u.ending<0 ? 0 : ease(0,.48,u.ending);
+    float turn=contraction*1.3;
+    p.xy=float2(p.x*cos(turn)-p.y*sin(turn),p.x*sin(turn)+p.y*cos(turn));
+    float3 position=project(p*(1-contraction),u);
     out.position=float4(position.xy,0,1); out.uv=corners[id]*float2(.5,-.5)+.5;
-    out.alpha=ease(0,.8,u.time)*(1-ease(2.0,4.8,u.time)); out.index=float(instance); return out;
+    out.alpha=ease(0,.8,u.time)*(1-(u.ending<0 ? 0 : ease(0,.35,u.ending))); out.index=float(instance); return out;
 }
-fragment float4 cosmicCardColor(Quad in [[stage_in]],texture2d<float> atlas [[texture(0)]]) {
+fragment float4 cosmicCardColor(Quad in [[stage_in]],texture2d<float> atlas [[texture(0)]],constant Uniforms &u [[buffer(0)]]) {
     constexpr sampler s(filter::linear,address::clamp_to_edge);
-    float4 c=atlas.sample(s,atlasUV(in.index,in.uv)); c.a*=in.alpha; return c;
+    float4 c=atlas.sample(s,atlasUV(in.index,in.uv));
+    // Peel each photo into particles from one edge, rather than fading the whole card.
+    float release=3.+in.uv.x*2.;
+    float phase=materialTime(in.index,u.time);
+    c.a*=in.alpha*ease(0,1.,phase)*(1-ease(release,release+1.2,phase)); return c;
 }
 vertex Star cosmicStar(uint id [[vertex_id]],constant Uniforms &u [[buffer(0)]],texture2d<float> atlas [[texture(0)]]) {
     constexpr sampler s(filter::linear,address::clamp_to_edge);
@@ -238,22 +252,26 @@ vertex Star cosmicStar(uint id [[vertex_id]],constant Uniforms &u [[buffer(0)]],
     float radius=.13+pow(h,.65)*2.7;
     float angle=h*13+fmod(n,4.)*1.5708+u.time*(.2+.16/(radius+.3))+(hash(n+21)-.5)*.22;
     float3 galaxy=float3(cos(angle)*radius,sin(angle)*radius*.47,(h2-.5)*.65+sin(angle)*radius*.22);
-    float collapse=mix(1.,.065,ease(6,13,u.time));
-    galaxy*=collapse;
+    // Keep the galaxy open for the entire real production wait.
     float2 local=(sourceUV-float2(.5))*float2(.68,-.68);
     float tilt=sin(u.time*.4+index)*.18;
     local=float2(local.x*cos(tilt)-local.y*sin(tilt),local.x*sin(tilt)+local.y*cos(tilt));
     float3 original=orbit(index,u)+float3(local,0);
-    float3 p=mix(original,galaxy,ease(1.8,5.,u.time));
-    float alpha=mix(source.a,1.,ease(3.5,5.5,u.time))*ease(.9,2.5,u.time);
-    float3 color=mix(max(source.rgb,float3(.08)),mix(float3(.25,.50,1),float3(1,.64,.29),h2),.55*ease(2,6,u.time));
+    float phase=materialTime(index,u.time);
+    float release=3.+sourceUV.x*2.;
+    float departure=ease(release,release+3.,phase);
+    float3 p=mix(original,galaxy,departure);
+    float alpha=mix(source.a,1.,departure)*ease(release-.3,release+.8,phase)*(1-ease(12.,14.,phase));
+    float3 color=mix(max(source.rgb,float3(.08)),mix(float3(.25,.50,1),float3(1,.64,.29),h2),.55*ease(4,9,u.time));
     float size=1.2+pow(h2,12.)*4.;
     float3 projected=project(p,u);
     if(u.ending>=0) {
         float e=u.ending;
-        float3 seedGalaxy=float3(cos(angle)*radius,sin(angle)*radius*.47,(h2-.5)*.65+sin(angle)*radius*.22)*collapse;
-        float3 initial=mix(original,seedGalaxy,ease(1.8,5.,u.time));
-        float3 compressed=initial*(1-ease(0,.48,e));
+        float contraction=ease(0,.48,e);
+        float turn=contraction*1.3;
+        float3 initial=p;
+        initial.xy=float2(initial.x*cos(turn)-initial.y*sin(turn),initial.x*sin(turn)+initial.y*cos(turn));
+        float3 compressed=initial*(1-contraction);
         float a=h*6.283185;
         float speed=.4+hash(n+9)*1.4;
         float3 blast=float3(cos(a)*speed,sin(a)*speed,(h2-.5)*2.)*(1-exp(-max(0.,e-.5)*4.));
@@ -266,8 +284,11 @@ vertex Star cosmicStar(uint id [[vertex_id]],constant Uniforms &u [[buffer(0)]],
         screen.y+=sin(settle*3.14159)*.18;
         projected.xy=screen;
         color=mix(color,float3(1.,.86,.6),ease(1.,3.,e));
-        alpha= (1-ease(arrival+.8,arrival+1.7,e)) * (.5+.5*h2);
-        size= (1.5+pow(h2,8.)*7.)*(1-ease(3.8,5.2,e));
+        alpha=mix(alpha,.5+.5*h2,ease(.35,.65,e))*(1-ease(arrival+.8,arrival+1.7,e));
+        // Reduce additive overlap during collapse so the core does not become a white oval.
+        float density=mix(1.,.035,contraction)*(1-ease(.48,.52,e));
+        alpha*=mix(density,1.,ease(.52,.65,e));
+        size=mix(size*(1-.65*contraction),1.5+pow(h2,8.)*7.,ease(.52,.65,e))*(1-ease(3.8,5.2,e));
     }
     out.position=float4(projected.xy,0,1);
     out.size=clamp(size*u.width/390.,1.,32.);

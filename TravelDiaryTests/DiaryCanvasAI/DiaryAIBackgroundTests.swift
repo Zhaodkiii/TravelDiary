@@ -5,6 +5,182 @@ import SwiftUI
 
 @Suite(.serialized)
 @MainActor struct DiaryAIBackgroundTests {
+    @Test func nativeTextSelectionRejectsCrossPhotoNotesBeforeApplyingLimit() {
+        func text(_ value: String, _ role: String, _ sources: [String]) -> DiaryNativeContent.Text {
+            .init(text: value, textRole: role, sourceIDs: sources)
+        }
+        let candidates = [
+            text("一路向晚", "title", ["hero", "wall"]),
+            text("壁画墙边停着蓝背包", "caption", ["wall", "trail"]),
+            text("鞋边是细密的草叶", "caption", ["hero"]),
+            text("我的原话", "body", [])
+        ]
+        let selected = DiaryNativeContent.selectTexts(candidates, required: [], photoIDs: ["hero", "wall", "trail"], heroID: "hero", limit: 2)
+        #expect(selected.map(\.text) == ["一路向晚", "鞋边是细密的草叶"])
+        let required = DiaryNativeContent.selectTexts(candidates, required: ["我的原话"], photoIDs: ["hero", "wall", "trail"], heroID: "hero", limit: 2)
+        #expect(required.map(\.text) == ["一路向晚", "我的原话"])
+    }
+
+    @Test func nativeTitleFavorsTheHeroPageWhenBothRegionsFit() {
+        let regions = [
+            DiaryAILayoutRegion(role: "text", x: 350, y: 250, width: 1100, height: 280),
+            DiaryAILayoutRegion(role: "text", x: 2600, y: 300, width: 1050, height: 280)
+        ]
+        let selected = DiaryAIDesignSelection.nativeTitleRegionIndex(regions,
+            hero: CGRect(x: 2680, y: 670, width: 1000, height: 1300),
+            canvas: CGSize(width: 4370, height: 3130), spineX: 2185)
+        #expect(selected == 1)
+    }
+
+    @Test func nativeBackgroundPromptKeepsStyleLabelAndCoordinatesOutOfImageRequest() {
+        let prompt = DiaryAIBackgroundStyle.nativeGenerationPrompt(scene: "左上角暖灰石墙上的雕花线条", style: .resolve("paper"),
+            strength: "中", size: CGSize(width: 4370, height: 3130),
+            textRegions: [CGRect(x: 335, y: 160, width: 1398, height: 460)], textOnly: true,
+            pageStyle: .scenic, hero: CGRect(x: 3000, y: 1100, width: 1000, height: 1400))
+        #expect(prompt.contains("左侧上部留作连续的浅色纸面"))
+        #expect(prompt.contains("沿右半幅主照片的下缘和外缘延展") && prompt.contains("约一半"))
+        #expect(!prompt.contains("实景融纸") && !prompt.contains("拾景纸刊"))
+        #expect(!prompt.contains("1398") && !prompt.contains("左上角"))
+    }
+
+    @Test func nativeScenePreservesLandscapeAndRemovesHikers() throws {
+        let modelScene = "浅蓝溪水沿滩面蜿蜒。两人站在滩边，一位穿深蓝外套。天光偏冷，云影落在山坡上。"
+        let cleaned = try DiarySeedreamBackgroundProvider.prepareNativeScene(modelScene)
+        #expect(cleaned == "浅蓝溪水沿滩面蜿蜒。天光偏冷，云影落在山坡上")
+        let sign = try DiarySeedreamBackgroundProvider.prepareNativeScene("白色屏面上是粗壮的红色大字笔迹")
+        #expect(sign == "白色屏面上是红色抽象色块")
+        #expect(throws: (any Error).self) {
+            try DiarySeedreamBackgroundProvider.prepareNativeScene("一位徒步者站在河边。")
+        }
+    }
+
+    @Test func nativeBackgroundChecksTheActualTextRegion() throws {
+        let size = CGSize(width: 600, height: 400)
+        let darkRegion = CGRect(x: 40, y: 30, width: 210, height: 110)
+        let detailOutsideText = CGRect(x: 415, y: 205, width: 155, height: 100)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            UIColor(white: 0.95, alpha: 1).setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            UIColor(white: 0.25, alpha: 1).setFill()
+            context.fill(darkRegion)
+            context.fill(detailOutsideText)
+        }
+        let cgImage = try #require(image.cgImage)
+        #expect(throws: (any Error).self) {
+            try DiaryAIBackgroundImaging.validateNativeBackground(cgImage, canvas: size, textRegions: [darkRegion])
+        }
+        try DiaryAIBackgroundImaging.validateNativeBackground(cgImage, canvas: size,
+            textRegions: [CGRect(x: 40, y: 260, width: 210, height: 110)])
+        let data = try #require(image.pngData())
+        let adjusted = try DiaryAIBackgroundImaging.prepareNativeBackground(data, canvas: size, textRegions: [darkRegion])
+        #expect(adjusted != data)
+        let repaired = try #require(UIImage(data: adjusted)?.cgImage)
+        try DiaryAIBackgroundImaging.validateNativeBackground(repaired, canvas: size, textRegions: [darkRegion])
+        #expect(throws: (any Error).self) {
+            try DiaryAIBackgroundImaging.validateNativeBackground(repaired, canvas: size, textRegions: [detailOutsideText])
+        }
+    }
+
+    @Test func nativeBackgroundReplayKeepsRiverValleyOutsideTextRegions() throws {
+        let root = URL.documentsDirectory.appendingPathComponent("DiaryNativeSnapshotQA/valley-replay")
+        guard let data = try? Data(contentsOf: root.appendingPathComponent("raw.png")) else { return }
+        let canvas = CGSize(width: 4370, height: 3130)
+        let regions = try JSONDecoder().decode([CGRect].self, from: Data(contentsOf: root.appendingPathComponent("regions.json")))
+        let prepared = try DiaryAIBackgroundImaging.prepare(data, canvas: canvas)
+        let adjusted = try DiaryAIBackgroundImaging.prepareNativeBackground(prepared, canvas: canvas, textRegions: regions,
+                                                                             darkAreaLimit: 0.38)
+        let result = try #require(UIImage(data: adjusted)?.cgImage)
+        // The right-side text fields may lighten; the left-side foreground riverbank should remain legible.
+        #expect(throws: (any Error).self) {
+            try DiaryAIBackgroundImaging.validateNativeBackground(result, canvas: canvas,
+                textRegions: [CGRect(x: 550, y: 2280, width: 1150, height: 360)])
+        }
+        try adjusted.write(to: root.appendingPathComponent("adjusted.png"), options: .atomic)
+    }
+
+    /// Opt-in live snapshot replay. The runtime and fixtures belong to the test sandbox.
+    @Test func liveNativeSnapshotQuality() async throws {
+        let documents = URL.documentsDirectory
+        let fixtureRoot = documents.appendingPathComponent("DiaryNativeSnapshotQA")
+        let marker = fixtureRoot.appendingPathComponent("enabled")
+        guard let data = try? Data(contentsOf: marker) else { return }
+        let datasets = try JSONDecoder().decode([String].self, from: data)
+        let runtime = documents.appendingPathComponent("DiaryIntegrationTest/runtime.json")
+        try DiaryAITaskRuntime.installTestConfiguration(Data(contentsOf: runtime))
+        defer { DiaryAITaskRuntime.clearTestConfiguration() }
+        for name in datasets {
+            let parts = name.split(separator: ":").map(String.init)
+            let dataset = parts[0]
+            let style = parts.count >= 2 ? try #require(DiaryAIPageStyle(rawValue: parts[1])) : (dataset == "D7" ? .clean : .scenic)
+            let backgroundMode = parts.count >= 3 ? parts[2] : "textOnly"
+            let input = fixtureRoot.appendingPathComponent(dataset)
+            let output = fixtureRoot.appendingPathComponent("results/\(dataset)-\(style.rawValue)-\(UUID())")
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            let store = DiaryDocumentStore(ownerID: "native-snapshot-qa", baseDirectory: output.appendingPathComponent("store"))
+            var document = DiaryDocument()
+            document.objects[document.rootContentID]?.referenceSize = CGSize(width: 4370, height: 3130)
+            let session = DiaryEditorSession(document: document, images: [:], store: store)
+            let files = try FileManager.default.contentsOfDirectory(at: input, includingPropertiesForKeys: nil)
+            let photos = try files.filter { $0.lastPathComponent.hasPrefix("L") }.sorted { $0.path < $1.path }.map { try Data(contentsOf: $0) }
+            try #require((1...8).contains(photos.count))
+            try #require(await session.importPhotos(photos))
+            let heroID = session.scopeLayers.first?.id
+            let stickers = files.filter { $0.lastPathComponent.hasPrefix("S") }.sorted { $0.path < $1.path }
+            for sticker in stickers {
+                try #require(await session.importPhoto(Data(contentsOf: sticker), asSticker: true,
+                                                       stickerName: sticker.deletingPathExtension().lastPathComponent))
+            }
+            try await store.save(session.document)
+            let sourceIDs = Set(session.scopeLayers.map(\.id))
+            let client = DiaryArkResponsesClient()
+            client.workspaceMode = true
+            let workspace = DiaryAIWorkspace(session: session, model: client, root: output,
+                                             parallelExecution: true, automaticallySavesCompletedProduction: false)
+            var request = DiaryAIRequest.editorDefaults(.relayout)
+            request.design = .init(layout: .automatic, style: style)
+            request.layoutMode = .native
+            request.textDensity = "适量记录"
+            request.allowsRewrite = false
+            request.heroID = heroID
+            request.background = .init(style: style.backgroundID, saveToAlbum: false, generationMode: backgroundMode)
+            request = request.coordinated()
+            await workspace.enter(request, preparingNewCreation: true)
+            let started = Date()
+            workspace.configureAndStart(request)
+            let deadline = started.addingTimeInterval(360)
+            while workspace.running && Date() < deadline { try await Task.sleep(for: .milliseconds(250)) }
+            let elapsed = Date().timeIntervalSince(started)
+            let completed = !workspace.running && workspace.error == nil && workspace.pending.isEmpty && workspace.backgroundRecord?.layerID != nil
+            if let png = workspace.backgroundPreview?.pngData() { try png.write(to: output.appendingPathComponent("background.png")) }
+            if let jpg = workspace.preview?.jpegData(compressionQuality: 0.9) { try jpg.write(to: output.appendingPathComponent("composed.jpg")) }
+            if let log = try? await workspace.exportProductionLog() {
+                try FileManager.default.copyItem(at: log, to: output.appendingPathComponent("production-log.zip"))
+            }
+            var reopenedOK = false
+            var renderedTexts: [String] = []
+            if completed, await workspace.save() {
+                let reopened = try await store.load(document.id)
+                renderedTexts = reopened.document.objects.values.flatMap(\.layers).filter { $0.kind == .text }.map(\.text)
+                let backgroundID = try #require(workspace.backgroundRecord?.layerID)
+                reopenedOK = sourceIDs.allSatisfy { reopened.document.layer($0) != nil }
+                    && reopened.document.layer(backgroundID) != nil
+                let editor = DiaryEditorSession(document: reopened.document, images: reopened.images, store: store)
+                let bridge = DiaryEditorAIBridge(editor)
+                _ = try await bridge.capture(request)
+                try await bridge.originalPreview().write(to: output.appendingPathComponent("reopened.jpg"))
+            }
+            let metrics: [String: Any] = ["dataset": dataset, "elapsed": elapsed, "completed": completed,
+                "reopened": reopenedOK, "texts": renderedTexts, "error": workspace.error ?? "", "stage": workspace.stage,
+                "layoutMode": "native", "style": style.rawValue, "photos": photos.count, "stickers": stickers.count, "backgroundMode": backgroundMode,
+                "textDensity": request.textDensity]
+            try JSONSerialization.data(withJSONObject: metrics, options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("metrics.json"))
+            print("NATIVE_SNAPSHOT_QA \(dataset)/\(style.rawValue) completed=\(completed) reopened=\(reopenedOK) elapsed=\(elapsed)")
+            #expect(completed && reopenedOK)
+        }
+    }
+
     @Test func textOnlyRequestOmitsImage() {
         let body = DiarySeedreamBackgroundProvider.body(reference: Data(), prompt: "松林夕阳")
         #expect(body["image"] == nil)
@@ -324,6 +500,7 @@ import SwiftUI
         #expect(session.scopeLayers == before.root.layers)
     }
     @Test func backgroundPromptKeepsSourceFurnitureAndRejectsBookMockups() throws {
+        #expect(try DiarySeedreamBackgroundProvider.preparePrompt("保留照片里的灰调柔光。不画完整风景。") == "保留来源的灰调柔光。")
         #expect(try DiarySeedreamBackgroundProvider.preparePrompt("左侧旧书架与木书桌，右侧暖白安静区") == "左侧旧书架与木书桌，右侧暖白安静区")
         #expect(throws: (any Error).self) { try DiarySeedreamBackgroundProvider.preparePrompt("立体书页与中央书脊") }
         #expect(try DiarySeedreamBackgroundProvider.preparePrompt("照片组下缘与文字周围保留暖白") == "预留区域组下缘与安静区周围保留暖白")
