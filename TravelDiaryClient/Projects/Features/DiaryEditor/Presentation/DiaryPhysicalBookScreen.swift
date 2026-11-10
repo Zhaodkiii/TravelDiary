@@ -688,7 +688,7 @@ struct DiaryPhysicalBookScreen: View {
             if experience.historical { Text("历史活动").font(.caption).foregroundStyle(.secondary) }
             HStack(spacing: 10) {
                 ForEach(experience.rewards, id: \.threshold) { reward in
-                    printMilestone("\(reward.threshold) 页", reward.title, approved >= reward.threshold)
+                    printMilestone("\(reward.threshold) 页", reward.title, approved >= reward.threshold || experience.completed)
                 }
             }
             Text(experience.heading).font(.headline)
