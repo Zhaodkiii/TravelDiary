@@ -125,7 +125,12 @@ struct DiaryAICreationSheet: View {
         }
     }
     private func footer(_ title: String, disabled: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Text(title).font(.headline).frame(maxWidth: .infinity, minHeight: 52) }
+        Button(action: action) {
+            Text(title)
+                .font(.headline)
+                .frame(maxWidth: .infinity, minHeight: 52)
+                .contentShape(RoundedRectangle(cornerRadius: 14))
+        }
             .buttonStyle(.plain).foregroundStyle(.white).background(ink.opacity(disabled ? 0.35 : 1), in: RoundedRectangle(cornerRadius: 14)).disabled(disabled)
             .padding(.horizontal, 20).padding(.vertical, 12).background(.regularMaterial)
     }

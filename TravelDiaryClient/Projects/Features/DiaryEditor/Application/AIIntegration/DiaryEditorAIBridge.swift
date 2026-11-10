@@ -7,6 +7,7 @@ import CoreText
     private weak var session: DiaryEditorSession?
     var autoFitPhotoRegions = false
     var fitsTextToPlannedRegions = false
+    var limitsTextToAvailableRegions = false
     var rendersDraftPreview = true
     private var pendingStickerPlacements = Set<UUID>()
     var layoutRegions: [DiaryAILayoutRegion] = []
@@ -231,6 +232,66 @@ import CoreText
             layer.size.width = min(maximumWidth, layer.size.width + layer.fontSize * 0.5)
         }
     }
+    private static func safeTextPages(_ context: DiaryAIContext) -> [CGRect] {
+        let canvas = CGRect(origin: .zero, size: context.size)
+        let pages = context.spineX.map { spine in
+            [CGRect(x: 0, y: 0, width: max(0, spine - 24), height: canvas.height),
+             CGRect(x: spine + 24, y: 0, width: max(0, canvas.width - spine - 24), height: canvas.height)]
+        } ?? [canvas]
+        let margin = min(canvas.width, canvas.height) * 0.02
+        return pages.map { $0.insetBy(dx: margin, dy: margin) }
+    }
+
+    private static func freeTextRects(_ regions: [CGRect], excluding obstacle: CGRect, minimum: CGSize) -> [CGRect] {
+        regions.flatMap { region -> [CGRect] in
+            let overlap = region.intersection(obstacle)
+            guard !overlap.isEmpty else { return [region] }
+            return [
+                CGRect(x: region.minX, y: region.minY, width: overlap.minX - region.minX, height: region.height),
+                CGRect(x: overlap.maxX, y: region.minY, width: region.maxX - overlap.maxX, height: region.height),
+                CGRect(x: region.minX, y: region.minY, width: region.width, height: overlap.minY - region.minY),
+                CGRect(x: region.minX, y: overlap.maxY, width: region.width, height: region.maxY - overlap.maxY)
+            ].filter { $0.width >= minimum.width && $0.height >= minimum.height }
+        }
+    }
+
+    static func availableTextRegions(_ planned: [DiaryAILayoutRegion], context: DiaryAIContext,
+                                     excluding excludedIDs: Set<UUID>) -> [DiaryAILayoutRegion] {
+        let unit = min(context.size.width, context.size.height)
+        let minimum = CGSize(width: max(64, unit * 0.08), height: max(48, unit * 0.045))
+        func area(_ rect: CGRect) -> CGFloat { rect.isEmpty ? 0 : rect.width * rect.height }
+        func subtract(_ obstacle: CGRect, from regions: [CGRect]) -> [CGRect] {
+            Array(freeTextRects(regions, excluding: obstacle.insetBy(dx: -8, dy: -8), minimum: minimum)
+                .sorted { area($0) > area($1) }.prefix(128))
+        }
+
+        let pages = safeTextPages(context)
+        var free = pages.filter { $0.width >= minimum.width && $0.height >= minimum.height }
+        for item in context.objects where item.visible && !excludedIDs.contains(item.id) && ["photo", "text", "textImage"].contains(item.role) {
+            free = subtract(item.bounds, from: free)
+        }
+
+        var slots: [DiaryAILayoutRegion] = []
+        for hint in planned where hint.role == "text" {
+            // Stay on the hinted page, preferring a free rectangle that preserves its anchor.
+            let page = pages.first { $0.intersects(hint.bounds) }
+            guard let page, let slot = free.filter({ page.contains($0) }).max(by: { lhs, rhs in
+                let leftOverlap = area(lhs.intersection(hint.bounds)), rightOverlap = area(rhs.intersection(hint.bounds))
+                if leftOverlap != rightOverlap { return leftOverlap < rightOverlap }
+                return area(lhs) < area(rhs)
+            }) else { continue }
+            // Keep the intended dimensions where possible without discarding room for the renderer.
+            let width = min(slot.width, max(minimum.width, hint.width))
+            let height = min(slot.height, max(minimum.height, hint.height))
+            let x = min(max(hint.bounds.minX, slot.minX), slot.maxX - width)
+            let y = min(max(hint.bounds.minY, slot.minY), slot.maxY - height)
+            let allocated = CGRect(x: x, y: y, width: width, height: height)
+            slots.append(.init(role: "text", x: x, y: y, width: width, height: height))
+            free = subtract(allocated, from: free)
+        }
+        return slots
+    }
+
     private func configureText(_ operation: DiaryAIOperation, layer: inout DiaryLayer, context: DiaryAIContext) throws {
         if let text = operation.text { try require(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && text.count <= 1000, "文字为空或过长"); layer.text = text }
         if let fontID = operation.fontID {
@@ -250,7 +311,7 @@ import CoreText
             style.vertical = false; style.titleLayout = .headline; layer.textAppearance = style
             let longest = layer.text.split(separator: "\n").map(\.count).max() ?? 4
             let insets = DiaryPageRenderer.textInsets(layer)
-            if !fitsTextToPlannedRegions {
+            if !fitsTextToPlannedRegions && !limitsTextToAvailableRegions {
                 layer.size.width = min(context.size.width * 0.44, max(layer.size.width, layer.fontSize * CGFloat(min(longest, 9)) + insets.left + insets.right))
             }
         }
@@ -267,7 +328,14 @@ import CoreText
                 layer.textAppearance = style
             }
         }
-        if fitsTextToPlannedRegions, let center = operation.center,
+        if limitsTextToAvailableRegions, operation.type == "createText", let center = operation.center,
+           let region = layoutRegions.first(where: { $0.role == "text" && $0.bounds.contains(center) }) {
+            let maximumWidth = max(40, region.width - 24)
+            layer.size.width = min(layer.size.width, maximumWidth)
+            if DiaryPageRenderer.textBounds(layer).height > region.height - 24 {
+                layer.size.width = maximumWidth
+            }
+        } else if fitsTextToPlannedRegions, let center = operation.center,
            let region = layoutRegions.first(where: { $0.role == "text" && $0.bounds.contains(center) }) {
             // Keep the measured paper inside its allocated box, including shadow and padding.
             layer.size.width = max(40, min(layer.size.width, region.width - 24))
@@ -550,9 +618,7 @@ import CoreText
             let newCard = operations.contains { $0.type == "createText" && $0.clientObjectKey.flatMap { createdIDs[$0] } == id }
             let fitCard = autoFitPhotoRegions || newCard
             guard fitCard || !candidates.isEmpty else { continue }
-            let pageAreas: [CGRect] = context.spineX.map { [CGRect(x: 0, y: 0, width: max(0, $0 - 24), height: canvas.height), CGRect(x: $0 + 24, y: 0, width: max(0, canvas.width - $0 - 24), height: canvas.height)] } ?? [canvas]
-            let textMargin = min(canvas.width, canvas.height) * 0.02
-            let safePages = pageAreas.map { $0.insetBy(dx: textMargin, dy: textMargin) }
+            let safePages = Self.safeTextPages(context)
             let expandedCandidates = fitCard ? candidates.map { rect -> CGRect in
                 let width = max(rect.width, bounds.width), height = max(rect.height, bounds.height)
                 return CGRect(x: min(rect.minX, canvas.maxX - width), y: min(rect.minY, canvas.maxY - height), width: width, height: height)
@@ -563,11 +629,7 @@ import CoreText
                     DiaryPageRenderer.bounds($0, document: copy, siblings: siblings).applying(DiaryPageRenderer.matrix($0, siblings: siblings)).insetBy(dx: -8, dy: -8)
                 }
                 for obstacle in blockers {
-                    regions = regions.flatMap { region -> [CGRect] in
-                        guard region.intersects(obstacle) else { return [region] }
-                        return [CGRect(x: region.minX, y: region.minY, width: max(0, obstacle.minX - region.minX), height: region.height), CGRect(x: max(region.minX, obstacle.maxX), y: region.minY, width: max(0, region.maxX - max(region.minX, obstacle.maxX)), height: region.height), CGRect(x: region.minX, y: region.minY, width: region.width, height: max(0, obstacle.minY - region.minY)), CGRect(x: region.minX, y: max(region.minY, obstacle.maxY), width: region.width, height: max(0, region.maxY - max(region.minY, obstacle.maxY)))]
-                            .filter { $0.width >= bounds.width && $0.height >= bounds.height && region.contains($0) }
-                    }
+                    regions = Self.freeTextRects(regions, excluding: obstacle, minimum: bounds.size)
                     if regions.count > 128 { regions = Array(regions.prefix(128)) }
                 }
             }

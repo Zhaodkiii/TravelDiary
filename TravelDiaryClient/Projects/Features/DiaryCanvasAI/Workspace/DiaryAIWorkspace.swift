@@ -124,6 +124,39 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private var creationSubmissionID: UUID?
     private var request = DiaryAIRequest.defaults(.relayout)
     var currentRequest: DiaryAIRequest { request }
+
+    private var makingFilmIDs: [UUID] {
+        let ids = objects.filter { $0.role == "photo" }.map(\.id)
+        guard let hero = request.heroID, ids.contains(hero) else { return Array(ids.prefix(8)) }
+        return Array(([hero] + ids.filter { $0 != hero }).prefix(8))
+    }
+
+    var makingFilmThumbnails: [UIImage] { makingFilmIDs.compactMap { thumbnails[$0] } }
+    var makingFilmStickers: [UIImage] {
+        objects.filter { ["decoration", "textImage", "group"].contains($0.role) }
+            .prefix(8).compactMap { thumbnails[$0.id] }
+    }
+
+    /// Bounded, decoded presentation images. Never mutates source assets or the document.
+    func makingFilmPhotos() async -> [UIImage] {
+        guard let session = working ?? source else { return makingFilmThumbnails }
+        let sources = makingFilmIDs.compactMap { id -> UIImage? in
+            guard let outer = session.document.layer(id) else { return thumbnails[id] }
+            let content = outer.contentID.flatMap { session.document.objects[$0] }
+            let layer = content?.layers.first(where: { $0.id == content?.primaryLayerID }) ?? outer
+            return layer.assetID.flatMap { session.images[$0] } ?? thumbnails[id]
+        }
+        var images: [UIImage] = []
+        for image in sources {
+            guard !Task.isCancelled else { return [] }
+            let ratio = min(1, 1400 / max(1, max(image.size.width, image.size.height)))
+            let size = CGSize(width: max(1, image.size.width * ratio), height: max(1, image.size.height * ratio))
+            if let decoded = await image.byPreparingThumbnail(ofSize: size) { images.append(decoded) }
+            else { images.append(image) }
+        }
+        return images
+    }
+
     var submittedCreationID: UUID? { creationSubmissionID }
     var currentCreationBrief: CreationBrief? { request.creationBrief }
     var currentDesign: DiaryAIDesignSelection? { request.design }
@@ -1688,6 +1721,16 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         adapter.rendersDraftPreview = nativeContent == nil
         var req = request; req.selectedOnly = false
         let context = try await adapter.capture(req)
+        let availableTextRegions = nativeContent == nil
+            ? DiaryEditorAIBridge.availableTextRegions(layoutRegions, context: context, excluding: Set(pending))
+            : []
+        let foregroundRegions = availableTextRegions.isEmpty ? layoutRegions
+            : layoutRegions.filter { $0.role != "text" } + availableTextRegions
+        adapter.layoutRegions = foregroundRegions
+        adapter.limitsTextToAvailableRegions = !availableTextRegions.isEmpty
+        if nativeContent == nil && needsTextCompletion {
+            log("geometry", "按实际照片计算文字区", try DiaryAIDraftController.json(availableTextRegions))
+        }
         let canvas = nativeContent == nil ? try await adapter.originalPreview() : Data()
         let assets = nativeContent == nil ? try await adapter.inspect(.init(contextID: context.id, objectIDs: ids, view: "fullAsset")) : []
         let shared = """
@@ -1697,7 +1740,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         用户创作资料：\(req.creationBrief?.modelInstructions ?? "")
         写入地点权限writesLocation=\(req.writesLocation)。\(!req.writesLocation && !req.location.isEmpty ? "严禁在任何文字中出现地点「" + req.location + "」，即便共同构图引用过它，必须改为不带地点的标题与旁注。" : "")
         冻结画布上下文：\(try modelContext(context, text: true))
-        规划区域：\(try DiaryAIDraftController.json(layoutRegions))
+        规划区域：\(try DiaryAIDraftController.json(foregroundRegions))
         只生成本分支操作，不提交画布、不改变共同构图、不修改其他分支对象。
         照片实际边界为保护区；文字区域按数组顺序标识textRegion-0等，是贴纸禁入区。
         保持共同字体、配色、阅读方向。只输出工具调用，客户端原生测量与合并。
@@ -1722,6 +1765,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             按共同构图分配规划文字区域：先让标题承接主照，再为正文选择离对应照片最近且可读的位置，不按区域数组顺序固定标题和结语。主标题和引题应相邻形成一个阅读入口，避免相隔半页。旁注贴近对应照片的边缘或侧栏，与无关图组保持更大间距。使用规划文字区域，默认标题4至10字；用户原样标题无字数上限，必须完整。正文横排每行8至16字，最多两种字体和纸卡。
             本轮必须完整呈现的原样文字清单：\(req.creationBrief?.requiredStoryTexts.joined(separator: " | ") ?? "无")。每项创建独立文字层，标题、正文与地点不得因默认数量限制遗漏；仅换行可以调整。提交前逐项核对全部清单。
             遵从用户指定数量与篇幅；适量记录默认1标题及2处有区别的照片旁注。
+            \(availableTextRegions.isEmpty ? "" : "文字区按照片真实边界计算。每张卡选择独立的文字区，center 必须在所选区内，width 不得超过该区宽度减24。选择字号和篇幅时给纸卡内边距和阴影留空间。默认篇幅按实际区域数量分配，不额外补写结语；用户指定的原样文字与数量优先。")
             仅陈述照片可见细节或用户明确提供事实；禁止推断地点、日期、亲属、季节和行程顺序。用户没有明确提供时，禁止风吹、风很大、溪声、声音、温度、气味、热汤翻滚、咕嘟、沸腾等照片无法证明的感官或动态事实；静止锅具只能描述可见容器与食物，不能把酱料写成热汤；看见经幡只能写经幡，不能写经幡被风吹动。
             用户原话完整保留，仅供理解资料不得印出。writesLocation=false时不得写地点。
             标题优先paper=none，正文与旁注必须使用清晰深墨色，浅橙、浅粉、浅绿仅用于线条和小装饰，不能作为长句正文颜色；没有深色底衬时避免浅色字。正文清楚可读，不通过缩小字号塞满区域。
@@ -1743,7 +1787,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                     if text { try DiaryAIWorkspaceTools.validateTextEvidence(raw, request: req) }
                     guard var operation = try DiaryAIWorkspaceTools.parse(call, version: baseVersion, context: context) else { throw DiaryAIError.invalid("提案操作无效") }
                     guard text ? operation.type == "createText" : operation.objectID.map(ids.contains) == true else { throw DiaryAIError.invalid("分支对象越权") }
-                    if text && req.design != nil && req.instruction.isEmpty {
+                    if text && req.design != nil && req.instruction.isEmpty, availableTextRegions.isEmpty {
                         let title = operation.textRole == "title"
                         let width = Double(context.size.width)
                         let minimum = width * (title ? (req.design?.layout == .headline ? 0.065 : 0.045) : 0.016)
@@ -1753,6 +1797,15 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                         let target = title ? max(size * min(chars, 9), width * 0.32) : max(size * 10, width * 0.24)
                         operation.width = min(max(operation.width ?? 0, target), width * 0.44)
                         if title && raw["paper"] == nil { operation.paper = "none" }
+                    }
+                    if text, let center = operation.center, !availableTextRegions.contains(where: { $0.bounds.contains(center) }) {
+                        let nearest = availableTextRegions.min { lhs, rhs in
+                            hypot(lhs.bounds.midX - center.x, lhs.bounds.midY - center.y)
+                                < hypot(rhs.bounds.midX - center.x, rhs.bounds.midY - center.y)
+                        }
+                        if let nearest {
+                            operation.center = CGPoint(x: nearest.bounds.midX, y: nearest.bounds.midY)
+                        }
                     }
                     // The generated background can extend beyond the planned quiet areas.
                     if req.layoutMode == .ai, req.background != nil, text, operation.textRole != "title",

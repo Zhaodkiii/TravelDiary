@@ -101,6 +101,7 @@ private struct DiaryAIMakingSettingsView: View {
     var body: some View {
         Form {
             DiaryProductionQuotaSection()
+            DiaryMakingAnimationSettings()
             Section("作品保存") {
                 Toggle("制作完成后自动保存作品", isOn: $autoSaveCompletedWork)
                     .accessibilityIdentifier("settings.ai.auto-save-completed-work")

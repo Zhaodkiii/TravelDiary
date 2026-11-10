@@ -202,6 +202,7 @@ struct DiaryEditorScreen: View {
             .onDisappear { session.canvasAI.suspend() }
             .interactiveDismissDisabled()
         }
+        .modifier(DiaryMakingCinemaModifier(workspace: session.aiWorkspace))
     }
 
     /// 仅完整跨页比例启用外壳预览，等比例的不同分辨率同样适用。
@@ -230,6 +231,7 @@ struct DiaryEditorScreen: View {
             }
             .disabled(session.busy || importingCameraPhotos || session.aiWorkspace.addingMaterials)
         }
+        #if DEBUG
         ToolbarItem(placement: .principal) {
             Button {
                 exportingDiagnostics = true
@@ -245,6 +247,7 @@ struct DiaryEditorScreen: View {
             .disabled(exportingDiagnostics)
             .accessibilityLabel("导出诊断日志")
         }
+        #endif
         ToolbarItemGroup(placement: .topBarTrailing) {
             if isCoverDraft && !aiMode {
                 Button("保存草稿并关闭") {
@@ -290,6 +293,7 @@ struct DiaryEditorScreen: View {
                 } label: { Image(systemName: "ellipsis.circle") }
                 .accessibilityLabel("更多操作")
                 .disabled(session.aiWorkspace.running || session.aiWorkspace.addingMaterials || session.aiWorkspace.saving || !session.aiWorkspace.preparingPhotos.isEmpty)
+                DiaryProductionQuotaButton()
             } else {
             if supportsSpreadPreview {
                 Button { session.finishInteraction(); showsSpreadShell.toggle() } label: { Image(systemName: showsSpreadShell ? "eye.fill" : "eye") }
@@ -389,6 +393,12 @@ struct DiaryEditorScreen: View {
                         })
                             .allowsHitTesting(!aiMode)
                             .frame(width: size.width * scale + margin * 2, height: size.height * scale + margin * 2)
+                            .background {
+                                GeometryReader { canvasGeometry in
+                                    Color.clear.preference(key: DiaryMakingCanvasFrameKey.self,
+                                        value: canvasGeometry.frame(in: .global).insetBy(dx: margin, dy: margin))
+                                }
+                            }
                         if aiMode && !aiCompare && !session.aiWorkspace.running && session.aiWorkspace.backgroundPreview == nil && (session.aiWorkspace.objects.isEmpty || session.aiWorkspace.pending.count == session.aiWorkspace.objects.count) {
                             ZStack {
                                 Color(red: 0.97, green: 0.96, blue: 0.92)

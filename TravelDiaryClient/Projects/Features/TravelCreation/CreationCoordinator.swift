@@ -175,7 +175,10 @@ final class CreationCoordinator: ObservableObject {
         try await destination.publishCreation(session.document, from: session.store)
         try await store.retainRemaining(draft)
         draft.publishedDigest = try DiaryEditorAIBridge.digest(session.document)
-        draft.published = session.aiWorkspace.pending.isEmpty && !session.aiWorkspace.needsTextCompletion && !session.aiWorkspace.canGenerateBackground
+        let workspace = session.aiWorkspace
+        // Opening the AI panel alone does not create a new unfinished production.
+        let hasProduction = workspace.hasStartedWork || !workspace.pending.isEmpty || workspace.requiresCloudSettlement
+        draft.published = !(hasProduction && workspace.hasUnfinishedWork)
         try await store.save(draft)
     }
 }

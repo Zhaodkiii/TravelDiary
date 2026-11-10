@@ -39,6 +39,7 @@ struct DiaryAIWorkspaceView: View {
                 ToolbarItemGroup(placement: .confirmationAction) {
                     Button { showOriginal.toggle() } label: { Image(systemName: showOriginal ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle") }.accessibilityLabel("对比排版前")
                     Button("保存") { saveConfirmation = true }.disabled(workspace.running)
+                    DiaryProductionQuotaButton()
                 }
             }
 
@@ -58,6 +59,7 @@ struct DiaryAIWorkspaceView: View {
             .onChange(of: scenePhase) { _, phase in if phase == .background && workspace.running { workspace.pause() } }
             .interactiveDismissDisabled()
         }.tint(Color(red: 0.24, green: 0.39, blue: 0.34))
+            .modifier(DiaryMakingCinemaModifier(workspace: workspace))
     }
     private var canvas: some View {
         GeometryReader { geometry in
@@ -331,7 +333,6 @@ struct DiaryAIInlinePanel: View {
                   }.padding(.bottom, 2)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            DiaryProductionQuotaButton()
             HStack(spacing: 12) {
                 storyTags
                 Button(!workspace.preparingPhotos.isEmpty ? "照片准备中" : workspace.running ? "暂停" : workspace.needsSaveRetry ? "重试保存" : storyChanged && started ? "按新故事重新制作" : complete ? "保存作品" : photos.isEmpty && !started ? "添加照片" : started ? (workspace.error == nil ? "继续制作" : "重试本步") : "开始制作") {

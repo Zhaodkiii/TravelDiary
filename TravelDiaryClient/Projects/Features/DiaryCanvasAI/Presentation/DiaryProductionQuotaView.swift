@@ -67,21 +67,77 @@ struct DiaryProductionQuotaSection: View {
 }
 
 struct DiaryProductionQuotaButton: View {
+    @ObservedObject private var service = DiaryProductionService.shared
+    @Environment(\.scenePhase) private var scenePhase
     @State private var presented = false
+
     var body: some View {
-        Button("查看制作额度") { presented = true }
-            .font(.footnote)
-            .sheet(isPresented: $presented) {
-                NavigationStack {
-                    Form { DiaryProductionQuotaSection() }
-                        .navigationTitle("制作额度")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("完成") { presented = false }
-                            }
-                        }
-                }.presentationDetents([.medium, .large])
+        let short = remainingFraction(for: "short")
+        let weekly = remainingFraction(for: "weekly")
+
+        Button {
+            presented = true
+        } label: {
+            ZStack {
+                quotaArc(start: 192, sweep: 156, remaining: short)
+                quotaArc(start: 168, sweep: -156, remaining: weekly)
+                Image(systemName: "diamond.fill")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
             }
+            .frame(width: 24, height: 24)
+        }
+        .accessibilityLabel("查看制作额度")
+        .accessibilityValue("5 小时剩余 \(quotaDescription(short))，7 天剩余 \(quotaDescription(weekly))")
+        .accessibilityIdentifier("diary.ai.production-quota")
+        .task(id: service.owner) {
+            if service.owner != nil { await service.refresh() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active, service.owner != nil { Task { await service.refresh() } }
+        }
+        .popover(isPresented: $presented, arrowEdge: .top) {
+            Form { DiaryProductionQuotaSection() }
+                .frame(width: 300, height: 340)
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private func remainingFraction(for kind: String) -> Double? {
+        guard let window = service.quota?.windows.first(where: { $0.kind == kind }) else { return nil }
+        guard window.limit > 0 else { return 0 }
+        return min(1, max(0, Double(window.available) / Double(window.limit)))
+    }
+
+    private func quotaDescription(_ fraction: Double?) -> String {
+        fraction?.formatted(.percent.precision(.fractionLength(0))) ?? "暂无数据"
+    }
+
+    private func quotaArc(start: Double, sweep: Double, remaining: Double?) -> some View {
+        let stroke = StrokeStyle(lineWidth: 1.8, lineCap: .round)
+        return ZStack {
+            QuotaArc(start: start, sweep: sweep)
+                .stroke(.primary.opacity(remaining == nil ? 0.4 : 0.22), style: stroke)
+            if let remaining, remaining > 0 {
+                QuotaArc(start: start, sweep: sweep * remaining)
+                    .stroke(.primary, style: stroke)
+            }
+        }
+    }
+}
+
+nonisolated private struct QuotaArc: Shape {
+    let start: Double
+    let sweep: Double
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.addRelativeArc(
+            center: CGPoint(x: rect.midX, y: rect.midY),
+            radius: min(rect.width, rect.height) / 2 - 1,
+            startAngle: .degrees(start),
+            delta: .degrees(sweep)
+        )
+        return path
     }
 }

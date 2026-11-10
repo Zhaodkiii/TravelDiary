@@ -75,6 +75,26 @@ import SwiftUI
         #expect(preparedPage == coordinator.draft.documentID)
     }
 
+    @Test(arguments: [false, true])
+    func savingAfterClosingAIOnlyRetainsActualUnfinishedCreation(_ preparingCreation: Bool) async throws {
+        let owner = UUID().uuidString
+        let coordinator = CreationCoordinator(owner: owner)
+        coordinator.draft.styleEntry = true
+        await coordinator.add(try bytes(), name: "旅行照片")
+        let session = try #require(await coordinator.prepare(allowEmpty: true))
+        try await session.creationPublish?()
+        #expect(coordinator.draft.published)
+        await session.aiWorkspace.enter(coordinator.draft.request(), preparingNewCreation: preparingCreation)
+        #expect(session.aiWorkspace.needsTextCompletion)
+        #expect(await session.aiWorkspace.keepForLater())
+        #expect(await session.commitToParent())
+        let saved = try await coordinator.store.load(coordinator.draft.id)
+        #expect(saved.published == !preparingCreation)
+        let bookID = try #require(saved.targetBookID)
+        let book = try await DiaryDocumentStore(ownerID: owner, bookID: bookID).loadBook()
+        #expect(book.contentPages.filter { $0.id == saved.documentID }.count == 1)
+    }
+
     @Test func newPageDeletesOldWorkspaceWithoutRecreatingItOnSave() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

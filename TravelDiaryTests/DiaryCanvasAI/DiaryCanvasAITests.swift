@@ -61,6 +61,30 @@ import SwiftUI
         let impossible = DiaryAILayoutRegion(role: "text", x: 100, y: 100, width: 800, height: 100)
         #expect(DiaryAIWorkspace.fitPlanningRegions([impossible], context: context)[0].x == impossible.x)
     }
+    @Test func overlappingClosingRegionUsesActualSpaceBesidePhotos() throws {
+        let photos = [
+            CGRect(x: 2469.44, y: 790, width: 1601.12, height: 1250),
+            CGRect(x: 2424.21, y: 2100, width: 1101.58, height: 860)
+        ]
+        let objects = photos.enumerated().map { index, bounds in
+            DiaryAIObject(id: UUID(), shortID: "L\(index + 2)", name: "照片", role: "photo",
+                          center: CGPoint(x: bounds.midX, y: bounds.midY), bounds: bounds,
+                          scale: 1, angle: 0, locked: false, visible: true, editable: true, assetIDs: [])
+        }
+        let context = DiaryAIContext(id: UUID(), digest: "", contentID: UUID(),
+                                     size: CGSize(width: 4370, height: 3130), spineX: 2185,
+                                     objects: objects, fonts: [])
+        let title = DiaryAILayoutRegion(role: "text", x: 2330, y: 260, width: 1900, height: 480)
+        let closing = DiaryAILayoutRegion(role: "text", x: 2330, y: 2530, width: 1880, height: 480)
+        let slots = DiaryEditorAIBridge.availableTextRegions([title, closing], context: context, excluding: [])
+        #expect(slots.count == 2)
+        let sidebar = try #require(slots.last)
+        #expect(sidebar.x >= photos[1].maxX + 8)
+        #expect((760...780).contains(sidebar.width))
+        #expect(sidebar.height >= 269)
+        #expect(slots.allSatisfy { slot in photos.allSatisfy { !$0.intersects(slot.bounds) } })
+    }
+
     @Test func orphanFittingPreservesTextFontAndExplicitBreaks() {
         var changed = false
         for width in stride(from: 240.0, through: 480.0, by: 20) {
@@ -212,6 +236,24 @@ import SwiftUI
         let text = try #require(editor.document.objects.values.flatMap(\.layers).first { $0.text == "把这一刻留下" })
         #expect(text.fontSize == 32 && text.textAppearance?.paper?.kind == .blueTape)
     }
+    @Test func availableTextRegionCapsCardWidthWithoutShrinkingFont() async throws {
+        let (session, root) = fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let bridge = DiaryEditorAIBridge(session)
+        bridge.autoFitPhotoRegions = true
+        bridge.limitsTextToAvailableRegions = true
+        let region = DiaryAILayoutRegion(role: "text", x: 650, y: 350, width: 220, height: 220)
+        bridge.layoutRegions = [region]
+        let context = try await bridge.capture(.defaults(.writing))
+        let operation = DiaryAIOperation(operationID: "note", type: "createText", clientObjectKey: "note",
+                                         center: CGPoint(x: 760, y: 460), text: "跑过弯道",
+                                         fontID: "system", fontSize: 28, width: 600, paper: "note")
+        _ = try await bridge.propose(plan(context, [operation])); try bridge.apply()
+        let card = try #require(bridge.objectChoices.first { $0.text == "跑过弯道" })
+        let text = try #require(session.document.objects.values.flatMap(\.layers).first { $0.text == "跑过弯道" })
+        #expect(card.bounds.width <= region.width)
+        #expect(text.fontSize == 28)
+    }
+
     @Test func efficientTextCanExtendShortRegionWithoutShrinkingCard() async throws {
         let (session, root) = fixture(); defer { try? FileManager.default.removeItem(at: root) }
         var empty = session.document; empty.objects[session.contentID]?.layers = []
