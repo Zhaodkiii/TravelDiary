@@ -222,7 +222,7 @@ struct SupportMainCoordinatorView: View {
         withTransaction(transaction) {
             preparedReaderBook = book
             selectedTab = .diaryEditor
-            path = NavigationPath([DiaryBookRoute(bookID: bookID, pageID: page.id)])
+            path = NavigationPath([DiaryBookRoute(bookID: bookID, pageID: page.id, completedCanvas: true)])
         }
     }
 
@@ -276,7 +276,7 @@ struct SupportMainCoordinatorView: View {
             content()
                 .navigationBarTitleDisplayMode(.inline)
                 .navigationDestination(for: DiaryBookRoute.self) { route in
-                    DiaryBookDestination(ownerID: String(session.accountID), bookID: route.bookID, pageID: route.pageID, managePages: route.managePages, preparedBook: route.pageID == nil ? nil : preparedReaderBook)
+                    DiaryBookDestination(ownerID: String(session.accountID), bookID: route.bookID, pageID: route.pageID, managePages: route.managePages, completedCanvas: route.completedCanvas, preparedBook: route.pageID == nil ? nil : preparedReaderBook)
                         .id(route.bookID)
                         .contentZoomTransition(sourceID: route.bookID, in: route.zoomFromShelf ? bookshelfTransition : nil)
                 }

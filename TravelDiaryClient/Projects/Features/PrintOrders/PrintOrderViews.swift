@@ -5,6 +5,8 @@ struct PrintCheckoutScreen: View {
     let book: DiaryBook
     let store: DiaryDocumentStore
     var revisionOrder: PrintOrder? = nil
+    var preferredCouponID: String? = nil
+    var preferredProductID: String? = nil
     @Environment(\.dismiss) private var dismiss
     private enum Route: Hashable { case preview, checkout, submission(UUID) }
     @State private var path: [Route] = []
@@ -16,6 +18,7 @@ struct PrintCheckoutScreen: View {
     @State private var address = PrintAddress()
     @State private var editingAddress = false
     @State private var quantity = 1
+    @State private var couponSelection = "auto"
     @State private var quote: PrintQuote?
     @State private var confirmed = false
     @State private var progressivePreview: PrintProgressivePreviewItem?
@@ -31,7 +34,7 @@ struct PrintCheckoutScreen: View {
     private let service = PrintOrderService.shared
     private let ink = Color(red: 0.23, green: 0.36, blue: 0.31)
     private var product: PrintProduct? { products.first { $0.id == productID } }
-    private var quoteKey: String { "\(productID)|\(quantity)|\(address.regionQuoteKey)|\(address.name)|\(address.phone)|\(address.detail)|\(prepared?.directory.lastPathComponent ?? "")" }
+    private var quoteKey: String { "\(couponSelection)|\(productID)|\(quantity)|\(address.regionQuoteKey)|\(address.name)|\(address.phone)|\(address.detail)|\(prepared?.directory.lastPathComponent ?? "")" }
     private var mappingError: String? {
         guard let product else { return nil }
         do { _ = try DiaryBookPrintExporter.mapping(book: book, product: product); return nil }
@@ -258,10 +261,24 @@ struct PrintCheckoutScreen: View {
                             LabeledContent("印制费", value: PrintText.money(quote.production_fen))
                             LabeledContent("运费", value: PrintText.money(quote.shipping_fen))
                         }
+                        if revisionOrder == nil, let candidates = quote.candidates, !candidates.isEmpty {
+                            Menu {
+                                Button("自动使用最优惠券") { selectCoupon("auto") }
+                                ForEach(candidates) { coupon in
+                                    Button("\(coupon.name) · 减\(PrintText.money(coupon.discount_fen))") { selectCoupon(coupon.id) }
+                                }
+                                Button("本单不用券") { selectCoupon("none") }
+                            } label: {
+                                LabeledContent("优惠券", value: quote.selected_coupon.map { "\($0.name) · −\(PrintText.money($0.discount_fen))" } ?? "本单不用券")
+                            }
+                        }
                         LabeledContent("实付", value: quote.total_fen == 0 ? "免费 · ¥0.00" : PrintText.money(quote.total_fen)).font(.headline)
                     } else if busy { ProgressView("正在确认费用…") }
                     else { Text("请选择配送地区，以确认费用。").foregroundStyle(.secondary) }
                     errorMessage
+                    if error != nil && couponSelection != "auto" {
+                        Button("重新匹配可用优惠券") { selectCoupon("auto") }
+                    }
                     if error != nil { Button("重试确认费用") { Task { await calculate() } }.disabled(busy) }
                 }
                 Section("购买与售后") {
@@ -321,7 +338,12 @@ struct PrintCheckoutScreen: View {
             if let revisionOrder {
                 products = [revisionOrder.spec]; productID = revisionOrder.spec.id; quantity = revisionOrder.quantity; address = revisionOrder.address
             } else {
+                if let preferredCouponID, productID.isEmpty { couponSelection = preferredCouponID }
                 products = try await service.products(owner: store.ownerID)
+                if productID.isEmpty, let preferredProductID,
+                   products.contains(where: { $0.id == preferredProductID }) {
+                    productID = preferredProductID
+                }
                 if !products.contains(where: { $0.id == productID }) {
                     productID = products.min { left, right in
                         let size = book.contentPages.first?.size ?? book.defaultPageSize
@@ -358,6 +380,13 @@ struct PrintCheckoutScreen: View {
             if !(error is CancellationError) { self.error = error.localizedDescription }
         }
     }
+    private func selectCoupon(_ selection: String) {
+        guard selection != couponSelection else { return }
+        quote = nil
+        confirmed = false
+        couponSelection = selection
+    }
+
     private func calculate() async {
         guard let product, let prepared, !address.region.isEmpty else { quote = nil; return }
         let key = quoteKey
@@ -366,7 +395,7 @@ struct PrintCheckoutScreen: View {
             let result: PrintQuote
             if let revisionOrder {
                 result = PrintQuote(total_fen: revisionOrder.total_fen, production_fen: revisionOrder.production_fen ?? revisionOrder.total_fen, shipping_fen: revisionOrder.shipping_fen ?? 0, page_count: prepared.pageCount, sheets: product.duplex ? prepared.pageCount/2 : prepared.pageCount, product_revision: product.revision)
-            } else { result = try await service.quote(product: product, pages: prepared.pageCount, quantity: quantity, address: address, owner: store.ownerID) }
+            } else { result = try await service.quote(product: product, pages: prepared.pageCount, quantity: quantity, address: address, owner: store.ownerID, couponSelection: couponSelection) }
             try Task.checkCancellation()
             guard key == quoteKey else { return }
             guard result.product_revision == product.revision else { throw PrintFailure("规格已更新，请关闭并重新打开印制页面") }
@@ -379,7 +408,7 @@ struct PrintCheckoutScreen: View {
             let submission = PrintSubmission(key: submissionKey, product_id: product.id, product_revision: product.revision,
                 title: book.title, quantity: quantity, page_count: prepared.pageCount,
                 address: revisionOrder != nil ? address.trimmed : address.submissionAddress(structured:RegionRepository.shared.supportsStructuredAddress),
-                snapshot: prepared.snapshot, files: prepared.files, confirmed: true, quote_total_fen: quote.total_fen, revise_order_id: revisionOrder?.id, order_revision: revisionOrder?.revision)
+                snapshot: prepared.snapshot, files: prepared.files, confirmed: true, quote_total_fen: quote.total_fen, coupon_id: quote.selected_coupon?.id, revise_order_id: revisionOrder?.id, order_revision: revisionOrder?.revision)
             let id = try service.enqueue(submission, directory: prepared.directory, owner: store.ownerID)
             jobID = id; path.append(.submission(id))
         } catch { self.error = error.localizedDescription }
@@ -718,6 +747,7 @@ struct PrintOrdersScreen: View {
         .background(DiaryLibraryStyle.background.ignoresSafeArea())
         .foregroundStyle(DiaryLibraryStyle.ink).tint(DiaryLibraryStyle.accent)
         .navigationTitle("我的印制订单")
+        .toolbar { NavigationLink("优惠券") { PrintCouponWallet(owner: owner) } }
         .task { await load() }
         .refreshable { await load() }
     }
@@ -937,6 +967,9 @@ struct PrintOrderDetailScreen: View {
                 }.frame(maxWidth: 190, alignment: .trailing)
             }
             Rectangle().fill(DiaryLibraryStyle.line.opacity(0.75)).frame(height: 1)
+            if let coupon = order.selected_coupon {
+                LabeledContent(coupon.name, value: "−" + PrintText.money(coupon.discount_fen))
+            }
             Label("订单信息与进度会随印制状态更新", systemImage: "sparkle")
                 .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
         }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
@@ -1092,3 +1125,41 @@ struct PrintOrderDetailScreen: View {
 }
 
 private struct PrintRevisionContext: Identifiable { var id: String { order.id }; let book: DiaryBook; let store: DiaryDocumentStore; let order: PrintOrder }
+
+struct PrintCouponWallet: View {
+    let owner: String
+    private struct Item: Decodable, Identifiable {
+        let id: String
+        let name: String
+        let product: String
+        let cap_fen: Int
+        let expires_at: String
+        let state: String
+    }
+    @State private var items: [Item]?
+    @State private var error: String?
+    var body: some View {
+        List {
+            if let error {
+                Text(error)
+                Button("重试") { Task { await load() } }
+            } else if let items {
+                if items.isEmpty { Text("暂无印制优惠券") }
+                ForEach(items) { item in
+                    VStack(alignment: .leading, spacing: 6) {
+                        LabeledContent(item.name, value: item.state)
+                        Text("\(item.product) · 最高抵扣 \(PrintText.money(item.cap_fen))")
+                        if let expiry = PrintText.date(item.expires_at) {
+                            Text("有效期至 \(expiry.formatted())").font(.caption)
+                        }
+                    }
+                }
+            } else { ProgressView() }
+        }.navigationTitle("我的印制优惠券").task(id: owner) { await load() }.refreshable { await load() }
+    }
+    private func load() async {
+        error = nil
+        do { items = try await PrintOrderService.shared.request("coupons/mine/", owner: owner) }
+        catch { self.error = error.localizedDescription }
+    }
+}

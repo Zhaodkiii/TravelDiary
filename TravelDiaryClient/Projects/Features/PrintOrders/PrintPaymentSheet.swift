@@ -39,6 +39,9 @@ struct PrintPaymentSheet: View {
                     if current.hasFeeBreakdown, let production = current.production_fen, let shipping = current.shipping_fen {
                         VStack(spacing: 10) {
                             LabeledContent("印制费", value: PrintText.money(production))
+                            if let coupon = current.selected_coupon {
+                                LabeledContent(coupon.name, value: "−" + PrintText.money(coupon.discount_fen))
+                            }
                             LabeledContent("运费", value: PrintText.money(shipping))
                         }.font(.subheadline)
                     }

@@ -957,6 +957,43 @@ extension DiaryDocumentStore {
         if large && compositePhotos { return await DiaryPhotoComposite.prepare(source, store: self) }
         return source
     }
+    /// 活动申报只读取已发布的内页快照。素材和用户原文留在设备上。
+    func printActivityPageCount(_ book: DiaryBook) async throws -> Int {
+        try await run {
+            var faces = Set<[String]>()
+            var imageDigests: [URL: String] = [:]
+            func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+            for page in book.bodyPages {
+                let doc = try self.readSnapshot("revisions/\(page.revisionID.uuidString)/manifest.json",
+                                                directory: self.directory(page.id), documentID: page.id)
+                var halves = [Set<String>(), Set<String>()]
+                func collect(_ layer: DiaryLayer, side: Int, ancestors: Set<UUID>) throws {
+                    guard layer.effectiveOpacity > 0 else { return }
+                    if layer.kind == .photo, let id = layer.assetID, let asset = doc.assets[id] {
+                        let url = try self.resolve(asset.path, in: self.assetDirectory(page.id))
+                        if imageDigests[url] == nil { imageDigests[url] = digest(try Data(contentsOf: url, options: .mappedIfSafe)) }
+                        if let value = imageDigests[url] { halves[side].insert("photo:" + value) }
+                    }
+                    if layer.kind == .text, page.presetSource == nil, layer.materialSource == nil {
+                        let text = layer.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !text.isEmpty { halves[side].insert("text:" + text) }
+                    }
+                    if let id = layer.contentID, !ancestors.contains(id), let child = doc.objects[id] {
+                        if !child.drawing.isEmpty { halves[side].insert("drawing:" + digest(child.drawing)) }
+                        for nested in child.layers { try collect(nested, side: side, ancestors: ancestors.union([id])) }
+                    }
+                }
+                if !doc.root.drawing.isEmpty { halves[0].insert("drawing:" + digest(doc.root.drawing)) }
+                for layer in doc.root.layers {
+                    let side = page.canvasLayout == .spread && layer.transform.position.x >= doc.root.referenceSize.width / 2 ? 1 : 0
+                    try collect(layer, side: side, ancestors: [doc.rootContentID])
+                }
+                for half in halves where !half.isEmpty { faces.insert(half.sorted()) }
+            }
+            return faces.count
+        }
+    }
+
     /// 导出使用目录捕获的不可变页版本，不改变正在编辑页面的保存基线。
     func loadPDFSource(_ page: DiaryPageEntry) async throws -> Loaded {
         try await run {

@@ -5,6 +5,7 @@ struct DiaryBookRoute: Hashable {
     let bookID: UUID
     var pageID: UUID? = nil
     var managePages = false
+    var completedCanvas = false
     var zoomFromShelf = false
 }
 
@@ -14,6 +15,7 @@ struct DiaryBookDestination: View {
     let bookID: UUID
     var pageID: UUID? = nil
     var managePages = false
+    var completedCanvas = false
     var preparedBook: DiaryBook? = nil
     @State private var book: DiaryBook?
     @State private var error: String?
@@ -29,7 +31,7 @@ struct DiaryBookDestination: View {
                     DiaryPhysicalBookScreen(
                         book: book,
                         store: DiaryDocumentStore(ownerID: ownerID, bookID: bookID),
-                        initialPageID: pageID, onShowList: { showingList = true }
+                        initialPageID: pageID, completedCanvas: completedCanvas, onShowList: { showingList = true }
                     )
                 }
             } else if let error {

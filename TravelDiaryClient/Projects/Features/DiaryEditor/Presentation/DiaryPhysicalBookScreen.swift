@@ -7,6 +7,7 @@ struct DiaryPhysicalBookScreen: View {
     @State private var book: DiaryBook
     let store: DiaryDocumentStore
     private let onShowList: (() -> Void)?
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isLandscape = false
@@ -21,6 +22,95 @@ struct DiaryPhysicalBookScreen: View {
     @State private var opened = false
     @State private var spread = 0
     @State private var turningCover = false
+    private struct Campaign: Decodable {
+        let id: Int?
+        let title: String?
+        let product: String?
+        let included_pages: Int?
+        let cap_fen: Int?
+        let ends_at: String?
+        var enrollment: Enrollment?
+        let blocked_reason: String?
+        let standard_discount_fen: Int?
+        let standard_is_covered: Bool?
+        let unrestricted: Bool?
+        let experience: Experience?
+        let previous_campaigns: [PreviousCampaign]?
+    }
+    private struct PreviousCampaign: Decodable {
+        let title: String
+        let heading: String
+        let detail: String
+    }
+    private struct Experience: Decodable {
+        let status: String
+        let heading: String
+        let detail: String
+        let action: String
+        let action_title: String
+        let progress: Double
+        let pending: Bool
+        let completed: Bool
+        let result_key: String
+        let coupon_id: String?
+        let product_id: String?
+        let coupon_available: Bool?
+        let order_id: String?
+        let coupon_expires_at: String?
+        let can_update: Bool
+        let can_withdraw: Bool
+        let historical: Bool
+        let can_resubmit: Bool?
+        let review_page_ids: [String]?
+        let rewards: [Reward]
+        let history: [History]
+    }
+    private struct Reward: Decodable {
+        let threshold: Int
+        let title: String
+        let discount_fen: Int?
+    }
+    private struct History: Decodable {
+        let event: String
+        let at: String
+        let reason: String?
+        let reported_pages: Int?
+        let approved_pages: Int?
+    }
+    private struct Enrollment: Decodable {
+        let reported_pages: Int
+        let approved_pages: Int
+        let coupon_percent: Int?
+        let coupon_available: Bool
+        let withdrawn_at: String?
+        let attempt: Int?
+    }
+    private struct EnrollmentResult: Decodable {
+        let message: String
+        let enrollment: Enrollment?
+    }
+    @State private var campaign: Campaign?
+    @State private var activityOpen = false
+    @State private var activityMessage = ""
+    @State private var enrolling = false
+    @State private var confirmingWithdrawal = false
+    @State private var showPrintOffer = false
+    @State private var checkingOut = false
+    @State private var showingCampaignWallet = false
+    @State private var showingPrintOrders = false
+    @State private var routedPrintOrder: String?
+    @State private var selectedPrintOrder: String?
+    @State private var preferredPrintCoupon: String?
+    @State private var printProducts: [PrintProduct] = []
+    @State private var loadingPrintContext = false
+    @State private var printContextError: String?
+    @State private var printReadKey = ""
+    @State private var lastAutomaticPrintKey = ""
+    @State private var printRequestID = UUID()
+    @State private var campaignDestination: CampaignDestination?
+    @State private var campaignPages: Int?
+    private enum CampaignDestination { case checkout, wallet, orders, order }
+    private var printOfferSeenKey: String { "print.offer.\(store.ownerID).lastSeen" }
     @State private var makingCover = false
     @State private var editor: DiaryEditorSession?
     @State private var editingRightHalf = false
@@ -31,6 +121,7 @@ struct DiaryPhysicalBookScreen: View {
     @State private var photo: PhotosPickerItem?
     @State private var choosingPreset = false
     @State private var showingExport = false
+    private let completedCanvas: Bool
     private var continuousSpread: Bool { true }
     private var readingLeaves: [DiaryReadingLeaf] { DiaryReadingLeaf.project(book) }
     private var innerPages: [DiaryPageEntry] { book.contentPages }
@@ -38,8 +129,9 @@ struct DiaryPhysicalBookScreen: View {
     private var spreadCount: Int { contentSpreadCount + 1 }
     private var paperRatio: CGFloat { DiaryBook.coverSize.width / DiaryBook.coverSize.height }
 
-    init(book: DiaryBook, store: DiaryDocumentStore, initialPageID: UUID? = nil, onShowList: (() -> Void)? = nil) {
+    init(book: DiaryBook, store: DiaryDocumentStore, initialPageID: UUID? = nil, completedCanvas: Bool = false, onShowList: (() -> Void)? = nil) {
         _book = State(initialValue: book)
+        self.completedCanvas = completedCanvas
         self.store = store
         self.onShowList = onShowList
         let position = initialPageID.flatMap { id in DiaryReadingLeaf.project(book).firstIndex { $0.page?.id == id } }.map { $0 / 2 } ?? 0
@@ -55,10 +147,81 @@ struct DiaryPhysicalBookScreen: View {
         }
     }
 
+    private var campaignBanner: some View {
+        HStack {
+            Button {
+                activityOpen = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "book.closed.fill")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(campaign?.experience?.heading ?? campaign?.title ?? "实体书定制").font(.subheadline.weight(.semibold))
+                        Text(campaign?.experience?.detail ?? "查看装订进度与优惠")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                }
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            Button { showPrintOffer = false } label: { Image(systemName: "xmark") }
+                .accessibilityLabel("关闭印制提示")
+        }
+        .padding(.horizontal, 24)
+    }
+
     private var readerContent: some View {
+        readerLayout
+            .sheet(isPresented: $activityOpen, onDismiss: {
+                let destination = campaignDestination
+                campaignDestination = nil
+                switch destination {
+                case .checkout: checkingOut = true
+                case .wallet: showingCampaignWallet = true
+                case .orders: showingPrintOrders = true
+                case .order: routedPrintOrder = selectedPrintOrder
+                case nil: break
+                }
+            }) {
+                printCenter
+                    .presentationDetents([.fraction(0.86), .large])
+                    .presentationDragIndicator(.visible)
+                    .task { await refreshPrintCenter() }
+            }
+            .sheet(isPresented: $checkingOut, onDismiss: { Task { await loadPrintOffer(manual: true) } }) {
+                PrintCheckoutScreen(book: book, store: store, preferredCouponID: preferredPrintCoupon, preferredProductID: campaign?.experience?.product_id)
+            }
+            .sheet(isPresented: $showingCampaignWallet) {
+                NavigationStack {
+                    PrintCouponWallet(owner: store.ownerID)
+                        .toolbar { Button("关闭") { showingCampaignWallet = false } }
+                }
+            }
+            .sheet(isPresented: $showingPrintOrders) {
+                NavigationStack {
+                    PrintOrdersScreen(owner: store.ownerID)
+                        .toolbar { Button("关闭") { showingPrintOrders = false } }
+                }
+            }
+            .sheet(isPresented: Binding(get: { routedPrintOrder != nil }, set: { if !$0 { routedPrintOrder = nil } }),
+                   onDismiss: { Task { await loadPrintOffer(manual: true) } }) {
+                if let id = routedPrintOrder {
+                    NavigationStack {
+                        PrintOrderDetailScreen(id: id, owner: store.ownerID)
+                            .toolbar { Button("关闭") { routedPrintOrder = nil } }
+                    }
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { Task { await loadPrintOffer(manual: true) } }
+            }
+    }
+
+    private var readerLayout: some View {
             VStack(spacing: isImmersive ? 0 : 16) {
                 bookViewport
                 if !isImmersive {
+                    if showPrintOffer { campaignBanner }
                     HStack {
                         Button { if spread > 0 { spread -= 1 } else { closeBook() } } label: {
                             Image(systemName: "chevron.left")
@@ -150,12 +313,25 @@ struct DiaryPhysicalBookScreen: View {
             .fullScreenCover(item: $editor, onDismiss: {
                 Task { await refreshAfterEditing() }
             }) { session in
-                DiaryEditorScreen(session: session, entranceOnRightPage: editingRightHalf)
+                DiaryEditorScreen(session: session, entranceOnRightPage: editingRightHalf, onCommitSuccess: {
+                    Task {
+                        await refreshAfterEditing()
+                        campaignPages = try? await store.printActivityPageCount(book)
+                        await loadPrintOffer(announce: true)
+                    }
+                })
             }
             .alert("无法打开页面", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("确定") { errorMessage = nil }
             } message: { Text(errorMessage ?? "") }
-            .task { await refreshAfterEditing() }
+            .task {
+                await refreshAfterEditing()
+                await loadPrintOffer(manual: true)
+                if campaign?.enrollment != nil || completedCanvas {
+                    campaignPages = try? await store.printActivityPageCount(book)
+                    await loadPrintOffer(manual: true, announce: completedCanvas)
+                }
+            }
             .task(id: "\(book.catalogRevision)-\(spread)-\(opened)") { await preloadNeighboringSpreads() }
             .background {
                 (isImmersive ? Color.black : Color(uiColor: .systemGroupedBackground))
@@ -164,22 +340,23 @@ struct DiaryPhysicalBookScreen: View {
             .navigationTitle(book.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                if onShowList == nil {
+                    ToolbarItem(placement: .topBarLeading) { Button("完成") { dismiss() } }
+                }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { activityOpen = true } label: { printEntryIcon }
+                        .accessibilityLabel("实体书定制")
+                        .accessibilityValue(campaign?.experience?.heading ?? "查看规格与价格")
+                    #if DEBUG
                     Menu {
                         Toggle("逐层呈现", isOn: $readingAnimation)
                         Toggle("阅读触感", isOn: $readingHaptics)
                         Toggle("纸张音效", isOn: $readingSound)
                     } label: { Image(systemName: "waveform") }
                     .accessibilityLabel("阅读动画与反馈")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
+                    #endif
                     Button { showingExport = true } label: { Image(systemName: "square.and.arrow.up") }
                         .accessibilityLabel("导出手帐").disabled(book.pages.isEmpty || turningCover)
-                }
-                if onShowList == nil {
-                    ToolbarItem(placement: .topBarLeading) { Button("完成") { dismiss() } }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
                     if let onShowList {
                         Button(action: onShowList) { Image(systemName: "list.bullet") }
                             .accessibilityLabel("页面列表")
@@ -360,6 +537,321 @@ struct DiaryPhysicalBookScreen: View {
             }
         } catch is CancellationError { }
         catch { /* 预取失败由实际打开页面时的重试入口处理。 */ }
+    }
+
+    private var printEntryIcon: some View {
+        let experience = campaign?.experience
+        let hasActivity = campaign?.id != nil && campaign?.enrollment?.withdrawn_at == nil
+        let progress = min(1, max(0, experience?.progress ?? 0))
+        let unread = !(experience?.result_key.isEmpty ?? true) && experience?.result_key != printReadKey
+        return ZStack {
+            if hasActivity {
+                Circle().stroke(.primary.opacity(0.2), lineWidth: 1.5)
+                Circle().trim(from: 0, to: progress)
+                    .stroke(.primary, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Circle().fill(.primary.opacity(0.5)).frame(width: 3, height: 3).offset(y: 13)
+            }
+            Image(systemName: "book.closed").font(.system(size: 15, weight: .medium))
+            if experience?.completed == true && hasActivity {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 9))
+                    .foregroundStyle(Color(red: 0.7, green: 0.54, blue: 0.27)).offset(x: 10, y: 10)
+            } else if experience?.pending == true && hasActivity {
+                Circle().stroke(.primary, lineWidth: 1.5).frame(width: 4, height: 4)
+                    .offset(x: CGFloat(sin(progress * 2 * .pi)) * 13,
+                            y: -CGFloat(cos(progress * 2 * .pi)) * 13)
+            }
+            if unread { Circle().fill(.primary).frame(width: 5, height: 5).offset(x: 12, y: -12) }
+        }
+        .frame(width: 28, height: 28)
+        .contentShape(Rectangle())
+    }
+
+    private var printCenter: some View {
+        let ink = Color(red: 0.17, green: 0.25, blue: 0.19)
+        let paper = Color(red: 0.98, green: 0.96, blue: 0.91)
+        let experience = campaign?.experience
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Image("PrintCampaignHero")
+                    .resizable().scaledToFill()
+                    .frame(height: 170).frame(maxWidth: .infinity).clipped()
+                    .accessibilityHidden(true)
+                    .overlay(alignment: .bottomTrailing) {
+                        Text("样书效果图").font(.caption2)
+                            .padding(6).foregroundStyle(.white)
+                            .background(.black.opacity(0.6), in: Capsule()).padding(10)
+                    }
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("实体书定制").font(.system(.title2, design: .serif, weight: .bold))
+                    Text(book.title).font(.subheadline)
+                    if loadingPrintContext { ProgressView("正在确认进度与优惠") }
+                    if let error = printContextError {
+                        Text(error).font(.footnote)
+                        Button("重新加载") { Task { await refreshPrintCenter() } }
+                    }
+                    if let offer = campaign, let experience, offer.id != nil {
+                        printActivityContent(offer, experience: experience)
+                    } else if experience?.status == "no_activity" {
+                        Text("把旅途留在纸上").font(.headline)
+                        Text("选择规格，先预览成品，再确认地址与费用。").font(.subheadline)
+                    }
+                    if let previous = campaign?.previous_campaigns, !previous.isEmpty {
+                        DisclosureGroup("历史活动") {
+                            ForEach(Array(previous.enumerated()), id: \.offset) { _, item in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(item.title).font(.subheadline.weight(.semibold))
+                                    Text(item.heading).font(.footnote)
+                                    Text(item.detail).font(.caption)
+                                }.padding(.vertical, 6)
+                            }
+                        }.font(.subheadline)
+                    }
+                    printProductList
+                    HStack {
+                        Button("我的优惠券") { navigatePrint(.wallet) }
+                        Spacer()
+                        Button("印制订单") { navigatePrint(.orders) }
+                    }.font(.subheadline)
+                }.padding(.horizontal, 22)
+            }.padding(.bottom, 18)
+        }
+        .foregroundStyle(ink).tint(ink).background(paper)
+        .overlay(alignment: .topTrailing) {
+            Button { activityOpen = false } label: {
+                Image(systemName: "xmark").font(.system(size: 15, weight: .semibold))
+                    .frame(width: 44, height: 44).background(paper, in: Circle())
+            }.buttonStyle(.plain).accessibilityLabel("关闭实体书定制").padding(12)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 8) {
+                Button {
+                    performPrintAction(experience?.action ?? "checkout")
+                } label: {
+                    Group {
+                        if enrolling { ProgressView().tint(.white) }
+                        else { Text(experience?.action_title ?? "预览并定制").fontWeight(.semibold) }
+                    }
+                    .foregroundStyle(.white).frame(maxWidth: .infinity, minHeight: 46)
+                    .background(ink, in: RoundedRectangle(cornerRadius: 14))
+                }.buttonStyle(.plain)
+                    .disabled(enrolling || loadingPrintContext || printContextError != nil)
+                if experience?.can_resubmit == true {
+                    Button("完善后重新提交") { Task { await enrollForPrint() } }.font(.footnote).disabled(enrolling)
+                } else if experience?.can_update == true {
+                    Button("更新本册进度") { Task { await enrollForPrint() } }.font(.footnote).disabled(enrolling)
+                }
+                if experience?.can_withdraw == true {
+                    Button("退出活动") { confirmingWithdrawal = true }.font(.footnote).disabled(enrolling)
+                }
+                if !activityMessage.isEmpty { Text(activityMessage).font(.footnote) }
+            }.padding(.horizontal, 22).padding(.vertical, 10).background(paper)
+        }
+        .confirmationDialog("退出活动？", isPresented: $confirmingWithdrawal, titleVisibility: .visible) {
+            Button("确认退出", role: .destructive) { Task { await withdrawFromPrintCampaign() } }
+            Button("继续参加", role: .cancel) {}
+        } message: {
+            Text(campaign?.enrollment?.coupon_percent == nil
+                 ? "退出后，本次进度将结束，待核验申请会撤回。作品仍可继续编辑。"
+                 : "退出后，本期进度和升级将结束。已发优惠券及关联订单可在券包和订单中查看。")
+        }
+    }
+
+    private var printProductList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("规格与费用").font(.headline)
+            ForEach(printProducts) { product in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("\(product.title) · \(product.width_mm) × \(product.height_mm) mm").font(.subheadline.weight(.medium))
+                    Text(product.free_printing == true ? "印制费 ¥0" : "每册基础价 \(PrintText.money(product.base_fen))，每内页面 \(PrintText.money(product.page_fen))")
+                        .font(.footnote)
+                    Text("运费 \(PrintText.money(product.shipping_fen)) · \(product.min_pages)–\(product.max_pages) 个内页面")
+                        .font(.footnote)
+                }
+            }
+            if printProducts.isEmpty && !loadingPrintContext && printContextError == nil {
+                Text("暂无可用印制规格").font(.footnote)
+            }
+            if campaign?.id != nil {
+                Button("直接预览并定制") {
+                    preferredPrintCoupon = nil
+                    navigatePrint(.checkout)
+                }.font(.subheadline)
+            }
+        }
+    }
+
+    private func printActivityContent(_ offer: Campaign, experience: Experience) -> some View {
+        let approved = offer.enrollment?.approved_pages ?? 0
+        return VStack(alignment: .leading, spacing: 14) {
+            Text(offer.title ?? "本册装订礼").font(.subheadline.weight(.semibold))
+            if experience.historical { Text("历史活动").font(.caption).foregroundStyle(.secondary) }
+            HStack(spacing: 10) {
+                ForEach(experience.rewards, id: \.threshold) { reward in
+                    printMilestone("\(reward.threshold) 页", reward.title, approved >= reward.threshold)
+                }
+            }
+            Text(experience.heading).font(.headline)
+            if offer.enrollment?.withdrawn_at == nil && offer.enrollment != nil {
+                ProgressView(value: experience.progress).tint(Color(red: 0.17, green: 0.25, blue: 0.19))
+            }
+            Text(experience.detail).font(.footnote)
+            if let raw = experience.coupon_expires_at, let expiry = PrintText.date(raw) {
+                Text("券有效期至 \(expiry.formatted(date: .abbreviated, time: .shortened))").font(.footnote)
+            }
+            if experience.coupon_id != nil {
+                HStack {
+                    Button("查看优惠券") { navigatePrint(.wallet) }
+                    if experience.coupon_available == true && offer.enrollment?.coupon_percent == 50 {
+                        Button("使用第一档优惠") {
+                            preferredPrintCoupon = experience.coupon_id
+                            navigatePrint(.checkout)
+                        }
+                    }
+                }.font(.subheadline)
+                if offer.enrollment?.coupon_percent == 50 {
+                    Text("使用第一档券后，本期奖励结束。").font(.caption)
+                }
+            }
+            DisclosureGroup("活动规则与提交记录") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("适用 \(offer.product ?? "指定规格") · 优惠覆盖 \(offer.included_pages ?? 0) 个印制页 · 每券最高抵扣 \(PrintText.money(offer.cap_fen ?? 0))，运费另计。")
+                    if let raw = offer.ends_at, let end = PrintText.date(raw) {
+                        Text("报名与申报截止：\(end.formatted(date: .abbreviated, time: .shortened))")
+                    }
+                    Text("本册排版共 \(book.bodyPageCount) 页，有效内页以核验结果为准。")
+                    ForEach(Array(experience.history.enumerated()), id: \.offset) { _, event in
+                        Text(printHistoryText(event))
+                    }
+                }.font(.footnote).padding(.vertical, 8)
+            }.font(.subheadline)
+        }
+    }
+
+    private func printHistoryText(_ event: History) -> String {
+        let date = PrintText.date(event.at)?.formatted(date: .abbreviated, time: .shortened) ?? ""
+        switch event.event {
+        case "progress": return "\(date) · 申报 \(event.reported_pages ?? 0) 页"
+        case "approved": return "\(date) · 已核验 \(event.approved_pages ?? 0) 页"
+        case "returned", "rejected": return "\(date) · \(event.reason ?? "请完善作品后重新提交")"
+        case "withdrawn": return "\(date) · 退出活动"
+        default: return "\(date) · 报名"
+        }
+    }
+
+    private func navigatePrint(_ destination: CampaignDestination) {
+        campaignDestination = destination
+        activityOpen = false
+    }
+
+    private func performPrintAction(_ action: String) {
+        switch action {
+        case "join", "rejoin", "submit": Task { await enrollForPrint() }
+        case "rework":
+            if let raw = campaign?.experience?.review_page_ids?.first, let id = UUID(uuidString: raw),
+               book.contentPages.contains(where: { $0.id == id }) {
+                reveal(id)
+            }
+            activityOpen = false
+        case "wallet": navigatePrint(.wallet)
+        case "order":
+            selectedPrintOrder = campaign?.experience?.order_id
+            navigatePrint(.order)
+        case "checkout":
+            preferredPrintCoupon = campaign?.experience?.coupon_available == true ? campaign?.experience?.coupon_id : nil
+            navigatePrint(.checkout)
+        default: activityOpen = false
+        }
+    }
+
+    private var printReadStorageKey: String { "print.read.\(store.ownerID).\(book.id.uuidString)" }
+
+    private func refreshPrintCenter() async {
+        loadingPrintContext = true
+        printContextError = nil
+        do { campaignPages = try await store.printActivityPageCount(book) }
+        catch { printContextError = error.localizedDescription }
+        let countError = printContextError
+        await loadPrintOffer(manual: true)
+        if let countError { printContextError = countError }
+        do { printProducts = try await PrintOrderService.shared.products(owner: store.ownerID) }
+        catch { printContextError = error.localizedDescription }
+        loadingPrintContext = false
+    }
+
+    private func printMilestone(_ pages: String, _ reward: String, _ reached: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(pages, systemImage: reached ? "checkmark.circle.fill" : "seal")
+                .font(.system(.headline, design: .serif, weight: .semibold))
+            Text(reward).font(.caption)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(.white.opacity(0.62), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func loadPrintOffer(manual: Bool = false, preserveOnFailure: Bool = false, announce: Bool = false) async {
+        let requestID = UUID()
+        printRequestID = requestID
+        do {
+            let path = "campaign/?book=\(book.id.uuidString)&pages=\(campaignPages ?? 0)"
+            let offer: Campaign = try await PrintOrderService.shared.request(path, owner: store.ownerID)
+            guard printRequestID == requestID else { return }
+            campaign = offer
+            printReadKey = UserDefaults.standard.string(forKey: printReadStorageKey) ?? ""
+            printContextError = nil
+            let key = offer.experience?.result_key ?? ""
+            let changed = !key.isEmpty && key != printReadKey && key != lastAutomaticPrintKey
+            let allowed = UserDefaults.standard.double(forKey: printOfferSeenKey) < Date().timeIntervalSince1970 - 86400
+            if offer.id != nil && !activityOpen && ((announce && allowed) || (changed && lastAutomaticPrintKey != "")) {
+                showPrintOffer = true
+                lastAutomaticPrintKey = key
+                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: printOfferSeenKey)
+            }
+            if offer.id == nil { showPrintOffer = false }
+            if activityOpen {
+                printReadKey = key
+                UserDefaults.standard.set(key, forKey: printReadStorageKey)
+            }
+            if lastAutomaticPrintKey.isEmpty { lastAutomaticPrintKey = key }
+        } catch {
+            if printRequestID == requestID {
+                printContextError = error.localizedDescription
+                if !preserveOnFailure && campaign == nil { showPrintOffer = false }
+            }
+        }
+    }
+
+    private func enrollForPrint() async {
+        guard let id = campaign?.id, !enrolling else { return }
+        enrolling = true
+        defer { enrolling = false }
+        do {
+            let service = PrintOrderService.shared
+            let count = try await store.printActivityPageCount(book)
+            let payload = try service.json(["book_id": book.id.uuidString, "pages": count,
+                                            "rejoin": campaign?.enrollment?.withdrawn_at != nil,
+                                            "attempt": campaign?.enrollment?.attempt ?? 1])
+            let result: EnrollmentResult = try await service.request("campaign/\(id)/join/", owner: store.ownerID, body: payload)
+            campaignPages = count
+            if let enrollment = result.enrollment { campaign?.enrollment = enrollment }
+            activityMessage = ""
+            await loadPrintOffer(manual: true, preserveOnFailure: true)
+        } catch { activityMessage = error.localizedDescription }
+    }
+
+    private func withdrawFromPrintCampaign() async {
+        guard let id = campaign?.id, let attempt = campaign?.enrollment?.attempt, !enrolling else { return }
+        enrolling = true
+        defer { enrolling = false }
+        do {
+            let service = PrintOrderService.shared
+            let payload = try service.json(["book_id": book.id.uuidString, "attempt": attempt])
+            let result: EnrollmentResult = try await service.request("campaign/\(id)/withdraw/", owner: store.ownerID, body: payload)
+            if campaign?.id == id { campaign?.enrollment = result.enrollment }
+            activityMessage = result.message
+            await loadPrintOffer(manual: true, preserveOnFailure: true)
+        } catch { activityMessage = error.localizedDescription }
     }
 
     private func refreshAfterEditing() async {

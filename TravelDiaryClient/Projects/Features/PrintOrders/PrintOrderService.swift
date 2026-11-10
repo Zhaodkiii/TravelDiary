@@ -114,10 +114,10 @@ final class PrintOrderService: ObservableObject, PrintPaymentClient {
         return result
     }
     func order(_ id: String, owner: String) async throws -> PrintOrder { try await request("orders/\(id)/", owner: owner) }
-    func quote(product: PrintProduct, pages: Int, quantity: Int, address: PrintAddress, owner: String) async throws -> PrintQuote {
+    func quote(product: PrintProduct, pages: Int, quantity: Int, address: PrintAddress, owner: String, couponSelection: String = "auto") async throws -> PrintQuote {
         let wire=address.submissionAddress(structured:RegionRepository.shared.supportsStructuredAddress)
         let encoded=try JSONSerialization.jsonObject(with:JSONEncoder().encode(wire))
-        return try await request("quotes/", owner: owner, body: json(["product_id":product.id,"page_count":pages,"quantity":quantity,"region":wire.region,"address":encoded]))
+        return try await request("quotes/", owner: owner, body: json(["coupon_selection":couponSelection,"product_id":product.id,"page_count":pages,"quantity":quantity,"region":wire.region,"address":encoded]))
     }
     func action(_ action: String, order: PrintOrder, owner: String, message: String = "", key: UUID) async throws -> PrintOrder {
         try await request("orders/\(order.id)/actions/", owner: owner,

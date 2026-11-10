@@ -109,8 +109,14 @@ nonisolated struct PrintSubmission: Codable, Sendable {
     let files: [PrintFile]
     let confirmed: Bool
     let quote_total_fen: Int
+    var coupon_id: String? = nil
     var revise_order_id: String? = nil
     var order_revision: Int? = nil
+}
+nonisolated struct PrintCouponChoice: Decodable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let discount_fen: Int
 }
 nonisolated struct PrintQuote: Decodable, Sendable {
     let total_fen: Int
@@ -119,10 +125,13 @@ nonisolated struct PrintQuote: Decodable, Sendable {
     let page_count: Int
     let sheets: Int
     let product_revision: Int
+    var candidates: [PrintCouponChoice]? = nil
+    var selected_coupon: PrintCouponChoice? = nil
 }
 nonisolated struct PrintOrder: Decodable, Identifiable, Sendable {
     var production_fen: Int? = nil
     var shipping_fen: Int? = nil
+    var selected_coupon: PrintCouponChoice? = nil
     var payment_expires_at: String?
     var payments: [PrintPaymentRecord]?
     var refunds: [PrintRefundRecord]?
@@ -156,8 +165,9 @@ nonisolated struct PrintOrder: Decodable, Identifiable, Sendable {
     let shipments: [Shipment]
     var hasFeeBreakdown: Bool {
         guard let production_fen, let shipping_fen, production_fen >= 0, shipping_fen >= 0,
-              production_fen <= total_fen, shipping_fen <= total_fen else { return false }
-        return production_fen == total_fen - shipping_fen
+              shipping_fen <= total_fen else { return false }
+        let discount = selected_coupon?.discount_fen ?? 0
+        return discount >= 0 && discount <= production_fen && production_fen - discount == total_fen - shipping_fen
     }
     var canPay: Bool { total_fen > 0 && payment_state == "unpaid" && state != "cancelled" && allowed_actions.contains("pay") }
     var paymentDeadline: Date? { payment_expires_at.flatMap(PrintText.date) }

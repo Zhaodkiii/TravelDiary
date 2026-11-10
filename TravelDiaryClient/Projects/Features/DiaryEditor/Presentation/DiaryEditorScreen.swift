@@ -14,6 +14,7 @@ struct DiaryEditorScreen: View {
     var onNewPage: (() async throws -> Void)? = nil
     var discardEmptyDraft: (() async throws -> Bool)? = nil
     var onFinished: (() async throws -> Void)? = nil
+    var onCommitSuccess: (() -> Void)? = nil
     @State private var exportingDiagnostics = false
     @State private var diagnosticExport: DiagnosticExport?
     private struct DiagnosticExport: Identifiable { let id = UUID(); let url: URL }
@@ -316,6 +317,7 @@ struct DiaryEditorScreen: View {
         do {
             if try await discardEmptyDraft?() == true { dismiss(); return }
             if await session.commitToParent(beforeClosing: onFinished) {
+                onCommitSuccess?()
                 dismiss()
             }
         } catch { session.errorMessage = error.localizedDescription }

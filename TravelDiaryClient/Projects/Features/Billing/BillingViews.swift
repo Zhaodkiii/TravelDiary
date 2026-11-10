@@ -237,6 +237,17 @@ struct BillingContentAction: View {
 }
 
 struct MembershipPurchaseScreen: View {
+    private struct Gift: Decodable {
+        let id: Int?
+        let title: String?
+        let sku: String?
+        let product: String?
+        let percent: Int?
+        let cap_fen: Int?
+    }
+    private struct Reservation: Decodable { let message: String }
+    @State private var gift: Gift?
+
     let owner: String
     @ObservedObject private var store = BillingStore.shared
     @State private var offering: RevenueCat.Offering?
@@ -255,6 +266,10 @@ struct MembershipPurchaseScreen: View {
                         Link("管理或取消 Apple 订阅", destination: URL(string: "https://apps.apple.com/account/subscriptions")!)
                     }
                     if store.membership?.active != true {
+                        if let gift, gift.id != nil {
+                            Text(gift.title ?? "年费开通礼").font(.headline)
+                            Text("指定年费方案首次付费赠\(gift.product ?? "实体书")\(gift.percent == 100 ? "标准装订免费券" : "半价券")，最高抵扣 \(PrintText.money(gift.cap_fen ?? 0))，运费另计。").font(.caption)
+                        }
                         Button("开通会员") { showPaywall = true }
                             .buttonStyle(.borderedProminent)
                             .disabled(offering == nil || loading || store.busy)
@@ -296,12 +311,23 @@ struct MembershipPurchaseScreen: View {
                             defer { resume(shouldProceed: false) }
                             do {
                                 guard store.membership?.member_content_count ?? 0 > 0 else { throw BillingFailure("会员内容正在准备中") }
+                                if let id = gift?.id, gift?.sku == package.storeProduct.productIdentifier {
+                                    let service = PrintOrderService.shared
+                                    let body = try service.json(["plan_id":id,"sku":package.storeProduct.productIdentifier])
+                                    let _: Reservation = try await service.request("campaign/annual/", owner: owner, body: body)
+                                }
                                 let purchased = try await store.purchaseMembership(package, owner: owner)
                                 if purchased && store.membership?.active == true { showPaywall = false }
                                 else if purchased { error = "购买已记录，请同步会员状态，勿重复付款。" }
                             } catch {
                                 let nsError = error as NSError
-                                if nsError.code != RevenueCat.ErrorCode.purchaseCancelledError.rawValue {
+                                if nsError.code == RevenueCat.ErrorCode.purchaseCancelledError.rawValue,
+                                   let id = gift?.id, gift?.sku == package.storeProduct.productIdentifier {
+                                    let service = PrintOrderService.shared
+                                    if let body = try? service.json(["plan_id":id,"sku":package.storeProduct.productIdentifier,"cancelled":true]) {
+                                        let _: Reservation? = try? await service.request("campaign/annual/", owner: owner, body: body)
+                                    }
+                                } else if nsError.code != RevenueCat.ErrorCode.purchaseCancelledError.rawValue {
                                     self.error = nsError.code == RevenueCat.ErrorCode.paymentPendingError.rawValue
                                         ? "购买等待批准，批准后请同步会员状态。" : error.localizedDescription
                                 }
@@ -320,7 +346,11 @@ struct MembershipPurchaseScreen: View {
         loading = true; defer { loading = false }
         do {
             try await store.refreshMembership(owner: owner)
-            if store.membership?.active != true { offering = try await store.membershipOffering(owner: owner) }
+            if store.membership?.active != true {
+                offering = try await store.membershipOffering(owner: owner)
+                let offer: Gift? = try? await PrintOrderService.shared.request("campaign/annual/", owner: owner)
+                gift = offering?.availablePackages.contains(where: { $0.storeProduct.productIdentifier == offer?.sku && $0.packageType == .annual }) == true && store.membership?.wallet_domain == "production" ? offer : nil
+            }
         } catch { self.error = error.localizedDescription }
     }
     private func restore() async {
