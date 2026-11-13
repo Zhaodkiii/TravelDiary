@@ -73,6 +73,21 @@ nonisolated enum DiaryAIPageStyle: String, Codable, CaseIterable, Identifiable, 
     case .scenic: "paper"; case .illustrated, .gentle: "watercolor"
     case .vintage: "vintage"; case .clean: "clean"; case .playful: "doodle"
     } }
+    func nativeStickerWidth(canvas: CGSize, photoWidth: CGFloat, featured: Bool, crowded: Bool) -> CGFloat {
+        let share: CGFloat
+        switch self {
+        case .scenic: share = 0.32
+        case .illustrated: share = 0.35
+        case .vintage: share = 0.36
+        case .clean: share = 0.26
+        case .playful: share = 0.44
+        case .gentle: share = 0.30
+        }
+        let multiplier: CGFloat = (featured ? 1.15 : 1) * (crowded ? 0.88 : 1)
+        return min(canvas.width * (featured ? 0.125 : 0.105),
+                   max(canvas.width * 0.047, photoWidth * share) * multiplier)
+    }
+
     var nativeBackgroundDirection: String { switch self {
     case .scenic: "暖白纤维纸上保留一处可辨认的真实环境局部，细线和透明纸上色层保留原色，局部毛边自然消融。"
     case .illustrated: "明亮冷压纸、透明水彩叠色和少量钢笔轮廓。景物集中于一侧，有清晰结构和水痕边缘，留白连成一片。"
@@ -102,7 +117,7 @@ nonisolated struct DiaryAIDesignSelection: Codable, Equatable, Sendable {
 
 extension DiaryAIDesignSelection {
     /// Safe fallback preserves layout intent and never crosses a spread spine.
-    func fallbackRegions(context: DiaryAIContext, allowsText: Bool, variation: Int = 0) -> [DiaryAILayoutRegion] {
+    func fallbackRegions(context: DiaryAIContext, allowsText: Bool, variation: Int = 0, native: Bool = false) -> [DiaryAILayoutRegion] {
         let photos = context.objects.filter { $0.role == "photo" && $0.editable }
         let w = Double(context.size.width), h = Double(context.size.height)
         guard w > 0, h > 0, !photos.isEmpty else { return [] }
@@ -110,7 +125,14 @@ extension DiaryAIDesignSelection {
         var result: [DiaryAILayoutRegion] = []
         var offset = 0
         for (pageIndex, range) in ranges.enumerated() {
-            let count = photos.count / ranges.count + (pageIndex < photos.count % ranges.count ? 1 : 0)
+            let balanced = photos.count / ranges.count + (pageIndex < photos.count % ranges.count ? 1 : 0)
+            let count: Int
+            if native && ranges.count == 2 && photos.count >= 4 && variation % 4 != 0 {
+                let first = max(1, min(photos.count - 1, (photos.count + 1) / 2 + (variation % 4 == 1 ? -1 : 1)))
+                count = pageIndex == 0 ? first : photos.count - first
+            } else {
+                count = balanced
+            }
             let group = Array(photos.dropFirst(offset).prefix(count)); offset += count
             guard !group.isEmpty else { continue }
             let pageWidth = range.1 - range.0
@@ -138,6 +160,11 @@ extension DiaryAIDesignSelection {
                     height = h * 0.86 - top
                     result.append(.init(role: "text", x: x + width * 0.12, y: h * 0.88, width: width * 0.76, height: h * 0.08))
                 }
+            }
+            if native {
+                let area = CGRect(x: x, y: top, width: width, height: height)
+                result += nativePhotoCells(group, in: area, variant: variation + pageIndex * 3)
+                continue
             }
             let hero = [.hero, .story, .automatic, .collage].contains(layout) && group.count > 1
             if hero && variation % 3 == 2 {
@@ -260,6 +287,54 @@ extension DiaryAIDesignSelection {
         }
     }
 
+    private func nativePhotoCells(_ photos: [DiaryAIObject], in area: CGRect, variant: Int) -> [DiaryAILayoutRegion] {
+        let across: Bool
+        let leadCount: Int
+        let leadShare: CGFloat
+        switch layout {
+        case .hero: (across, leadCount, leadShare) = (variant % 3 == 0, 1, 0.60 + CGFloat(variant % 4) * 0.04)
+        case .story: (across, leadCount, leadShare) = (variant % 2 == 0, variant % 3 == 0 ? 2 : 1, 0.58)
+        case .headline: (across, leadCount, leadShare) = (true, variant % 3 == 1 ? 2 : 1, 0.52 + CGFloat(variant % 4) * 0.04)
+        case .collage: (across, leadCount, leadShare) = (variant % 2 != 0, variant % 3 == 1 ? 2 : 1, 0.61)
+        case .editorial: (across, leadCount, leadShare) = (variant % 3 != 0, variant % 2 == 0 ? 2 : 1, 0.53)
+        case .automatic: (across, leadCount, leadShare) = (false, 1, 0.60)
+        }
+        let gap = min(area.width, area.height) * 0.045
+        let count = min(leadCount, photos.count - 1)
+        let bands: [(ArraySlice<DiaryAIObject>, CGRect)]
+        if count == 0 {
+            bands = [(photos[...], area)]
+        } else if across {
+            let lead = (area.height - gap) * leadShare
+            bands = [(photos.prefix(count), CGRect(x: area.minX, y: area.minY, width: area.width, height: lead)),
+                     (photos.dropFirst(count), CGRect(x: area.minX, y: area.minY + lead + gap, width: area.width, height: area.height - lead - gap))]
+        } else {
+            let lead = (area.width - gap) * leadShare
+            bands = [(photos.prefix(count), CGRect(x: area.minX, y: area.minY, width: lead, height: area.height)),
+                     (photos.dropFirst(count), CGRect(x: area.minX + lead + gap, y: area.minY, width: area.width - lead - gap, height: area.height))]
+        }
+        return bands.enumerated().flatMap { bandIndex, band in
+            let (items, rect) = band
+            let weights = items.enumerated().map { index, photo -> CGFloat in
+                let aspect = max(0.35, min(2.8, photo.bounds.width / max(1, photo.bounds.height)))
+                let fit = across ? sqrt(aspect) : 1 / sqrt(aspect)
+                let accent: CGFloat = index == (variant + bandIndex) % items.count ? 1.36 : 0.88
+                return fit * accent
+            }
+            let usable = (across ? rect.width : rect.height) - gap * CGFloat(items.count - 1)
+            let total = weights.reduce(0, +)
+            var offset: CGFloat = 0
+            return zip(items, weights).map { photo, weight in
+                let extent = usable * weight / total
+                let cell = across
+                    ? CGRect(x: rect.minX + offset, y: rect.minY, width: extent, height: rect.height)
+                    : CGRect(x: rect.minX, y: rect.minY + offset, width: rect.width, height: extent)
+                offset += extent + gap
+                return DiaryAILayoutRegion(role: "photo", objectID: photo.id.uuidString, x: cell.minX, y: cell.minY, width: cell.width, height: cell.height)
+            }
+        }
+    }
+
     /// Deterministic candidates vary page order, reading direction and group proportions.
     /// The saved seed is reused on resume. Every candidate contains all source photos.
     func nativeRegions(context: DiaryAIContext, allowsText: Bool, seed: UUID,
@@ -277,12 +352,12 @@ extension DiaryAIDesignSelection {
         case .playful: preferred = [.collage, .hero]
         case .gentle: preferred = [.story, .headline]
         }
-        var candidates: [(regions: [DiaryAILayoutRegion], score: Double, heroRatio: Double)] = []
+        var candidates: [(regions: [DiaryAILayoutRegion], score: Double, family: Int)] = []
         for (styleIndex, style) in variants.enumerated() {
             for variant in 0..<48 {
                 var design = self
                 design.layout = style
-                var regions = design.fallbackRegions(context: context, allowsText: allowsText, variation: variant)
+                var regions = design.fallbackRegions(context: context, allowsText: allowsText, variation: variant, native: variant % 4 != 0)
                 if variant % 4 >= 2, let spine = context.spineX, abs(spine * 2 - Double(context.size.width)) < 0.01 {
                     for index in regions.indices {
                         regions[index].x += regions[index].x < spine
@@ -357,17 +432,15 @@ extension DiaryAIDesignSelection {
                         if let distance { score *= 1 + 0.10 * max(0, 1 - distance / context.size.width) }
                     }
                 }
-                candidates.append((regions, score, heroRatio))
+                candidates.append((regions, score, styleIndex * 12 + variant % 12))
             }
         }
         guard let bestScore = candidates.map(\.score).max() else { return [] }
-        let strongHero = layout == .automatic
-            ? candidates.filter { $0.score >= bestScore * 0.87 && $0.heroRatio >= 1.28 }
-            : []
-        let pool = strongHero.isEmpty ? candidates : strongHero
-        let poolBest = pool.map(\.score).max() ?? bestScore
-        let qualified = pool.filter { $0.score >= poolBest * 0.92 }
-        let seedValue = bytes.reduce(UInt64(0)) { ($0 &* 31) &+ UInt64($1) }
-        return qualified[Int(seedValue % UInt64(qualified.count))].regions
+        let qualified = candidates.filter { $0.score >= bestScore * 0.72 }
+        let families = Dictionary(grouping: qualified, by: \.family)
+        let seedValue = bytes.reduce(UInt64(0xcbf29ce484222325)) { ($0 ^ UInt64($1)) &* 0x100000001b3 }
+        let keys = families.keys.sorted()
+        let family = families[keys[Int(seedValue % UInt64(keys.count))]]!
+        return family[Int((seedValue >> 32) % UInt64(family.count))].regions
     }
 }

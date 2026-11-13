@@ -7,8 +7,10 @@ import CoreText
     private weak var session: DiaryEditorSession?
     var autoFitPhotoRegions = false
     var fitsTextToPlannedRegions = false
+    var fitsNativeStickerSizes = false
     var limitsTextToAvailableRegions = false
     var rendersDraftPreview = true
+    private struct StickerSpaceUnavailable: Error {}
     private var pendingStickerPlacements = Set<UUID>()
     var layoutRegions: [DiaryAILayoutRegion] = []
     var allowedBatchIDs: Set<UUID>?
@@ -144,6 +146,20 @@ import CoreText
         guard let base else { throw DiaryAIError.invalid("快照缺失") }
         return try await pageImage(base)
     }
+    func backgroundCompositePreview(_ bytes: Data) async throws -> Data {
+        guard var document = base, let context, let underlay = UIImage(data: bytes)?.cgImage else {
+            throw DiaryAIError.invalid("无法预览背景与前景的合成效果")
+        }
+        let excluded = excludedRenderIDs
+        document.objects[context.contentID]?.layers.removeAll {
+            excluded.contains($0.id) || $0.frameTargetID.map(excluded.contains) == true
+        }
+        document.objects[context.contentID]?.background = nil
+        let image = try await DiaryPageRenderer.aiPreview(document, contentID: context.contentID,
+                                                          images: images, size: context.size, underlay: underlay)
+        return try await DiaryAIImageWork.jpeg(image)
+    }
+
     func initialImages(_ request: DiaryAIRequest) async throws -> [DiaryAIImage] {
         guard let base, let context else { throw DiaryAIError.invalid("页面快照缺失") }
         if request.action == .writing && !request.understandsPhotos && request.selectedOnly { return [] }
@@ -242,7 +258,7 @@ import CoreText
         return pages.map { $0.insetBy(dx: margin, dy: margin) }
     }
 
-    private static func freeTextRects(_ regions: [CGRect], excluding obstacle: CGRect, minimum: CGSize) -> [CGRect] {
+    static func freeTextRects(_ regions: [CGRect], excluding obstacle: CGRect, minimum: CGSize) -> [CGRect] {
         regions.flatMap { region -> [CGRect] in
             let overlap = region.intersection(obstacle)
             guard !overlap.isEmpty else { return [region] }
@@ -349,7 +365,39 @@ import CoreText
         }
         layer.size.height = DiaryPageRenderer.textBounds(layer).height
     }
-    private func place(_ operation: DiaryAIOperation, id: UUID, document: inout DiaryDocument, context: DiaryAIContext, finalStickerPlacement: Bool = false) throws {
+    static func nearbyStickerPlacement(_ bounds: CGRect, in page: CGRect, text: [CGRect],
+                                      photoCores: [CGRect], stickers: [CGRect]) -> CGRect {
+        let fit = min(1, page.width / bounds.width, page.height / bounds.height)
+        let obstacles = text + photoCores + stickers
+        let distanceUnit = max(1, min(page.width, page.height))
+        var best: (rect: CGRect, score: CGFloat)?
+        for factor: CGFloat in [1, 0.82, 0.68] {
+            let scale = fit * factor
+            let width = bounds.width * scale, height = bounds.height * scale
+            let maxX = max(page.minX, page.maxX - width), maxY = max(page.minY, page.maxY - height)
+            let xs: [CGFloat] = [page.minX, maxX, bounds.midX - width / 2] + obstacles.flatMap { [$0.minX - width - 1, $0.maxX + 1] }
+            let ys: [CGFloat] = [page.minY, maxY, bounds.midY - height / 2] + obstacles.flatMap { [$0.minY - height - 1, $0.maxY + 1] }
+            for x in Set(xs.map { min(max($0, page.minX), maxX) }).sorted() {
+                for y in Set(ys.map { min(max($0, page.minY), maxY) }).sorted() {
+                    let candidate = CGRect(x: x, y: y, width: width, height: height)
+                    func overlap(_ areas: [CGRect]) -> CGFloat {
+                        areas.reduce(0) { result, area in
+                            let intersection = candidate.intersection(area)
+                            guard !intersection.isNull else { return result }
+                            return result + intersection.width * intersection.height / max(1, min(width * height, area.width * area.height))
+                        }
+                    }
+                    let distance = hypot(candidate.midX - bounds.midX, candidate.midY - bounds.midY) / distanceUnit
+                    let score = distance + (1 - scale) * 0.7 + overlap(stickers) * 0.35
+                        + overlap(photoCores) * 3 + overlap(text) * 20
+                    if best.map({ score < $0.score }) ?? true { best = (candidate, score) }
+                }
+            }
+        }
+        return best?.rect ?? bounds
+    }
+
+    private func place(_ operation: DiaryAIOperation, id: UUID, document: inout DiaryDocument, context: DiaryAIContext, finalStickerPlacement: Bool = false, allowsStickerOverlap: Bool = false) throws {
         guard var layer = document.layer(id) else { throw DiaryAIError.invalid("对象不存在") }
         let siblings = document.objects[context.contentID]!.layers
         try require(layer.transform.warp == nil, "透视变形对象需保留原位置，请先在编辑器内调整")
@@ -479,8 +527,15 @@ import CoreText
                 if let nearest {
                     layer.transform.position.x += nearest.midX - bounds.midX
                     layer.transform.position.y += nearest.midY - bounds.midY
+                } else if allowsStickerOverlap {
+                    let nearby = Self.nearbyStickerPlacement(bounds, in: safePage, text: textAreas,
+                                                            photoCores: photoCores, stickers: blockers)
+                    layer.transform.scale *= nearby.width / bounds.width
+                    let resized = DiaryPageRenderer.bounds(layer, document: document, siblings: siblings).applying(layer.transform.matrix)
+                    layer.transform.position.x += nearby.midX - resized.midX
+                    layer.transform.position.y += nearby.midY - resized.midY
                 } else if finalStickerPlacement {
-                    throw DiaryAIError.invalid("贴纸\(id)在本页候选位置中找不到可避开文字与照片主体的安全位置，请局部调整此贴纸。")
+                    throw StickerSpaceUnavailable()
                 }
             }
         }
@@ -667,30 +722,46 @@ import CoreText
                 return areaA == areaB ? left.uuidString < right.uuidString : areaA > areaB
             }
             let original = copy
-            var placementError: Error?
+            var needsOverlapFallback = false
             // Retry bounded orderings from the same candidate so an early small
             // sticker cannot permanently consume the only large free region.
-            for attempt in 0..<max(1, stickers.count * 2) {
+            let attemptsPerSize = max(1, stickers.count * 2)
+            let sizeFactors = fitsNativeStickerSizes ? [1.0, 0.82, 0.68] : [1.0]
+            for attempt in 0..<(attemptsPerSize * sizeFactors.count) {
                 try Task.checkCancellation()
                 copy = original
                 pendingStickerPlacements = Set(stickers)
-                var order = attempt < stickers.count ? stickers : Array(stickers.reversed())
+                let orderAttempt = attempt % attemptsPerSize
+                let sizeFactor = sizeFactors[attempt / attemptsPerSize]
+                var order = orderAttempt < stickers.count ? stickers : Array(stickers.reversed())
                 if !order.isEmpty {
-                    let offset = attempt % order.count
+                    let offset = orderAttempt % order.count
                     order = Array(order.dropFirst(offset)) + Array(order.prefix(offset))
                 }
                 do {
                     for id in order {
                         var resolved = operations.last { $0.objectID == id && $0.type == "setPlacement" }!
-                        resolved.scale = nil; resolved.width = nil; resolved.angle = nil; resolved.center = nil
+                        resolved.scale = nil
+                        resolved.width = sizeFactor == 1 ? nil : resolved.width.map { $0 * sizeFactor }
+                        resolved.angle = nil; resolved.center = nil
                         try place(resolved, id: id, document: &copy, context: context, finalStickerPlacement: true)
                     }
-                    placementError = nil
+                    needsOverlapFallback = false
                     break
                 } catch is CancellationError { throw CancellationError() }
-                catch { placementError = error }
+                catch is StickerSpaceUnavailable { needsOverlapFallback = true }
             }
-            if let placementError { throw placementError }
+            if needsOverlapFallback {
+                copy = original
+                pendingStickerPlacements = Set(stickers)
+                for id in stickers {
+                    try Task.checkCancellation()
+                    let operation = DiaryAIOperation(operationID: id.uuidString, type: "setPlacement", objectID: id)
+                    try place(operation, id: id, document: &copy, context: context,
+                              finalStickerPlacement: true, allowsStickerOverlap: true)
+                }
+                warnings.append("部分贴纸已移到附近空位或与周围图层轻叠，请在预览确认。")
+            }
         }
         let siblings = copy.objects[context.contentID]!.layers
         for id in changed {

@@ -22,6 +22,31 @@ import SwiftUI
         #expect(session.saveStatus == "已保存")
     }
 
+    @Test func freeLayoutCommitsPhotosBeforeDesigningBackground() async throws {
+        let (session, root) = try await fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = try #require(UIGraphicsImageRenderer(size: CGSize(width: 500, height: 400)).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 500, height: 400))
+        }.pngData())
+        let provider = BackgroundFake(bytes)
+        let workspace = DiaryAIWorkspace(session: session, model: WorkspaceModel(), root: root,
+                                         backgroundProvider: provider)
+        var request = DiaryAIRequest.defaults(.relayout)
+        request.layoutMode = .ai
+        request.allowsText = false
+        request.background = .init(style: "paper", saveToAlbum: false, generationMode: "textOnly")
+        await workspace.enter(request, preparingNewCreation: true)
+        workspace.processAll()
+        try await wait(workspace)
+        #expect(workspace.error == nil && workspace.pending.isEmpty)
+        #expect(workspace.backgroundRecord?.plannedOnFinalLayout == true && workspace.backgroundRecord?.layerID != nil)
+        #expect(provider.generations == 1 && provider.validations == 1)
+        let photosCommitted = try #require(workspace.events.firstIndex { $0.title == "本批已提交到画布" })
+        let designStarted = try #require(workspace.events.firstIndex { $0.title == "分析照片场景与布局呼应" })
+        #expect(photosCommitted < designStarted)
+    }
+
     @Test func automaticSaveFailureRetainsResultAndManualRetryWorks() async throws {
         let (session, root) = try await fixture(count: 1)
         defer { try? FileManager.default.removeItem(at: root) }

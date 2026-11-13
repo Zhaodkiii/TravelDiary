@@ -188,7 +188,14 @@ struct DiaryEditorScreen: View {
                         studioDesign = session.aiWorkspace.currentDesign
                     }
                     enteringCreation = false
-                    if creationAutoStart && session.aiWorkspace.active { session.aiWorkspace.processAll() }
+                    guard !Task.isCancelled else { return }
+                    if creationAutoStart && session.aiWorkspace.active {
+                        session.aiWorkspace.processAll()
+                    } else if session.aiWorkspace.active,
+                              !session.aiWorkspace.objects.contains(where: { $0.role == "photo" }),
+                              MaterialCatalogRepository.shared.pendingLibrary == nil {
+                        openAIPhotos()
+                    }
                 }
                 if MaterialCatalogRepository.shared.pendingLibrary != nil { showStickers = true }
                 if session.isRoot, let bookID = session.document.bookID {

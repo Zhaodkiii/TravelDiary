@@ -95,7 +95,7 @@ struct SettingsView: View {
 private struct DiaryAIMakingSettingsView: View {
     @AppStorage("DiaryCanvasAI.autoSaveCompletedWork") private var autoSaveCompletedWork = true
     @AppStorage(DiaryAILayoutMode.preferenceKey) private var layoutMode: DiaryAILayoutMode = .native
-    @AppStorage("DiaryCanvasAI.backgroundMode") private var mode = "guided"
+    @AppStorage("DiaryCanvasAI.backgroundMode") private var mode = "textOnly"
     var body: some View {
         Form {
             DiaryProductionQuotaSection()

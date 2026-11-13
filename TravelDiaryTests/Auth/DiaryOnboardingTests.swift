@@ -34,14 +34,12 @@ struct DiaryOnboardingTests {
         #expect(!(DiaryOnboardingPolicy(defaults: defaults).shouldPresent))
     }
 
-    @Test func testBundledSampleRendersAllConstructionStages() async throws {
-        let artwork = try await DiaryOnboardingArtwork.load()
-        #expect(artwork.size == CGSize(width: 4370, height: 3130))
-        #expect(artwork.pieces.filter { $0.stage == 1 }.count == 1)
-        #expect(artwork.pieces.filter { $0.stage == 2 }.count == 6)
-        #expect(artwork.pieces.filter { $0.stage == 3 }.count == 6)
-        #expect(artwork.pieces.filter { $0.stage == 4 }.count == 10)
-        #expect(artwork.pieces.allSatisfy { $0.image.size.width > 0 && $0.image.size.height > 0 })
+    @Test func bundledOnboardingSpreadsAreAvailable() {
+        for index in 0..<3 {
+            let image = UIImage(named: "OnboardingSpread" + String(index))
+            #expect(image != nil)
+            #expect((image?.size.width ?? 0) > (image?.size.height ?? 0))
+        }
     }
     @Test func interruptedGuideRemainsEligibleAfterBackgroundGuestLoginStarts() {
         let name = "DiaryOnboardingTests.\(UUID())"

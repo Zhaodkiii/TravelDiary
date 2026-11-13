@@ -98,11 +98,13 @@ struct DiaryPhysicalBookScreen: View {
         let enrollment: Enrollment?
     }
     @State private var campaign: Campaign?
+    @Environment(\.accountLoginContext) private var accountLoginContext
+    @State private var showingActivityLogin = false
     @State private var activityOpen = false
     @State private var activityMessage = ""
     @State private var enrolling = false
     @State private var confirmingWithdrawal = false
-    @State private var showPrintOffer = false
+    @State private var pendingFirstPrintOffer = false
     @State private var checkingOut = false
     @State private var showingCampaignWallet = false
     @State private var showingPrintOrders = false
@@ -113,13 +115,11 @@ struct DiaryPhysicalBookScreen: View {
     @State private var loadingPrintContext = false
     @State private var printContextError: String?
     @State private var printReadKey = ""
-    @State private var lastAutomaticPrintKey = ""
     @State private var printRequestID = UUID()
     @State private var campaignDestination: CampaignDestination?
     @State private var localAIFaces: Int?
     @State private var campaignPages: Int?
     private enum CampaignDestination { case checkout, wallet, orders, order }
-    private var printOfferSeenKey: String { "print.offer.\(store.ownerID).lastSeen" }
     @State private var makingCover = false
     @State private var editor: DiaryEditorSession?
     @State private var editingRightHalf = false
@@ -156,29 +156,6 @@ struct DiaryPhysicalBookScreen: View {
         }
     }
 
-    private var campaignBanner: some View {
-        HStack {
-            Button {
-                activityOpen = true
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "book.closed.fill")
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(campaign?.experience?.heading ?? campaign?.title ?? "实体书定制").font(.subheadline.weight(.semibold))
-                        Text(campaign?.experience?.detail ?? "查看装订进度与优惠")
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                    }
-                    Image(systemName: "chevron.right").font(.caption.weight(.semibold))
-                }
-            }
-            .buttonStyle(.plain)
-            Spacer()
-            Button { showPrintOffer = false } label: { Image(systemName: "xmark") }
-                .accessibilityLabel("关闭印制提示")
-        }
-        .padding(.horizontal, 24)
-    }
-
     private var readerContent: some View {
         readerLayout
             .sheet(isPresented: $activityOpen, onDismiss: {
@@ -196,8 +173,19 @@ struct DiaryPhysicalBookScreen: View {
                     .presentationDetents([.fraction(0.86), .large])
                     .presentationDragIndicator(.visible)
                     .task { await refreshPrintCenter() }
+                    .sheet(isPresented: $showingActivityLogin) {
+                        if let accountLoginContext {
+                            LoginView(viewModel: accountLoginContext.viewModel, mode: .upgradeDeviceAccount)
+                        }
+                    }
+                    .onChange(of: accountLoginContext?.isDeviceAccount) { _, isDeviceAccount in
+                        if isDeviceAccount == false {
+                            showingActivityLogin = false
+                            Task { await refreshPrintCenter() }
+                        }
+                    }
             }
-            .sheet(isPresented: $checkingOut, onDismiss: { Task { await loadPrintOffer(manual: true) } }) {
+            .sheet(isPresented: $checkingOut, onDismiss: { Task { await loadPrintOffer() } }) {
                 PrintCheckoutScreen(book: book, store: store, preferredCouponID: preferredPrintCoupon, preferredProductID: campaign?.experience?.product_id)
             }
             .sheet(isPresented: $showingCampaignWallet) {
@@ -213,7 +201,7 @@ struct DiaryPhysicalBookScreen: View {
                 }
             }
             .sheet(isPresented: Binding(get: { routedPrintOrder != nil }, set: { if !$0 { routedPrintOrder = nil } }),
-                   onDismiss: { Task { await loadPrintOffer(manual: true) } }) {
+                   onDismiss: { Task { await loadPrintOffer() } }) {
                 if let id = routedPrintOrder {
                     NavigationStack {
                         PrintOrderDetailScreen(id: id, owner: store.ownerID)
@@ -222,7 +210,7 @@ struct DiaryPhysicalBookScreen: View {
                 }
             }
             .onChange(of: scenePhase) { _, phase in
-                if phase == .active { Task { await loadPrintOffer(manual: true) } }
+                if phase == .active { Task { await loadPrintOffer() } }
             }
     }
 
@@ -230,7 +218,6 @@ struct DiaryPhysicalBookScreen: View {
             VStack(spacing: isImmersive ? 0 : 16) {
                 bookViewport
                 if !isImmersive {
-                    if showPrintOffer { campaignBanner }
                     HStack {
                         Button { if spread > 0 { spread -= 1 } else { closeBook() } } label: {
                             Image(systemName: "chevron.left")
@@ -326,7 +313,7 @@ struct DiaryPhysicalBookScreen: View {
                     Task {
                         await refreshAfterEditing()
                         campaignPages = try? await store.printActivityPageCount(book)
-                        await loadPrintOffer(announce: true)
+                        await loadPrintOffer()
                     }
                 })
             }
@@ -335,10 +322,16 @@ struct DiaryPhysicalBookScreen: View {
             } message: { Text(errorMessage ?? "") }
             .task {
                 await refreshAfterEditing()
-                await loadPrintOffer(manual: true)
-                if campaign?.enrollment != nil || completedCanvas {
+                if completedCanvas {
                     campaignPages = try? await store.printActivityPageCount(book)
-                    await loadPrintOffer(manual: true, announce: completedCanvas)
+                    pendingFirstPrintOffer = true
+                    await loadPrintOffer()
+                } else {
+                    await loadPrintOffer()
+                    if campaign?.enrollment != nil {
+                        campaignPages = try? await store.printActivityPageCount(book)
+                        await loadPrintOffer()
+                    }
                 }
             }
             .task(id: "\(book.catalogRevision)-\(spread)-\(opened)") { await preloadNeighboringSpreads() }
@@ -769,7 +762,13 @@ struct DiaryPhysicalBookScreen: View {
 
     private func performPrintAction(_ action: String) {
         switch action {
-        case "join", "rejoin", "submit": Task { await enrollForPrint() }
+        case "join", "rejoin", "submit":
+            if accountLoginContext?.isDeviceAccount == true {
+                activityMessage = ""
+                showingActivityLogin = true
+            } else {
+                Task { await enrollForPrint() }
+            }
         case "rework":
             if let raw = campaign?.experience?.review_page_ids?.first, let id = UUID(uuidString: raw),
                book.contentPages.contains(where: { $0.id == id }) {
@@ -796,7 +795,7 @@ struct DiaryPhysicalBookScreen: View {
             if campaign?.ai_pages_only != true { campaignPages = try await store.printActivityPageCount(book) } }
         catch { printContextError = error.localizedDescription }
         let countError = printContextError
-        await loadPrintOffer(manual: true)
+        await loadPrintOffer()
         if let countError { printContextError = countError }
         do { printProducts = try await PrintOrderService.shared.products(owner: store.ownerID) }
         catch { printContextError = error.localizedDescription }
@@ -814,7 +813,7 @@ struct DiaryPhysicalBookScreen: View {
         .background(.white.opacity(0.62), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private func loadPrintOffer(manual: Bool = false, preserveOnFailure: Bool = false, announce: Bool = false) async {
+    private func loadPrintOffer() async {
         let requestID = UUID()
         printRequestID = requestID
         do {
@@ -835,23 +834,23 @@ struct DiaryPhysicalBookScreen: View {
             printReadKey = UserDefaults.standard.string(forKey: printReadStorageKey) ?? ""
             printContextError = nil
             let key = offer.experience?.result_key ?? ""
-            let changed = !key.isEmpty && key != printReadKey && key != lastAutomaticPrintKey
-            let allowed = UserDefaults.standard.double(forKey: printOfferSeenKey) < Date().timeIntervalSince1970 - 86400
-            if offer.id != nil && !activityOpen && ((announce && allowed) || (changed && lastAutomaticPrintKey != "")) {
-                showPrintOffer = true
-                lastAutomaticPrintKey = key
-                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: printOfferSeenKey)
+            if pendingFirstPrintOffer {
+                pendingFirstPrintOffer = false
+                if let campaignID = offer.id, offer.experience?.historical != true {
+                    let seenKey = "print.offer.\(store.ownerID).campaign.\(campaignID).shown"
+                    if !UserDefaults.standard.bool(forKey: seenKey) {
+                        activityOpen = true
+                        UserDefaults.standard.set(true, forKey: seenKey)
+                    }
+                }
             }
-            if offer.id == nil { showPrintOffer = false }
             if activityOpen {
                 printReadKey = key
                 UserDefaults.standard.set(key, forKey: printReadStorageKey)
             }
-            if lastAutomaticPrintKey.isEmpty { lastAutomaticPrintKey = key }
         } catch {
             if printRequestID == requestID {
                 printContextError = error.localizedDescription
-                if !preserveOnFailure && campaign == nil { showPrintOffer = false }
             }
         }
     }
@@ -872,7 +871,7 @@ struct DiaryPhysicalBookScreen: View {
             campaignPages = count
             if let enrollment = result.enrollment { campaign?.enrollment = enrollment }
             activityMessage = ""
-            await loadPrintOffer(manual: true, preserveOnFailure: true)
+            await loadPrintOffer()
         } catch { activityMessage = error.localizedDescription }
     }
 
@@ -886,7 +885,7 @@ struct DiaryPhysicalBookScreen: View {
             let result: EnrollmentResult = try await service.request("campaign/\(id)/withdraw/", owner: store.ownerID, body: payload)
             if campaign?.id == id { campaign?.enrollment = result.enrollment }
             activityMessage = result.message
-            await loadPrintOffer(manual: true, preserveOnFailure: true)
+            await loadPrintOffer()
         } catch { activityMessage = error.localizedDescription }
     }
 

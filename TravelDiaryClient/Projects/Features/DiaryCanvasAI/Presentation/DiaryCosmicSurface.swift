@@ -123,12 +123,13 @@ struct DiaryCosmicSurface: UIViewRepresentable {
             encoder.setRenderPipelineState(artwork)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
         }
-        if (ending < 0 || ending < 1.5) && cardCount > 0 {
+        // Decorative lights stay behind the intact prints, keeping faces unobscured.
+        encoder.setRenderPipelineState(stars)
+        encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: 12288)
+        if (ending < 0 || ending < 1.75) && cardCount > 0 {
             encoder.setRenderPipelineState(cards)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: Int(cardCount))
         }
-        encoder.setRenderPipelineState(stars)
-        encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: 12288)
         encoder.endEncoding()
         command.present(drawable); command.commit()
     }
@@ -192,15 +193,13 @@ float deposit(float2 uv) {
     return 1.5+1.2*mix(mix(hash(n),hash(n+1),f.x),mix(hash(n+17),hash(n+18),f.x),f.y);
 }
 float ease(float a, float b, float t) { return smoothstep(a,b,t); }
-// Replenish photo-to-star streams while production is running, with no timed finish.
-// Each material has its own phase so the scene never resets as a whole.
-float materialTime(float index, float time) { return fmod(max(0.,time)+index*.85,14.); }
+// Photos stay intact. Decorative light is generated independently of their pixels.
 float2 resultSize(constant Uniforms &u) { if(u.extentX>0 && u.extentY>0) return float2(u.extentX,u.extentY); return float2(min(.88,.56*u.resultAspect/u.aspect),min(.56,.88*u.aspect/u.resultAspect)); }
 float2 atlasUV(float index,float2 uv) { return (float2(fmod(index,4.0),floor(index/4.0))+uv)/4.; }
 float3 project(float3 p,constant Uniforms &u) { float depth=max(.7,3.2-p.z); return float3(p.x/depth/u.aspect,p.y/depth,p.z); }
 float3 orbit(float i,constant Uniforms &u) {
     float a=i*2.39996+u.time*(.42+.07*sin(i));
-    return float3(cos(a)*.95,sin(a)*.90,sin(a*.7+i)*.65);
+    return float3(cos(a)*1.05,sin(a)*1.20,sin(a+i)*.85);
 }
 vertex Quad cosmicQuad(uint id [[vertex_id]]) {
     Quad out; out.position=float4(corners[id],0,1); out.uv=corners[id]*float2(.5,-.5)+.5; out.alpha=1; out.index=0; return out;
@@ -209,14 +208,14 @@ fragment float4 cosmicSpace(Quad in [[stage_in]],constant Uniforms &u [[buffer(0
     float2 p=(in.uv-.5)*float2(u.aspect,1);
     float r=length(p);
     float cloud=sin(p.x*9+u.time*.03)*sin(p.y*7-p.x*4)+sin(p.x*21+p.y*11)*.2;
-    float3 color=float3(.005,.009,.025)+float3(.028,.016,.068)*exp(-r*3)*(cloud*.3+.6);
+    float3 color=float3(.016,.035,.065)+float3(.12,.075,.028)*exp(-r*2.5)*(cloud*.3+.6);
     float core=exp(-r*r/.004);
-    color+=float3(.22,.32,.6)*core*.22;
+    color+=float3(.65,.42,.18)*core*.22;
     if(u.ending>=0) {
         float e=u.ending;
         float flash=exp(-pow((e-.65)*8,2));
         float ring=exp(-pow((r-(e-.5)*.95)*65,2))*(1-ease(.7,1.5,e))*step(.5,e);
-        color+=float3(.45,.57,.8)*flash+float3(.18,.42,.7)*ring;
+        color+=float3(.8,.64,.38)*flash+float3(.55,.32,.10)*ring*.65;
         color*=1-ease(3.8,5.5,e)*.6;
     }
     return float4(color,1);
@@ -227,42 +226,40 @@ vertex Quad cosmicCard(uint id [[vertex_id]],uint instance [[instance_id]],const
     q=float2(q.x*cos(a)-q.y*sin(a),q.x*sin(a)+q.y*cos(a));
     float3 p=center+float3(q,0);
     float contraction=u.ending<0 ? 0 : ease(0,.48,u.ending);
-    float turn=contraction*1.3;
-    p.xy=float2(p.x*cos(turn)-p.y*sin(turn),p.x*sin(turn)+p.y*cos(turn));
-    float3 position=project(p*(1-contraction),u);
+    // Gather intact prints into a small stack, never crush the photos into a light point.
+    float3 stack=float3((float(instance)-u.count*.5)*.009,float(instance)*.006,0);
+    p=mix(p,stack+float3(corners[id]*.25,0),contraction);
+    float3 position=project(p,u);
     out.position=float4(position.xy,0,1); out.uv=corners[id]*float2(.5,-.5)+.5;
-    out.alpha=ease(0,.8,u.time)*(1-(u.ending<0 ? 0 : ease(0,.35,u.ending))); out.index=float(instance); return out;
+    out.alpha=ease(float(instance)*.08,float(instance)*.08+.7,u.time);
+    out.index=float(instance); return out;
 }
+
 fragment float4 cosmicCardColor(Quad in [[stage_in]],texture2d<float> atlas [[texture(0)]],constant Uniforms &u [[buffer(0)]]) {
     constexpr sampler s(filter::linear,address::clamp_to_edge);
     float4 c=atlas.sample(s,atlasUV(in.index,in.uv));
-    // Peel each photo into particles from one edge, rather than fading the whole card.
-    float release=3.+in.uv.x*2.;
-    float phase=materialTime(in.index,u.time);
-    c.a*=in.alpha*ease(0,1.,phase)*(1-ease(release,release+1.2,phase)); return c;
+    c.a*=in.alpha; return c;
 }
+
 vertex Star cosmicStar(uint id [[vertex_id]],constant Uniforms &u [[buffer(0)]],texture2d<float> atlas [[texture(0)]]) {
     constexpr sampler s(filter::linear,address::clamp_to_edge);
     Star out; float n=float(id); float h=hash(n); float h2=hash(n+71);
     float2 cell=float2(id%128,id/128);
     float2 targetUV=(cell+.1+.8*float2(hash(n+5),hash(n+13)))/float2(128,96);
-    float index=fmod(n,max(1.,u.count));
-    float2 sourceUV=float2(hash(n+17),hash(n+35));
-    float4 source=atlas.sample(s,atlasUV(index,sourceUV));
+    // Gold lights are decoration, never fragments sampled from user photos.
     float radius=.13+pow(h,.65)*2.7;
     float angle=h*13+fmod(n,4.)*1.5708+u.time*(.2+.16/(radius+.3))+(hash(n+21)-.5)*.22;
     float3 galaxy=float3(cos(angle)*radius,sin(angle)*radius*.47,(h2-.5)*.65+sin(angle)*radius*.22);
-    // Keep the galaxy open for the entire real production wait.
-    float2 local=(sourceUV-float2(.5))*float2(.68,-.68);
-    float tilt=sin(u.time*.4+index)*.18;
-    local=float2(local.x*cos(tilt)-local.y*sin(tilt),local.x*sin(tilt)+local.y*cos(tilt));
-    float3 original=orbit(index,u)+float3(local,0);
-    float phase=materialTime(index,u.time);
-    float release=3.+sourceUV.x*2.;
-    float departure=ease(release,release+3.,phase);
-    float3 p=mix(original,galaxy,departure);
-    float alpha=mix(source.a,1.,departure)*ease(release-.3,release+.8,phase)*(1-ease(12.,14.,phase));
-    float3 color=mix(max(source.rgb,float3(.08)),mix(float3(.25,.50,1),float3(1,.64,.29),h2),.55*ease(4,9,u.time));
+    float3 p=galaxy;
+    // A separate ribbon follows each orbit, outside the photo rather than inside its pixels.
+    if(id%4==0 && u.count>0) {
+        float i=fmod(floor(n/4.),u.count);
+        float a=i*2.39996+u.time*(.42+.07*sin(i))-.18-h*.65;
+        p=float3(cos(a)*1.05,sin(a)*1.20,sin(a+i)*.85);
+        p+=float3((h2-.5)*.035,(hash(n+19)-.5)*.035,0);
+    }
+    float alpha=(.12+.24*h2)*ease(.5,2.,u.time);
+    float3 color=mix(float3(.55,.72,.86),float3(1.,.69,.28),h2);
     float size=1.2+pow(h2,12.)*4.;
     float3 projected=project(p,u);
     if(u.ending>=0) {

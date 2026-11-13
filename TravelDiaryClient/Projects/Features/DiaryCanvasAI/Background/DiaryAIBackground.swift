@@ -7,7 +7,7 @@ nonisolated struct DiaryAIBackgroundOptions: Codable, Equatable, Sendable {
     var strength = "中"
     var saveToAlbum = true
     var backgroundOnly = false
-    var generationMode: String? = UserDefaults.standard.string(forKey: "DiaryCanvasAI.backgroundMode") ?? "guided"
+    var generationMode: String? = UserDefaults.standard.string(forKey: "DiaryCanvasAI.backgroundMode") ?? "textOnly"
     var isTextOnly: Bool { generationMode == "textOnly" }
 }
 
@@ -39,14 +39,33 @@ nonisolated struct DiaryAIBackgroundStyle: Identifiable, Sendable {
         default: return "用户确认的方向是细节丰富、具有相邻环境关系的连续来源场景自然融入暖白纤维纸，不能退化成几个小图标或两张孤立卡片。主要场景保留清楚轮廓、材质和适度前后层次，边缘纸墨消融；在景物与底纸的局部过渡处加入一至两条不规则手撕纸接缝，可露一点暖白或浅牛皮纸，纤维毛边、薄纸层厚度和极轻接触阴影可见。撕纸沿场景走势连接，不围住景物，不切成纸卡，不生成画中画；丰富场景与局部撕边同时存在，前景密集区仍退让。安静纸面按布局集中保留，不均匀雾化全页。禁止独立悬浮景片、规则相片框、胶带邮戳拼盘、厚重投影和整页同等密集的壁纸。"
         }
     }
-    func sceneDirection(_ strength: String) -> String {
-        let density: String
+    func detailDirection(_ strength: String) -> String {
+        let coverage: String
         switch strength {
-        case "浓": density = "来源意象覆盖约一半至三分之二可用空隙，局部细节充分，仍保留本风格要求的留白，不提高前景密集区的对比。"
-        case "中": density = "一处中等尺度主要来源意象加一两处呼应细节，视觉跨度约画面宽度一半至三分之二，覆盖约一半可用空隙；主意象结构要清楚，不能缩成角落小图标或只有几根淡线，细节有主次、留白有方向。"
-        default: density = "一处小型来源意象加少量呼应线索，覆盖约五分之一至三分之一可用空隙，保留辨认来源的特征，避免只剩无主题纹理。"
+        case "浓":
+            coverage = "在主要相邻空隙内展开完整可辨的局部，填充约三分之二可用空隙，留有更淡的延展边缘。主轮廓周围保留三四处来源细节。"
+        case "中":
+            coverage = "主要景物占约一半可用空隙，从照片边缘自然延展。画清楚一处主轮廓和两三处同源细节，局部结构、纹理和浓淡变化在合成后仍清晰可见。"
+        default:
+            coverage = "在相邻空隙中保留一处清楚的来源局部和一两处细节。色彩面积较小，轮廓和材质仍可辨认。"
         }
-        return density + "丰富度通过所选风格的笔触、块面与来源细节表达，不强制写实近中远景，不改变其媒介。" + designRules
+        let treatment: String
+        switch id {
+        case "clean":
+            treatment = "用来源色块、少量清晰边线和细纸纤维形成层次。"
+        case "doodle":
+            treatment = "用长短线条、细部速写和少量点色连接同一主题。"
+        case "vintage", "print", "relic":
+            treatment = "用大小墨块、刻线或套印颗粒区分主次。"
+        case "pastel":
+            treatment = "用蜡笔断线、局部叠色和干擦颗粒表现结构。"
+        default:
+            treatment = "用清楚的局部边缘、两层薄色与细纹理建立层次，边缘由实到淡融入纸面。"
+        }
+        return coverage + treatment + "文字区保留浅纸，最高对比和饱和度留给前景照片。"
+    }
+    func sceneDirection(_ strength: String) -> String {
+        detailDirection(strength) + designRules
     }
     static func generationPrompt(design: String, style: Self, strength: String, size: CGSize, textOnly: Bool = false, pageStyle: DiaryAIPageStyle? = nil) -> String {
         let language = pageStyle.map { "\($0.name)。\($0.rules)" } ?? "\(style.name)，\(style.brief)。\(style.sceneDirection(strength))"
@@ -64,70 +83,24 @@ nonisolated struct DiaryAIBackgroundStyle: Identifiable, Sendable {
         \(textOnly ? "本请求仅含文字。按描述中的最终区域避让前景，坐标仅作为疏密布局参考。保留连续自然纸面，安静区与景物以柔和不规则边缘过渡；绝对不要把坐标画成矩形、白色条带、网格、切口或镂空。" : "输入的浅灰柔和分布表示前景密度，密集区域退让、空隙区域可延展来源意象，不画灰块、不把每处前景边界机械挖空。")用本风格的疏密与色彩连接区域。输出\(outputRules)
         """
     }
-    static func nativeGenerationPrompt(scene: String, style: Self, strength: String, size: CGSize,
-                                       textRegions: [CGRect], textOnly: Bool, pageStyle: DiaryAIPageStyle? = nil, hero: CGRect? = nil, sourcePhoto: CGRect? = nil) -> String {
-        let columns = ["左侧", "中部", "右侧"], rows = ["上部", "中部", "下部"]
-        var quiet: [String] = []
-        for region in textRegions {
-            let column = max(0, min(2, Int(region.midX / size.width * 3)))
-            let row = max(0, min(2, Int(region.midY / size.height * 3)))
-            let area = column == 1 && row == 1 ? "中央" : columns[column] + rows[row]
-            if !quiet.contains(area) { quiet.append(area) }
+    static func layoutBackgroundPrompt(scene: String, style: Self, strength: String, size: CGSize,
+                                       textRegions: [CGRect], textOnly: Bool, pageStyle: DiaryAIPageStyle?) -> String {
+        let protectedAreas = textRegions.map { region in
+            let x = Int((100 * region.minX / size.width).rounded())
+            let y = Int((100 * region.minY / size.height).rounded())
+            let right = Int((100 * region.maxX / size.width).rounded())
+            let bottom = Int((100 * region.maxY / size.height).rounded())
+            return "横向\(x)–\(right)%、纵向\(y)–\(bottom)%"
         }
-        let reserve = quiet.isEmpty ? "浅色纸面在画面内连续展开。"
-            : quiet.joined(separator: "、") + "留作连续的浅色纸面，只有淡纸纹，景物颜色与纹理在接近这些区域前渐淡。"
-        let anchors = [("左上", 0.15, 0.15), ("右上", 0.85, 0.15), ("左下", 0.15, 0.85), ("右下", 0.85, 0.85)]
-        func distance(x: CGFloat, y: CGFloat, from bounds: CGRect) -> CGFloat {
-            hypot(max(bounds.minX - x, 0, x - bounds.maxX) / size.width,
-                  max(bounds.minY - y, 0, y - bounds.maxY) / size.height)
-        }
-        let anchorPhoto = sourcePhoto ?? hero
-        let corner = anchors.max { lhs, rhs in
-            func score(_ anchor: (String, Double, Double)) -> CGFloat {
-                let x = anchor.1 * size.width, y = anchor.2 * size.height
-                let clear = textRegions.map { distance(x: x, y: y, from: $0) }.min() ?? 1
-                let connection = anchorPhoto.map { distance(x: x, y: y, from: $0) } ?? 0
-                return min(clear, 0.35) - 0.8 * connection
-            }
-            return score(lhs) < score(rhs)
-        }?.0 ?? "右下"
-        let group = anchorPhoto.map { $0.midX < size.width / 2 ? "左半幅" : "右半幅" }
-        let source = scene.replacingOccurrences(
-            of: "(?:画面|纸面|底图)?(?:左上|右上|左下|右下)(?:角|方|区域)?",
-            with: "局部", options: .regularExpression)
-        let side = group ?? "一侧"
-        let anchor = sourcePhoto != nil && sourcePhoto != hero ? "场景来源照片" : "主照片"
-        let composition: String
-        let coverage: String
-        switch pageStyle {
-        case .scenic, .illustrated:
-            coverage = strength == "浓" ? "约六成" : strength == "中" ? "约一半" : "约三成"
-            composition = "像连续的山坡或水岸那样组织景物，沿\(side)\(anchor)的下缘和外缘延展。\(corner)仅提示清晰景物的起点，向相邻纸面接出自然轮廓。用来源色形成近中远层次，前景可见处留两三处可辨的结构，空隙以淡色连接。"
-        case .vintage:
-            coverage = strength == "浓" ? "约一半" : "约三分之一"
-            composition = "在\(side)\(anchor)外沿织入两三处来自同一场景的套色版印细节，近处颗粒较实，远处淡成暖赭纸纹。保留一个清楚的印刷焦点和连续纤维纸，边缘断开而不合成框。"
-        case .clean:
-            coverage = strength == "浓" ? "约三成" : "约四分之一"
-            composition = "在\(side)\(anchor)外沿用一组有主次的来源色块托住它，配一两处同色细线呼应邻近图片。集中用色，其余保留干净纸白。"
-        case .playful:
-            coverage = strength == "浓" ? "约四成" : "约三成"
-            composition = "在\(side)\(anchor)边缘起笔，以两三处轮廓和少量跳色笔触沿相邻图组走向展开。主轮廓清楚，其余线条短小疏朗，每段之间有连续纸白。"
-        case .gentle:
-            coverage = strength == "浓" ? "约三分之一" : "约四分之一"
-            composition = "以\(anchor)边缘的淡暖色建立第一层，再用同一来源的两处柔和轮廓呼应\(side)照片组。形态细薄、明暗克制，大面积留白连接主照和标题。"
-        case nil:
-            coverage = strength == "浓" ? "约六成" : "约四成"
-            composition = "主要景物由\(corner)沿\(side)自然展开，用来源色承托主照片组。"
-        }
-        let medium = pageStyle?.nativeBackgroundDirection ?? style.brief
+        let quiet = protectedAreas.isEmpty ? "" :
+            "从左上角起算，以下区域仅有浅纸和低对比纸纹，边界自然过渡：" + protectedAreas.joined(separator: "；")
         return """
-        生成铺满画幅的无字平面纸纹底图，宽高比 \(Int(size.width)):\(Int(size.height))。明亮纸纹连续延伸到四条像素边缘。
-        \(medium)
-        来源细节只决定画什么，下面的实体描述不得改变以上媒介：\(source)
-        \(composition)
-        组织一个连贯的来源环境，包含一个清楚的主意象、与它同环境的一至两处呼应轮廓，以及连接两者的浅色纹理。整体场景占\(coverage)画幅，其余是连续纸面。主意象有辨识度，前景叠加后仍有细节可见。清晰的照片主体由软件叠加，底图的最高对比和饱和度保持低于主照。\(reserve)
-        \(textOnly ? "" : "引导图是位置约束。灰色柔和分布标出前景占用。景物轮廓从主照邻接的可见空隙延展，文字区域保留浅纸，灰形和位置标记均不出现在输出。")
-        保持底纸连续，使用该媒介的线条或色块边缘与纸面衔接。整张图禁止文字、字母、标语、人物、完整风景透视、纸张外轮廓、边框、分格线、规则矩形留白、独立相片或拼贴卡片。
+        生成可直接叠加前景的无字平面底纹，宽高比 \(Int(size.width)):\(Int(size.height))，连续纸面铺到四边。
+        媒介与笔触：\(pageStyle?.nativeBackgroundDirection ?? style.brief) \(style.designRules)
+        景物数量、大小和位置按以下实测构图，媒介只决定画法：\(scene)
+        强度为\(strength)。\(style.detailDirection(strength))\(quiet)
+        \(textOnly ? "" : "参考图的柔灰色仅表示前景占用，不能画入输出。")
+        禁止新增文字、人物、完整相片、相框、空白矩形卡、分格、书脊、边框和整桌透视。只输出一张连续底图。
         """
     }
     func nativeDarkAreaLimit(strength: String) -> Double? {
@@ -148,20 +121,45 @@ nonisolated struct DiaryAIBackgroundRecord: Codable, Sendable {
     var verified = false
     var layerID: UUID?
     var albumState = "notSaved"
+    var visualRejection: String? = nil
+    var redesignReason: String? = nil
+    var plannedOnFinalLayout: Bool? = nil
+    var plannedHeroID: String? = nil
+
+    func restarting(inputDigest: String, native: DiaryNativeContent?) -> Self {
+        if let visualRejection {
+            return .init(inputDigest: inputDigest, redesignReason: visualRejection, plannedHeroID: plannedHeroID)
+        }
+        return .init(inputDigest: inputDigest, designBrief: native?.backgroundBrief, generationPrompt: native?.backgroundPrompt,
+                     plannedHeroID: plannedHeroID)
+    }
+}
+
+nonisolated struct DiaryAIBackgroundVisualRejection: LocalizedError, Sendable {
+    let reason: String
+    var errorDescription: String? { "背景未通过视觉检查：\(reason)。已保留排版，可重新生成背景。" }
 }
 
 nonisolated struct DiaryAIBackgroundDesign: Sendable { var brief: String; var prompt: String }
 
 @MainActor protocol DiaryAIBackgroundProvider {
     func design(reference: Data, context: String) async throws -> DiaryAIBackgroundDesign
+    func repairPrompt(_ text: String) async throws -> String
     func generate(reference: Data, prompt: String) async throws -> URL
     func download(_ url: URL) async throws -> Data
     func validate(reference: Data, background: Data) async throws
     func validate(reference: Data, background: Data, style: DiaryAIBackgroundStyle) async throws
+    func validate(reference: Data, background: Data, style: DiaryAIBackgroundStyle,
+                  design: DiaryAIBackgroundDesign, composite: Data) async throws
 }
 
 extension DiaryAIBackgroundProvider {
+    func repairPrompt(_ text: String) async throws -> String { try DiarySeedreamBackgroundProvider.preparePrompt(text) }
     func validate(reference: Data, background: Data, style: DiaryAIBackgroundStyle) async throws { try await validate(reference: reference, background: background) }
+    func validate(reference: Data, background: Data, style: DiaryAIBackgroundStyle,
+                  design: DiaryAIBackgroundDesign, composite: Data) async throws {
+        try await validate(reference: reference, background: background, style: style)
+    }
     func design(reference: Data, context: String) async throws -> DiaryAIBackgroundDesign { .init(brief: context, prompt: "连续暖白纸面，淡色自然轮廓，仅在空白区域出现，大片留白。") }
 }
 
@@ -257,7 +255,7 @@ nonisolated enum DiaryAIBackgroundImaging {
         }
         guard let repaired = result.cgImage, try darkTextRegions(repaired, canvas: canvas, textRegions: textRegions).isEmpty,
               let data = result.pngData() else {
-            throw DiaryAIError.invalid("背景在文字区过暗或景物过密，已保留前景。请重新生成背景。")
+            throw DiaryAIBackgroundVisualRejection(reason: "背景在文字区过暗或景物过密")
         }
         return data
     }
@@ -265,7 +263,7 @@ nonisolated enum DiaryAIBackgroundImaging {
     static func validateNativeBackground(_ image: CGImage, canvas: CGSize, textRegions: [CGRect]) throws {
         try rejectBackgroundText(image)
         guard try darkTextRegions(image, canvas: canvas, textRegions: textRegions).isEmpty else {
-            throw DiaryAIError.invalid("背景在文字区过暗或景物过密，已保留前景。请重新生成背景。")
+            throw DiaryAIBackgroundVisualRejection(reason: "背景在文字区过暗或景物过密")
         }
     }
 
@@ -284,7 +282,7 @@ nonisolated enum DiaryAIBackgroundImaging {
             return letters.count >= 3 && (candidate.confidence >= 0.5 || (prominentTitle && candidate.confidence >= 0.25))
         }
         guard !hasText else {
-            throw DiaryAIError.invalid("背景含有可辨认的文字，已保留前景。请重新生成背景。")
+            throw DiaryAIBackgroundVisualRejection(reason: "背景含有可辨认的文字")
         }
 
     }

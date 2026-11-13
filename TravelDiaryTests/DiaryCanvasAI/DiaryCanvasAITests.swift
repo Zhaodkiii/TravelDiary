@@ -236,6 +236,60 @@ import SwiftUI
         let text = try #require(editor.document.objects.values.flatMap(\.layers).first { $0.text == "把这一刻留下" })
         #expect(text.fontSize == 32 && text.textAppearance?.paper?.kind == .blueTape)
     }
+    @Test func freeLayoutCommitsTextAndOversizedStickerTogether() async throws {
+        let (session, root) = fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = try #require(UIGraphicsImageRenderer(size: CGSize(width: 850, height: 620)).image {
+            UIColor.green.setFill(); $0.fill(CGRect(x: 0, y: 0, width: 850, height: 620))
+        }.pngData())
+        let (asset, image) = try await session.store.importImage(bytes, documentID: session.document.id)
+        var document = session.document
+        document.objects[session.contentID]?.layers = []
+        document.assets[asset.id] = asset
+        var photo = DiaryLayer.photo(asset: asset, center: CGPoint(x: 500, y: 320))
+        photo.size = CGSize(width: 850, height: 620)
+        photo.transform.scale = 1
+        document.appendObject(containing: photo)
+        let sticker = DiaryLayer(name: "大贴纸", kind: .sticker,
+                                 transform: .init(position: CGPoint(x: 500, y: 400), pivot: .zero),
+                                 size: CGSize(width: 971, height: 1024), assetID: asset.id)
+        document.appendObject(containing: sticker)
+        let editor = DiaryEditorSession(document: document, images: [asset.id: image], store: session.store)
+        let bridge = DiaryEditorAIBridge(editor)
+        bridge.autoFitPhotoRegions = true
+        bridge.rendersDraftPreview = false
+        let context = try await bridge.capture(.editorDefaults(.relayout))
+        let stickerID = try #require(context.objects.first { $0.role == "decoration" }?.id)
+        let originalPhoto = try #require(context.objects.first { $0.role == "photo" })
+        let placement = DiaryAIOperation(operationID: "L10", type: "setPlacement", objectID: stickerID,
+                                         center: CGPoint(x: 300, y: 765), scale: 1, angle: 0, width: 760)
+        let caption = DiaryAIOperation(operationID: "caption", type: "createText", clientObjectKey: "caption",
+                                       center: CGPoint(x: 500, y: 730), text: "山路留影", fontID: "system",
+                                       fontSize: 24, width: 200)
+        let draft = try await bridge.propose(plan(context, [caption, placement]))
+        #expect(draft.warnings.contains { $0.contains("部分贴纸已移到附近空位") })
+        try bridge.apply()
+        let placed = try #require(bridge.objectChoices.first { $0.id == stickerID })
+        #expect(CGRect(origin: .zero, size: context.size).insetBy(dx: -1, dy: -1).contains(placed.bounds))
+        #expect(placed.center != placement.center)
+        #expect(bridge.objectChoices.contains { $0.text == "山路留影" })
+        #expect(bridge.objectChoices.first { $0.id == originalPhoto.id }?.bounds == originalPhoto.bounds)
+    }
+
+    @Test func stickerFallbackMovesL10InsideItsPageAndPrefersClearText() {
+        let requested = CGRect(x: 750, y: 2574, width: 760, height: 802)
+        let page = CGRect(x: 0, y: 0, width: 2161, height: 3130)
+        let text = CGRect(x: 282, y: 2254, width: 1597, height: 689)
+        let photos = [CGRect(x: 230, y: 188, width: 921, height: 1538),
+                      CGRect(x: 1376, y: 208, width: 613, height: 789),
+                      CGRect(x: 1480, y: 1272, width: 472, height: 789)]
+            .map { $0.insetBy(dx: $0.width * 0.12, dy: $0.height * 0.12) }
+        let placed = DiaryEditorAIBridge.nearbyStickerPlacement(requested, in: page, text: [text],
+                                                               photoCores: photos, stickers: [])
+        #expect(page.contains(placed))
+        #expect(!placed.intersects(text))
+        #expect(placed != requested)
+    }
+
     @Test func availableTextRegionCapsCardWidthWithoutShrinkingFont() async throws {
         let (session, root) = fixture(); defer { try? FileManager.default.removeItem(at: root) }
         let bridge = DiaryEditorAIBridge(session)

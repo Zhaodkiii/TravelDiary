@@ -37,6 +37,7 @@ struct TravelCaptureHomeView: View {
     }
     @State private var creationRoute: CreationRoute?
     @State private var showDrafts = false
+    @AppStorage("diary.onboarding.pendingStyle") private var pendingOnboardingStyle = ""
     @State private var selectedStyle: DiaryAIPageStyle = .scenic
     @State private var styleEditor: DiaryEditorSession?
     @State private var styleCoordinator: CreationCoordinator?
@@ -87,6 +88,12 @@ struct TravelCaptureHomeView: View {
             // so startup must be able to finish without mounting the bookshelf.
             // reload() presents recoverable errors too; those must not block entry.
             onInitialLoad?()
+        }
+        .onChange(of: pendingOnboardingStyle) { _, value in
+            guard let style = DiaryAIPageStyle(rawValue: value) else { return }
+            selectedStyle = style
+            pendingOnboardingStyle = ""
+            Task { await openStyleCanvas() }
         }
         .onChange(of: photo) { _, item in
             guard let item else { return }

@@ -8,7 +8,7 @@ enum DiaryMakingFilm: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .explosion: "旅行记忆大爆炸"
+        case .explosion: "旅行环游 · 灵感汇聚"
         case .construction: "手账施工现场"
         case .escape: "照片逃跑了"
         case .treasure: "从废纸到珍藏"
@@ -18,7 +18,7 @@ enum DiaryMakingFilm: String, CaseIterable, Identifiable {
     }
     var caption: String {
         switch self {
-        case .explosion: "让旅行化作星辰，落入你的手账"
+        case .explosion: "照片环游，光芒绽放，把旅途收进手账"
         case .construction: "为了这一页，全员出动"
         case .escape: "追上它们，就找到故事的终点"
         case .treasure: "每一片零散，都值得珍藏"
@@ -30,7 +30,7 @@ enum DiaryMakingFilm: String, CaseIterable, Identifiable {
 
 struct DiaryMakingAnimationSettings: View {
     @AppStorage("DiaryMaking.animationEnabled") private var enabled = true
-    @AppStorage("DiaryMaking.film") private var film = DiaryMakingFilm.construction
+    @AppStorage("DiaryMaking.film") private var film = DiaryMakingFilm.factory
     @State private var preview: DiaryMakingFilm?
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var previewPhotos: [UIImage] = []
@@ -95,7 +95,7 @@ nonisolated struct DiaryMakingCanvasFrameKey: PreferenceKey {
 struct DiaryMakingCinemaModifier: ViewModifier {
     @ObservedObject var workspace: DiaryAIWorkspace
     @AppStorage("DiaryMaking.animationEnabled") private var enabled = true
-    @AppStorage("DiaryMaking.film") private var film = DiaryMakingFilm.construction
+    @AppStorage("DiaryMaking.film") private var film = DiaryMakingFilm.factory
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var canvasFrame = CGRect.zero
     @State private var presented = false
@@ -138,11 +138,16 @@ struct DiaryMakingCinemaModifier: ViewModifier {
                 // configureAndStart briefly toggles running before launching the real task.
                 try? await Task.sleep(for: .milliseconds(180))
                 guard !Task.isCancelled, !workspace.running, !workspace.saving, presented else { return }
-                if runFilm == .explosion, workspace.error == nil,
+                if (runFilm == .explosion || runFilm == .factory), workspace.error == nil,
                    workspace.stage != "已暂停",
                    !workspace.hasUnfinishedWork, !workspace.needsSaveRetry,
                    let preview = workspace.preview {
                     result = preview
+                    if runFilm == .factory {
+                        try? await Task.sleep(for: .milliseconds(reduceMotion ? 500 : 1200))
+                        guard !Task.isCancelled else { return }
+                        dismiss()
+                    }
                 } else { dismiss() }
             }
         }
@@ -173,9 +178,118 @@ struct DiaryMakingCinema: View {
     var body: some View {
         if film == .explosion {
             DiaryExplosionCinema(photos: photos, stage: stage, result: result, close: close, pause: pause, stickers: stickers, canvasFrame: canvasFrame)
+        } else if film == .factory {
+            factoryBody
         } else {
             legacyBody
         }
+    }
+
+    private var factoryBody: some View {
+        GeometryReader { geometry in
+            let width = min(geometry.size.width - 48, 520)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("记忆加工厂")
+                        .font(.system(size: 15, weight: .semibold))
+                    Spacer()
+                    Button(action: close) {
+                        Text(pause == nil ? "关闭预览" : "查看详情")
+                            .font(.system(size: 14, weight: .medium))
+                            .padding(.horizontal, 16).padding(.vertical, 12)
+                            .background(.black.opacity(0.05), in: Capsule())
+                    }
+                }
+                .padding(.horizontal, 24).padding(.top, 12)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("让这一刻\n慢慢成页")
+                            .font(.system(size: 38, weight: .medium, design: .serif))
+                            .tracking(-1)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("你的照片，正在组成新的旅行记忆。")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        TimelineView(.animation(minimumInterval: 1 / 30, paused: scenePhase != .active || reduceMotion)) { timeline in
+                            let elapsed = max(0, timeline.date.timeIntervalSince(start))
+                            let arrival = reduceMotion ? 1 : min(1, elapsed / 1.8)
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color.white.opacity(0.65))
+                                    .frame(width: width * 0.78, height: width * 0.91)
+                                    .rotationEffect(.degrees(-6))
+                                    .shadow(color: .black.opacity(0.06), radius: 20, y: 12)
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color(red: 0.99, green: 0.98, blue: 0.95))
+                                    .frame(width: width * 0.8, height: width * 0.92)
+                                    .rotationEffect(.degrees(3))
+                                    .shadow(color: .black.opacity(0.08), radius: 24, y: 15)
+                                if let result {
+                                    Image(uiImage: result).resizable().scaledToFit()
+                                        .frame(width: width)
+                                        .shadow(color: .black.opacity(0.12), radius: 18, y: 10)
+                                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                                } else {
+                                    ForEach(Array(photos.prefix(4).enumerated()), id: \.offset) { index, photo in
+                                        let column = Double(index % 2) * 2 - 1
+                                        let row = Double(index / 2) * 2 - 1
+                                        let settle = 1 - pow(1 - arrival, 3)
+                                        let drift = reduceMotion ? 0 : sin(elapsed * 0.65 + Double(index) * 1.7) * 3
+                                        Image(uiImage: photo).resizable().scaledToFill()
+                                            .frame(width: width * 0.36, height: width * 0.43)
+                                            .clipped()
+                                            .padding(7).padding(.bottom, 12)
+                                            .background(.white)
+                                            .shadow(color: .black.opacity(0.14), radius: 12, y: 7)
+                                            .rotationEffect(.degrees((index.isMultiple(of: 2) ? -7 : 6) + drift * 0.35))
+                                            .offset(x: column * width * (0.205 + (1 - settle) * 0.35),
+                                                    y: row * width * 0.245 + (1 - settle) * 55 + drift)
+                                            .opacity(settle)
+                                    }
+                                    if photos.isEmpty {
+                                        Image(systemName: "photo.on.rectangle.angled")
+                                            .font(.system(size: 54, weight: .ultraLight))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            .frame(width: width, height: width * 1.2)
+                            .frame(maxWidth: .infinity)
+                        }
+                        .accessibilityLabel(result == nil ? "正在整理你的旅行照片" : "本次制作预览")
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.6), value: result != nil)
+                    }
+                    .padding(.horizontal, 24).padding(.top, 34).padding(.bottom, 20)
+                }
+                VStack(alignment: .leading, spacing: 18) {
+                    Rectangle().fill(.black.opacity(0.09)).frame(height: 1)
+                    HStack(alignment: .center, spacing: 12) {
+                        if result != nil {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(Color(red: 0.35, green: 0.42, blue: 0.30))
+                                .accessibilityHidden(true)
+                        } else {
+                            ProgressView().tint(Color(red: 0.35, green: 0.42, blue: 0.30))
+                        }
+                        Text(result != nil ? "跨页制作完成" : stage.isEmpty ? "正在准备制作…" : stage)
+                            .font(.system(size: 16, weight: .medium))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                        if let pause {
+                            Button("暂停", action: pause)
+                                .font(.system(size: 14, weight: .medium))
+                                .padding(.horizontal, 18).padding(.vertical, 14)
+                                .background(.black.opacity(0.05), in: Capsule())
+                        }
+                    }
+                }
+                .padding(.horizontal, 24).padding(.bottom, 24)
+            }
+            .frame(maxWidth: 620).frame(maxWidth: .infinity)
+        }
+        .foregroundStyle(Color(red: 0.19, green: 0.21, blue: 0.17))
+        .background(Color(red: 0.96, green: 0.95, blue: 0.91).ignoresSafeArea())
+        .preferredColorScheme(.light)
     }
 
     private var legacyBody: some View {
@@ -261,18 +375,7 @@ struct DiaryMakingCinema: View {
                 card(i, x: cos(a) * 110 * bloom, y: sin(a) * 110 * bloom, rotation: sin(a) * 15, scale: 0.35 + bloom * 0.5, context: c)
             }
         case .factory:
-            c.fill(Path(roundedRect: CGRect(x: -145, y: -155, width: 290, height: 280), cornerRadius: 32), with: .color(.mint.opacity(0.14)))
-            c.stroke(Path(roundedRect: CGRect(x: -145, y: -155, width: 290, height: 280), cornerRadius: 32), with: .color(.mint.opacity(0.7)), lineWidth: 3)
-            for i in 0..<3 {
-                var gear = c
-                gear.translateBy(x: Double(i - 1) * 85, y: -90)
-                gear.rotate(by: .degrees(t * (i.isMultiple(of: 2) ? 70 : -70)))
-                symbol("gearshape.fill", x: 0, y: 0, size: 65, color: gold, context: gear)
-                let x = (t * 45 + Double(i) * 110).truncatingRemainder(dividingBy: 330) - 165
-                card(i, x: x, y: 25, rotation: 0, scale: 0.7, context: c)
-            }
-            line(from: CGPoint(x: -175, y: 85), to: CGPoint(x: 175, y: 85), color: cream, width: 12, context: c)
-            symbol("cloud.fill", x: 120 + sin(t) * 15, y: -180 - t.truncatingRemainder(dividingBy: 3) * 20, size: 35, color: cream.opacity(0.5), context: c)
+            break // Dedicated paper and photo scene above.
         case .journey:
             for i in (0..<6).reversed() {
                 let depth = (t * 0.22 + Double(i) / 6).truncatingRemainder(dividingBy: 1)

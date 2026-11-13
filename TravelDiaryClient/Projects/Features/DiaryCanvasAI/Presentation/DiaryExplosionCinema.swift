@@ -33,6 +33,10 @@ struct DiaryExplosionCinema: View {
                                        onFailure: { rendererFailed = true })
                         .ignoresSafeArea().accessibilityHidden(true)
                 }
+                if !reduceMotion && !rendererFailed && finish >= 0 {
+                    DiaryTravelAlbumSeal(elapsed: finish)
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
                 VStack {
                     HStack {
                         if pause == nil {
@@ -45,13 +49,13 @@ struct DiaryExplosionCinema: View {
                     }.font(.subheadline).buttonStyle(.bordered).tint(.white)
                     Spacer()
                     VStack(spacing: 10) {
-                        Text(finish >= 2.17 ? "星辰落下，回忆成册" : finish >= 0 ? "让所有回忆，汇聚此刻" : "让回忆，化作星辰")
+                        Text(finish >= 2.17 ? "这一程，值得珍藏" : finish >= 0 ? "把这段旅途，收进手账" : "把这段旅途，收进手账")
                             .font(.system(size: 23, weight: .medium, design: .serif))
                         Text(finish >= 0 ? "正在呈现你的作品" : pause == nil ? "持续预览中，点击下方按钮模拟制作完成" : stage)
                             .font(.caption).foregroundStyle(.white.opacity(0.65)).lineLimit(2)
                         if let pause, finish < 0 { Button("暂停制作", action: pause).font(.caption).tint(.white) }
                         if pause == nil, finish < 0 {
-                            Button("预览星辰落定") { previewResult = Self.sampleArtwork(photos); ending = Date() }
+                            Button("预览收拢成册") { previewResult = Self.sampleArtwork(photos); ending = Date() }
                                 .font(.caption).buttonStyle(.bordered).tint(.white)
                         }
                     }.foregroundStyle(.white).padding(20)
@@ -97,5 +101,47 @@ struct DiaryExplosionCinema: View {
                 image.draw(in: CGRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2, width: size.width, height: size.height))
             }
         }
+    }
+}
+
+/// The prints gather behind a tangible album. Only its decorative light bursts outward.
+private struct DiaryTravelAlbumSeal: View {
+    let elapsed: Double
+
+    private func progress(_ start: Double, _ end: Double) -> Double {
+        let t = min(1, max(0, (elapsed - start) / (end - start)))
+        return t * t * (3 - 2 * t)
+    }
+
+    var body: some View {
+        let arrival = progress(0.65, 1.35)
+        let opening = progress(1.5, 2.15)
+        ZStack {
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(red: 0.94, green: 0.88, blue: 0.72))
+                .padding(.leading, 4).padding(.vertical, 3)
+                .overlay(alignment: .trailing) {
+                    Rectangle().fill(.brown.opacity(0.25)).frame(width: 2).padding(.trailing, 5)
+                }
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(red: 0.14, green: 0.35, blue: 0.32))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color(red: 0.85, green: 0.70, blue: 0.40), lineWidth: 1)
+                        .padding(7)
+                }
+                .overlay {
+                    VStack(spacing: 7) {
+                        Image(systemName: "sun.max").font(.system(size: 22, weight: .light))
+                        Text("旅途珍藏").font(.system(size: 11, weight: .medium, design: .serif))
+                    }.foregroundStyle(Color(red: 0.95, green: 0.83, blue: 0.57))
+                }
+                .rotation3DEffect(.degrees(-opening * 155), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: 0.5)
+        }
+        .frame(width: 92, height: 118)
+        .shadow(color: .black.opacity(0.35), radius: 15, y: 8)
+        .scaleEffect(0.72 + arrival * 0.28 + opening * 0.35)
+        .offset(y: (1 - arrival) * 24)
+        .opacity(arrival * (1 - progress(1.85, 2.3)))
     }
 }

@@ -102,7 +102,7 @@ struct DiaryAICreationSheet: View {
                     Button("重新保存草稿") { flow.save() }
                     Button("放弃并退出", role: .destructive) { discarding = true }
                 }
-            }.padding(20).frame(maxWidth: 700)
+            }.padding(20).padding(.bottom, title == "确认照片" ? 12 : 0).frame(maxWidth: 700)
                 .frame(maxWidth: .infinity)
         }
         .background(paper)
@@ -136,9 +136,21 @@ struct DiaryAICreationSheet: View {
     }
     private var photoPage: some View {
         page("确认照片", step: "照片 · 1/3 · 已选 \(flow.selectedPhotoCount) 张") {
-            Text("轻点查看原图，长按调整顺序。").font(.subheadline).foregroundStyle(.secondary)
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: flow.selectedPhotoCount == 1 ? 1 : (flow.selectedPhotoCount > 8 && !typeSize.isAccessibilitySize ? 3 : 2)), spacing: 10) {
-                ForEach(Array(flow.draft.photos.enumerated()), id: \.element.id) { index, photo in
+            HStack {
+                Text("已选 \(flow.selectedPhotoCount) 张").font(.headline)
+                Spacer()
+                Button { picking = true } label: { Label("添加照片", systemImage: "plus") }
+                    .disabled(flow.selectedPhotoCount >= 30 || flow.isSubmitting)
+            }.frame(minHeight: 44)
+            if flow.selectedPhotoCount > 0 {
+                Text("轻点预览，长按可排序。").font(.subheadline).foregroundStyle(.secondary)
+            }
+            let readyPhotos = flow.draft.photos
+            let readyIDs = Set(readyPhotos.map(\.id))
+            let pendingIDs = flow.pendingPhotoIDs.filter { !readyIDs.contains($0) }
+            let photoColumns = flow.selectedPhotoCount == 1 ? [GridItem(.flexible())] : columns
+            LazyVGrid(columns: photoColumns, spacing: 12) {
+                ForEach(Array(readyPhotos.enumerated()), id: \.element.id) { index, photo in
                     ZStack(alignment: .topTrailing) {
                         NavigationLink(value: Route.photo(photo.id)) {
                             photoTile(flow.images[photo.filename], index: index)
@@ -153,6 +165,7 @@ struct DiaryAICreationSheet: View {
                         Button("前移", systemImage: "arrow.left") { flow.movePhoto(photo.id, offset: -1) }.disabled(index == 0)
                         Button("后移", systemImage: "arrow.right") { flow.movePhoto(photo.id, offset: 1) }.disabled(index == flow.draft.photos.count - 1)
                     }
+                    .buttonStyle(.plain)
                     .draggable(photo.id.uuidString)
                     .dropDestination(for: String.self) { values, _ in
                         guard let first = values.first, let id = UUID(uuidString: first) else { return false }
@@ -161,9 +174,9 @@ struct DiaryAICreationSheet: View {
                     .accessibilityAction(named: "前移") { flow.movePhoto(photo.id, offset: -1) }
                     .accessibilityAction(named: "后移") { flow.movePhoto(photo.id, offset: 1) }
                 }
-                ForEach(Array(flow.pendingPhotoIDs.enumerated()), id: \.element) { index, id in
+                ForEach(Array(pendingIDs.enumerated()), id: \.element) { index, id in
                     ZStack(alignment: .topTrailing) {
-                        photoTile(flow.selectedPhotoImages[id], index: flow.draft.photos.count + index)
+                        photoTile(flow.selectedPhotoImages[id], index: readyPhotos.count + index)
                         Button { flow.removePhoto(id) } label: {
                             Image(systemName: "minus.circle.fill").symbolRenderingMode(.palette)
                                 .foregroundStyle(.black, .white).font(.title3).frame(width: 44, height: 44)
@@ -172,12 +185,6 @@ struct DiaryAICreationSheet: View {
                 }
             }.disabled(flow.isSubmitting)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: flow.draft.photos.map(\.id))
-            HStack {
-                Button { picking = true } label: { Label("添加照片", systemImage: "plus") }
-                    .disabled(flow.selectedPhotoCount >= 30)
-                Spacer()
-                Text("已选 \(flow.selectedPhotoCount) 张").font(.subheadline).foregroundStyle(.secondary)
-            }.frame(minHeight: 44)
             if flow.removedPhoto != nil {
                 HStack {
                     Text("已移除照片").foregroundStyle(.secondary)
@@ -199,7 +206,7 @@ struct DiaryAICreationSheet: View {
 
             }
         }
-        .safeAreaInset(edge: .bottom) { footer("继续", disabled: !flow.canContinue) { path.append(.stickers) } }
+        .safeAreaInset(edge: .bottom) { footer("继续搭配贴纸", disabled: !flow.canContinue) { path.append(.stickers) } }
         .photosPicker(isPresented: $picking, selection: $photos, maxSelectionCount: max(1, 30 - flow.selectedPhotoCount), selectionBehavior: .ordered, matching: .images, preferredItemEncoding: .current)
         .onChange(of: photos) { _, values in guard !values.isEmpty else { return }; photos = []; flow.importPhotos(values) }
     }
@@ -212,11 +219,13 @@ struct DiaryAICreationSheet: View {
                         .frame(width: proxy.size.width, height: proxy.size.height).clipped()
                 } else { ProgressView().accessibilityLabel("正在读取照片") }
             }
-        }.aspectRatio(0.94, contentMode: .fit)
+        }.aspectRatio(1, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(alignment: .topLeading) {
-                Text("\(index + 1)").font(.caption.bold()).foregroundStyle(.white)
-                    .padding(7).background(.black.opacity(0.65), in: Circle()).padding(8)
+                Text(String(index + 1)).font(.caption.bold().monospacedDigit()).foregroundStyle(.white)
+                    .frame(minWidth: 24, minHeight: 24)
+                    .background(.black.opacity(0.72), in: Circle()).padding(8)
+                    .accessibilityHidden(true)
             }
     }
     @ViewBuilder private func thumbnail(_ file: String) -> some View {

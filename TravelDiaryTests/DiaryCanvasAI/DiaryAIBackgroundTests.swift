@@ -32,15 +32,29 @@ import SwiftUI
         #expect(selected == 1)
     }
 
-    @Test func nativeBackgroundPromptKeepsStyleLabelAndCoordinatesOutOfImageRequest() {
-        let prompt = DiaryAIBackgroundStyle.nativeGenerationPrompt(scene: "左上角暖灰石墙上的雕花线条", style: .resolve("paper"),
-            strength: "中", size: CGSize(width: 4370, height: 3130),
-            textRegions: [CGRect(x: 335, y: 160, width: 1398, height: 460)], textOnly: true,
-            pageStyle: .scenic, hero: CGRect(x: 3000, y: 1100, width: 1000, height: 1400))
-        #expect(prompt.contains("左侧上部留作连续的浅色纸面"))
-        #expect(prompt.contains("沿右半幅主照片的下缘和外缘延展") && prompt.contains("约一半"))
-        #expect(!prompt.contains("实景融纸") && !prompt.contains("拾景纸刊"))
-        #expect(!prompt.contains("1398") && !prompt.contains("左上角"))
+    @Test func layoutBackgroundPromptRetainsMotifLocationsAndMeasuredTextBounds() {
+        let prompt = DiaryAIBackgroundStyle.layoutBackgroundPrompt(scene: "左下角蓝灰山脊；右侧中段四枚淡红心", style: .resolve("paper"),
+            strength: "中", size: CGSize(width: 1000, height: 800),
+            textRegions: [CGRect(x: 600, y: 80, width: 300, height: 120)], textOnly: true, pageStyle: .scenic)
+        #expect(prompt.contains("左下角蓝灰山脊；右侧中段四枚淡红心"))
+        #expect(prompt.contains("横向60–90%、纵向10–25%"))
+        #expect(prompt.contains("手撕纸接缝"))
+        #expect(!prompt.contains("实景融纸") && !prompt.contains("拾景纸刊") && !prompt.contains("柔灰色"))
+    }
+
+    @Test func rejectedBackgroundRestartsWithVisualFeedbackInsteadOfTheOldScene() throws {
+        let reason = "杯子和木桌呈现摄影质感"
+        let previous = DiaryAIBackgroundRecord(inputDigest: "old", designBrief: "单杯",
+            generationPrompt: "木纹桌面占满画面", filename: "rejected.png", visualRejection: reason)
+        let native = DiaryNativeContent(heroID: "cup", photos: [], texts: [], backgroundBrief: "单杯",
+                                       backgroundPrompt: "木纹桌面占满画面")
+        let replacement = previous.restarting(inputDigest: "new", native: native)
+        #expect(replacement.id != previous.id && replacement.filename == nil && replacement.generationPrompt == nil)
+        #expect(replacement.redesignReason == reason && replacement.visualRejection == nil)
+        let scene = try DiarySeedreamBackgroundProvider.prepareNativeScene(native.backgroundPrompt)
+        #expect(scene == "浅赭木纹仅作局部纸上印痕")
+        #expect(try DiarySeedreamBackgroundProvider.prepareNativeScene("右下照片间空隙保留暖白") == "右下预留区域间空隙保留暖白")
+
     }
 
     @Test func nativeScenePreservesLandscapeAndRemovesHikers() throws {
@@ -51,6 +65,31 @@ import SwiftUI
         #expect(sign == "白色屏面上是红色抽象色块")
         #expect(throws: (any Error).self) {
             try DiarySeedreamBackgroundProvider.prepareNativeScene("一位徒步者站在河边。")
+        }
+    }
+
+    @Test func nativeSceneKeepsCountedMotifsAfterRepair() throws {
+        let repaired = "横向40–54%、纵向27–84%的空隙缀三四个分散的朱红爱心色块与一小段铜色圆弧。两个人站在河边。画面左侧有四片浅绿松针印痕。"
+        let prompt = try DiarySeedreamBackgroundProvider.prepareNativeScene(repaired)
+        #expect(prompt.contains("三四个分散的朱红爱心色块"))
+        #expect(prompt.contains("四片浅绿松针印痕"))
+        #expect(!prompt.contains("两个人站在河边"))
+    }
+
+    @Test func nativeBackgroundOCRProducesRecoverableVisualRejection() throws {
+        let size = CGSize(width: 600, height: 400)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            ("SAMPLE TITLE" as NSString).draw(at: CGPoint(x: 40, y: 100), withAttributes: [
+                .font: UIFont.systemFont(ofSize: 64, weight: .bold), .foregroundColor: UIColor.black
+            ])
+        }
+        let bytes = try #require(image.pngData())
+        #expect(throws: DiaryAIBackgroundVisualRejection.self) {
+            try DiaryAIBackgroundImaging.prepareNativeBackground(bytes, canvas: size, textRegions: [])
         }
     }
 
@@ -103,18 +142,39 @@ import SwiftUI
     /// Opt-in live snapshot replay. The runtime and fixtures belong to the test sandbox.
     @Test func liveNativeSnapshotQuality() async throws {
         let documents = URL.documentsDirectory
-        let fixtureRoot = documents.appendingPathComponent("DiaryNativeSnapshotQA")
+        let developmentRoot = URL(fileURLWithPath: "/tmp/td-layout-live")
+        let useDevelopmentService = FileManager.default.fileExists(atPath: developmentRoot.appendingPathComponent("use-development-service").path)
+        let fixtureRoot = useDevelopmentService ? developmentRoot : documents.appendingPathComponent("DiaryNativeSnapshotQA")
         let marker = fixtureRoot.appendingPathComponent("enabled")
         guard let data = try? Data(contentsOf: marker) else { return }
         let datasets = try JSONDecoder().decode([String].self, from: data)
-        let runtime = documents.appendingPathComponent("DiaryIntegrationTest/runtime.json")
-        try DiaryAITaskRuntime.installTestConfiguration(Data(contentsOf: runtime))
-        defer { DiaryAITaskRuntime.clearTestConfiguration() }
+        if useDevelopmentService {
+            try #require(SupportAppEnvironment.current == .debug)
+            let service = DiaryProductionService.shared
+            let deadline = Date().addingTimeInterval(20)
+            while service.owner == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(250)) }
+            try #require(service.owner != nil)
+            await service.refresh()
+            let quota = try #require(service.quota, "开发环境额度查询失败：\(service.error ?? "无返回")")
+            print("DEVELOPMENT_BACKGROUND_QA canStart=\(quota.canStart) status=\(quota.serviceStatus ?? "") reasons=\(quota.blockedReasons ?? [])")
+            if !quota.canStart {
+                print("DEVELOPMENT_BACKGROUND_QA nextEligibleAt=\(quota.nextEligibleAt ?? "未返回")")
+            }
+            try #require(quota.canStart, "开发环境当前没有可用制作额度")
+            let scenes = service.runtimeManifestValue?.availableScenes ?? []
+            try #require(Set(["diary.layout", "diary.background.design", "diary.background.generate", "diary.background.review"]).isSubset(of: Set(scenes)),
+                         "开发环境缺少背景模型配置")
+        } else {
+            let runtime = documents.appendingPathComponent("DiaryIntegrationTest/runtime.json")
+            try DiaryAITaskRuntime.installTestConfiguration(Data(contentsOf: runtime))
+        }
+        defer { if !useDevelopmentService { DiaryAITaskRuntime.clearTestConfiguration() } }
         for name in datasets {
             let parts = name.split(separator: ":").map(String.init)
             let dataset = parts[0]
             let style = parts.count >= 2 ? try #require(DiaryAIPageStyle(rawValue: parts[1])) : (dataset == "D7" ? .clean : .scenic)
             let backgroundMode = parts.count >= 3 ? parts[2] : "textOnly"
+            let recovery = parts.count >= 4 && parts[3] == "recover" ? LiveBackgroundRejectionProbe() : nil
             let input = fixtureRoot.appendingPathComponent(dataset)
             let output = fixtureRoot.appendingPathComponent("results/\(dataset)-\(style.rawValue)-\(UUID())")
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
@@ -136,7 +196,8 @@ import SwiftUI
             let sourceIDs = Set(session.scopeLayers.map(\.id))
             let client = DiaryArkResponsesClient()
             client.workspaceMode = true
-            let workspace = DiaryAIWorkspace(session: session, model: client, root: output,
+            let workspace = DiaryAIWorkspace(session: session, model: useDevelopmentService ? nil : client,
+                                             root: output, backgroundProvider: useDevelopmentService ? nil : recovery,
                                              parallelExecution: true, automaticallySavesCompletedProduction: false)
             var request = DiaryAIRequest.editorDefaults(.relayout)
             request.design = .init(layout: .automatic, style: style)
@@ -144,15 +205,55 @@ import SwiftUI
             request.textDensity = "适量记录"
             request.allowsRewrite = false
             request.heroID = heroID
-            request.background = .init(style: style.backgroundID, saveToAlbum: false, generationMode: backgroundMode)
+            request.background = backgroundMode == "layout" ? nil
+                : .init(style: style.backgroundID, saveToAlbum: false, generationMode: backgroundMode)
+            var combinations = 0
+            if backgroundMode == "layout" {
+                let bridge = DiaryEditorAIBridge(session)
+                let context = try await bridge.capture(request)
+                let design = try #require(request.design)
+                let seeds = (1...20).map { UUID(uuidString: String(format: "31310000-2000-4000-8000-%012d", $0))! }
+                var signatures = Set<String>()
+                for seed in seeds {
+                    let regions = design.nativeRegions(context: context, allowsText: true, seed: seed)
+                    let repeated = design.nativeRegions(context: context, allowsText: true, seed: seed)
+                    let encode = JSONEncoder(); encode.outputFormatting = .sortedKeys
+                    #expect(try encode.encode(regions) == encode.encode(repeated))
+                    _ = try DiaryAIWorkspace.validatedRegions(regions, context: context, allowsText: true)
+                    let photoRegions = regions.filter { $0.role == "photo" }
+                    #expect(photoRegions.count == photos.count)
+                    for (i, region) in photoRegions.enumerated() {
+                        #expect(!regions.filter { $0.role == "text" }.contains { $0.bounds.intersects(region.bounds) })
+                        #expect(!photoRegions.dropFirst(i + 1).contains { $0.bounds.intersects(region.bounds) })
+                    }
+                    let signature = photoRegions.map {
+                        [Int($0.x / 200), Int($0.y / 200), Int($0.width / 160), Int($0.height / 160)]
+                    }
+                    signatures.insert(String(describing: signature))
+                }
+                combinations = signatures.count
+                #expect(combinations >= 4)
+            }
             request = request.coordinated()
             await workspace.enter(request, preparingNewCreation: true)
             let started = Date()
             workspace.configureAndStart(request)
             let deadline = started.addingTimeInterval(360)
             while workspace.running && Date() < deadline { try await Task.sleep(for: .milliseconds(250)) }
+            if let recovery, !useDevelopmentService {
+                try #require(workspace.backgroundRecord?.visualRejection != nil)
+                #expect(workspace.pending.isEmpty && workspace.backgroundRecord?.layerID == nil)
+                workspace.generateBackground()
+                while workspace.running && Date() < deadline { try await Task.sleep(for: .milliseconds(250)) }
+                #expect(recovery.prompts.count == 1 && recovery.reviews == 1)
+                workspace.generateBackground(regenerate: true)
+                while workspace.running && Date() < deadline { try await Task.sleep(for: .milliseconds(250)) }
+                #expect(recovery.designCalls == 2 && recovery.redesigns == 1 && recovery.prompts.count == 2)
+                #expect(Set(recovery.prompts).count == 2)
+                try JSONEncoder().encode(recovery.prompts).write(to: output.appendingPathComponent("recovery-prompts.json"))
+            }
             let elapsed = Date().timeIntervalSince(started)
-            let completed = !workspace.running && workspace.error == nil && workspace.pending.isEmpty && workspace.backgroundRecord?.layerID != nil
+            let completed = !workspace.running && workspace.error == nil && workspace.pending.isEmpty && (backgroundMode == "layout" || workspace.backgroundRecord?.layerID != nil)
             if let png = workspace.backgroundPreview?.pngData() { try png.write(to: output.appendingPathComponent("background.png")) }
             if let jpg = workspace.preview?.jpegData(compressionQuality: 0.9) { try jpg.write(to: output.appendingPathComponent("composed.jpg")) }
             if let log = try? await workspace.exportProductionLog() {
@@ -160,24 +261,180 @@ import SwiftUI
             }
             var reopenedOK = false
             var renderedTexts: [String] = []
+            var stickerWidths: [Double] = []
             if completed, await workspace.save() {
                 let reopened = try await store.load(document.id)
                 renderedTexts = reopened.document.objects.values.flatMap(\.layers).filter { $0.kind == .text }.map(\.text)
-                let backgroundID = try #require(workspace.backgroundRecord?.layerID)
                 reopenedOK = sourceIDs.allSatisfy { reopened.document.layer($0) != nil }
-                    && reopened.document.layer(backgroundID) != nil
+                if backgroundMode != "layout" {
+                    let backgroundID = try #require(workspace.backgroundRecord?.layerID)
+                    reopenedOK = reopenedOK && reopened.document.layer(backgroundID) != nil
+                }
                 let editor = DiaryEditorSession(document: reopened.document, images: reopened.images, store: store)
                 let bridge = DiaryEditorAIBridge(editor)
-                _ = try await bridge.capture(request)
+                let measured = try await bridge.capture(request)
+                stickerWidths = measured.objects.filter { $0.role == "decoration" }.map { $0.bounds.width }
+                #expect(stickerWidths.count == stickers.count)
+
                 try await bridge.originalPreview().write(to: output.appendingPathComponent("reopened.jpg"))
             }
             let metrics: [String: Any] = ["dataset": dataset, "elapsed": elapsed, "completed": completed,
                 "reopened": reopenedOK, "texts": renderedTexts, "error": workspace.error ?? "", "stage": workspace.stage,
                 "layoutMode": "native", "style": style.rawValue, "photos": photos.count, "stickers": stickers.count, "backgroundMode": backgroundMode,
-                "textDensity": request.textDensity]
+                "textDensity": request.textDensity, "seedCombinations": combinations, "stickerWidths": stickerWidths]
             try JSONSerialization.data(withJSONObject: metrics, options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("metrics.json"))
             print("NATIVE_SNAPSHOT_QA \(dataset)/\(style.rawValue) completed=\(completed) reopened=\(reopenedOK) elapsed=\(elapsed)")
             #expect(completed && reopenedOK)
+        }
+    }
+
+    /// Runs the native workspace with replayed content and captures the design/review boundary on real photos.
+    @Test func localBackgroundLayoutReplay() async throws {
+        let root = URL(fileURLWithPath: "/tmp/td-layout-fixtures")
+        guard FileManager.default.fileExists(atPath: root.path) else { return }
+        let cases: [(String, DiaryAIPageStyle, String)] = [
+            ("hearts", .scenic, "textOnly"), ("travel", .illustrated, "guided"),
+            ("travel", .vintage, "textOnly"), ("sport", .clean, "guided"),
+            ("sketch", .playful, "guided"), ("hearts", .gentle, "textOnly"),
+            ("night", .illustrated, "guided"), ("architecture", .vintage, "textOnly"), ("birthday", .gentle, "guided")
+        ]
+        for (dataset, style, mode) in cases {
+            let input = root.appendingPathComponent(dataset)
+            let output = root.appendingPathComponent("results/\(dataset)-\(style.rawValue)")
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            let store = DiaryDocumentStore(ownerID: "layout-replay", baseDirectory: output.appendingPathComponent("store"))
+            var document = DiaryDocument()
+            document.objects[document.rootContentID]?.referenceSize = CGSize(width: 4370, height: 3130)
+            let session = DiaryEditorSession(document: document, images: [:], store: store)
+            let files = try FileManager.default.contentsOfDirectory(at: input, includingPropertiesForKeys: nil)
+            let photos = files.filter { $0.lastPathComponent.hasPrefix("L") }.sorted { $0.path < $1.path }
+            var content = try JSONDecoder().decode(DiaryNativeContent.self, from: Data(contentsOf: input.appendingPathComponent("content.json")))
+            try #require(content.photos.count == photos.count)
+            var mapping: [String: String] = [:]
+            for (photo, file) in zip(content.photos, photos) {
+                let previous = Set(session.scopeLayers.map(\.id))
+                try #require(await session.importPhoto(Data(contentsOf: file)))
+                let id = try #require(session.scopeLayers.first { !previous.contains($0.id) }?.id)
+                mapping[photo.objectID] = id.uuidString
+            }
+            content.heroID = try #require(mapping[content.heroID])
+            content.backgroundSourceID = content.backgroundSourceID.flatMap { mapping[$0] }
+            for i in content.photos.indices { content.photos[i].objectID = try #require(mapping[content.photos[i].objectID]) }
+            content.texts = content.texts.map { text in
+                var copy = text
+                copy.sourceIDs = text.sourceIDs.compactMap { mapping[$0] }
+                return copy
+            }
+            for sticker in files.filter({ $0.lastPathComponent.hasPrefix("S") }).sorted(by: { $0.path < $1.path }) {
+                try #require(await session.importPhoto(Data(contentsOf: sticker), asSticker: true,
+                    stickerName: sticker.deletingPathExtension().lastPathComponent))
+            }
+            try await store.save(session.document)
+            let provider = LayoutReplayBackground(output: output, rejectFirst: dataset == "night")
+            let workspace = DiaryAIWorkspace(session: session, model: LayoutReplayContent(content: content), root: output,
+                                             backgroundProvider: provider, efficientExecution: true, parallelExecution: true)
+            var request = DiaryAIRequest.editorDefaults(.relayout)
+            request.design = .init(layout: .automatic, style: style)
+            request.layoutMode = .native
+            request.heroID = UUID(uuidString: content.heroID)
+            request.background = .init(style: style.backgroundID, saveToAlbum: false, generationMode: mode)
+            request = request.coordinated()
+            await workspace.enter(request, preparingNewCreation: true)
+            workspace.configureAndStart(request)
+            let deadline = Date().addingTimeInterval(60)
+            while workspace.running && Date() < deadline { try await Task.sleep(for: .milliseconds(150)) }
+            if dataset == "night" {
+                #expect(workspace.backgroundRecord?.visualRejection != nil)
+                #expect(workspace.pending.isEmpty && workspace.backgroundRecord?.layerID == nil)
+                #expect(provider.composites == 1 && provider.designs == 1)
+                workspace.generateBackground(regenerate: true)
+                while workspace.running && Date() < deadline { try await Task.sleep(for: .milliseconds(150)) }
+                #expect(provider.receivedRejectionFeedback && provider.designs == 2)
+            }
+            print("LOCAL_LAYOUT_REPLAY \(dataset) \(style.rawValue) \(workspace.stage) \(workspace.error ?? "")")
+            #expect(workspace.error == nil)
+            #expect(workspace.backgroundRecord?.plannedOnFinalLayout == true)
+            #expect(workspace.backgroundRecord?.layerID != nil)
+            #expect(provider.generationWasGuided == (mode != "textOnly"))
+            #expect(provider.composites == (dataset == "night" ? 2 : 1))
+            try #require(await workspace.save())
+            let reopened = try await store.load(document.id)
+            let id = try #require(workspace.backgroundRecord?.layerID)
+            #expect(reopened.document.layer(id) != nil)
+            #expect(mapping.values.allSatisfy { reopened.document.layer(UUID(uuidString: $0)) != nil })
+            try Data(document.id.uuidString.utf8).write(to: output.appendingPathComponent("document-id.txt"))
+            let editor = DiaryEditorSession(document: reopened.document, images: reopened.images, store: store)
+            let reopenedBridge = DiaryEditorAIBridge(editor)
+            _ = try await reopenedBridge.capture(request)
+            try await reopenedBridge.originalPreview().write(to: output.appendingPathComponent("reopened.jpg"))
+        }
+    }
+
+    @Test func freeLayoutUsesTheSameBackgroundStageAfterForeground() async throws {
+        let root = URL(fileURLWithPath: "/tmp/td-layout-fixtures")
+        let prior = root.appendingPathComponent("results/night-illustrated")
+        let marker = prior.appendingPathComponent("document-id.txt")
+        guard FileManager.default.fileExists(atPath: marker.path) else { return }
+        let id = try #require(UUID(uuidString: String(contentsOf: marker, encoding: .utf8)))
+        let store = DiaryDocumentStore(ownerID: "layout-replay", baseDirectory: prior.appendingPathComponent("store"))
+        let reopened = try await store.load(id)
+        let editor = DiaryEditorSession(document: reopened.document, images: reopened.images, store: store)
+        let output = root.appendingPathComponent("results/night-ai-background")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let provider = LayoutReplayBackground(output: output)
+        let workspace = DiaryAIWorkspace(session: editor, root: output, backgroundProvider: provider)
+        var request = DiaryAIRequest.editorDefaults(.relayout)
+        request.layoutMode = .ai
+        request.allowsText = false
+        request.background = .init(style: "watercolor", saveToAlbum: false, generationMode: "guided")
+        await workspace.enter(request, preparingNewCreation: false)
+        try #require(workspace.canGenerateBackground)
+        workspace.generateBackground()
+        let deadline = Date().addingTimeInterval(60)
+        while workspace.running && Date() < deadline { try await Task.sleep(for: .milliseconds(150)) }
+        #expect(workspace.error == nil)
+        #expect(workspace.backgroundRecord?.plannedOnFinalLayout == true)
+        #expect(provider.designs == 1 && provider.composites == 1 && provider.generationWasGuided)
+    }
+
+    @Test func localBackgroundVisualComparison() async throws {
+        let root = URL(fileURLWithPath: "/tmp/td-layout-fixtures")
+        let referenceRoot = root.appendingPathComponent("references")
+        guard let references = try? FileManager.default.contentsOfDirectory(at: referenceRoot, includingPropertiesForKeys: nil) else { return }
+        let liveRoot = URL(fileURLWithPath: "/tmp/td-layout-live/results")
+        if let livePath = try? String(contentsOf: referenceRoot.appendingPathComponent("live-comparison-run.txt"), encoding: .utf8) {
+            let run = liveRoot.appendingPathComponent(livePath.trimmingCharacters(in: .whitespacesAndNewlines))
+            let storeRoot = run.appendingPathComponent("store")
+            let files = try #require(FileManager.default.enumerator(at: storeRoot, includingPropertiesForKeys: nil))
+            let current = try #require(files.compactMap { $0 as? URL }.first { $0.lastPathComponent == "CURRENT.json" })
+            let id = try #require(UUID(uuidString: current.deletingLastPathComponent().lastPathComponent))
+            let store = DiaryDocumentStore(ownerID: "native-snapshot-qa", baseDirectory: storeRoot)
+            let reopened = try await store.load(id)
+            let editor = DiaryEditorSession(document: reopened.document, images: reopened.images, store: store)
+            let bridge = DiaryEditorAIBridge(editor)
+            bridge.excludedRenderIDs = Set(bridge.objectChoices.filter { $0.role == "background" }.map(\.id))
+            _ = try await bridge.capture(.editorDefaults(.relayout))
+            let bytes = try Data(contentsOf: referenceRoot.appendingPathComponent("live-reference.background"))
+            try await bridge.backgroundCompositePreview(bytes).write(to: run.appendingPathComponent("reference-comparison.jpg"))
+        }
+        for reference in references.filter({ $0.pathExtension == "png" }).sorted(by: { $0.path < $1.path }) {
+            let name = reference.deletingPathExtension().lastPathComponent
+            let output = root.appendingPathComponent("results/" + name)
+            let id = try #require(UUID(uuidString: String(contentsOf: output.appendingPathComponent("document-id.txt"), encoding: .utf8)))
+            let store = DiaryDocumentStore(ownerID: "layout-replay", baseDirectory: output.appendingPathComponent("store"))
+            let reopened = try await store.load(id)
+            let editor = DiaryEditorSession(document: reopened.document, images: reopened.images, store: store)
+            let bridge = DiaryEditorAIBridge(editor)
+            bridge.excludedRenderIDs = Set(bridge.objectChoices.filter { $0.role == "background" }.map(\.id))
+            _ = try await bridge.capture(.editorDefaults(.relayout))
+            let dataset = try #require(name.split(separator: "-").first)
+            let baseline = root.appendingPathComponent("\(dataset)/old-background.png")
+            let images = [("old", baseline), ("reference", reference)].filter { FileManager.default.fileExists(atPath: $0.1.path) }
+            for (kind, source) in images {
+                let composite = try await bridge.backgroundCompositePreview(Data(contentsOf: source))
+                try composite.write(to: output.appendingPathComponent("\(kind)-comparison.jpg"))
+            }
+            print("LOCAL_BACKGROUND_COMPARISON \(name)")
         }
     }
 
@@ -863,4 +1120,115 @@ import SwiftUI
 @MainActor final class BackgroundAlbumFake: DiaryAIBackgroundAlbumSaving {
     var saves = 0; var fails = false
     func save(_ data: Data) async throws { saves += 1; if fails { throw DiaryAIError.invalid("没有相册权限") } }
+}
+
+/// Live generator with one injected review failure to exercise the real recovery path.
+@MainActor private final class LiveBackgroundRejectionProbe: DiaryAIBackgroundProvider {
+    private let provider = DiarySeedreamBackgroundProvider()
+    private(set) var prompts: [String] = []
+    private(set) var reviews = 0
+    private(set) var redesigns = 0
+    private(set) var designCalls = 0
+
+    func design(reference: Data, context: String) async throws -> DiaryAIBackgroundDesign {
+        designCalls += 1
+        if context.contains("上一张底图已被拒绝") { redesigns += 1 }
+        return try await provider.design(reference: reference, context: context)
+    }
+
+    func repairPrompt(_ text: String) async throws -> String { try await provider.repairPrompt(text) }
+
+    func generate(reference: Data, prompt: String) async throws -> URL {
+        prompts.append(prompt)
+        return try await provider.generate(reference: reference, prompt: prompt)
+    }
+
+    func download(_ url: URL) async throws -> Data { try await provider.download(url) }
+
+    func validate(reference: Data, background: Data) async throws {
+        try await validate(reference: reference, background: background, style: .resolve("paper"))
+    }
+
+    func validate(reference: Data, background: Data, style: DiaryAIBackgroundStyle) async throws {
+        reviews += 1
+        if reviews == 1 {
+            throw DiaryAIBackgroundVisualRejection(reason: "注入回归条件：杯子与桌面呈现摄影质感")
+        }
+        try await provider.validate(reference: reference, background: background, style: style)
+    }
+    func validate(reference: Data, background: Data, style: DiaryAIBackgroundStyle,
+                  design: DiaryAIBackgroundDesign, composite: Data) async throws {
+        reviews += 1
+        if reviews == 1 {
+            throw DiaryAIBackgroundVisualRejection(reason: "注入回归条件：杯子与桌面呈现摄影质感")
+        }
+        try await provider.validate(reference: reference, background: background, style: style, design: design, composite: composite)
+    }
+
+}
+
+
+@MainActor private struct LayoutReplayContent: DiaryAIModelClient {
+    let content: DiaryNativeContent
+    func respond(prompt: String?, images: [DiaryAIImage], continuation: Data?, results: [DiaryAIToolResult]) async throws -> DiaryAIModelReply {
+        let call = DiaryAIToolCall(id: "layout-replay", name: "compose_content", arguments: try DiaryAIDraftController.json(content))
+        return .init(calls: [call], text: "", continuation: Data(), inputTokens: nil, outputTokens: nil)
+    }
+}
+
+@MainActor private final class LayoutReplayBackground: DiaryAIBackgroundProvider {
+    let output: URL
+    var generationWasGuided = false
+    var composites = 0
+    var designs = 0
+    var receivedRejectionFeedback = false
+    let rejectFirst: Bool
+    init(output: URL, rejectFirst: Bool = false) {
+        self.output = output
+        self.rejectFirst = rejectFirst
+    }
+
+    func design(reference: Data, context: String) async throws -> DiaryAIBackgroundDesign {
+        designs += 1
+        receivedRejectionFeedback = context.contains("上一张底图已被拒绝")
+        try reference.write(to: output.appendingPathComponent("foreground.jpg"))
+        try context.write(to: output.appendingPathComponent("design-input.txt"), atomically: true, encoding: .utf8)
+        #expect(context.contains("最终排版") && context.contains("主照ID"))
+        return .init(brief: "位置与来源证据回归", prompt: "左下保留淡青轮廓，右侧用暖赭细线承接，顶部为浅暖纤维纸")
+    }
+
+    func generate(reference: Data, prompt: String) async throws -> URL {
+        generationWasGuided = !reference.isEmpty
+        if generationWasGuided { try reference.write(to: output.appendingPathComponent("guide.jpg")) }
+        try prompt.write(to: output.appendingPathComponent("generation-prompt.txt"), atomically: true, encoding: .utf8)
+        return URL(string: "https://example.com/layout-replay")!
+    }
+
+    func download(_ url: URL) async throws -> Data {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 874, height: 626), format: format).image { ctx in
+            UIColor(red: 0.97, green: 0.95, blue: 0.90, alpha: 1).setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 874, height: 626))
+            UIColor(red: 0.83, green: 0.90, blue: 0.86, alpha: 1).setFill()
+            ctx.fill(CGRect(x: 0, y: 520, width: 210, height: 106))
+        }
+        return try #require(image.pngData())
+    }
+
+    func validate(reference: Data, background: Data) async throws {
+        Issue.record("快速排版应提交真实合成预览给验收")
+    }
+
+    func validate(reference: Data, background: Data, style: DiaryAIBackgroundStyle,
+                  design: DiaryAIBackgroundDesign, composite: Data) async throws {
+        #expect(design.prompt.contains("左下"))
+        composites += 1
+        if rejectFirst && composites == 1 {
+            throw DiaryAIBackgroundVisualRejection(reason: "回归测试：候选遮住了来源意象")
+        }
+        try background.write(to: output.appendingPathComponent("fixture-background.png"))
+        try composite.write(to: output.appendingPathComponent("fixture-composite.jpg"))
+    }
 }

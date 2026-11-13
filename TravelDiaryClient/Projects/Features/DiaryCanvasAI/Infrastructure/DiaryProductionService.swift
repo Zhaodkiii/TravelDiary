@@ -49,7 +49,8 @@ final class DiaryProductionService: ObservableObject {
         subscription = sessions.$state.sink { [weak self] state in
             guard let self else { return }
             let account: String?
-            if case let .signedIn(session) = state, !session.isDeviceAccount {
+            // Device and registered accounts share production ownership and quota.
+            if case let .signedIn(session) = state {
                 account = String(session.accountID)
             } else {
                 account = nil

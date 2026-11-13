@@ -116,7 +116,7 @@ enum DiaryPageRenderer {
     }
 
     /// AI previews share print geometry but yield between nested layers before background encoding.
-    static func aiPreview(_ document: DiaryDocument, contentID: UUID, images: [UUID: UIImage], size: CGSize) async throws -> UIImage {
+    static func aiPreview(_ document: DiaryDocument, contentID: UUID, images: [UUID: UIImage], size: CGSize, underlay: CGImage? = nil) async throws -> UIImage {
         let ratio = min(1, 1536 / max(size.width, size.height))
         let width = max(1, Int(ceil(size.width * ratio))), height = max(1, Int(ceil(size.height * ratio)))
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
@@ -124,6 +124,10 @@ enum DiaryPageRenderer {
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { throw DiaryAIError.invalid("预览创建失败") }
         context.setFillColor(UIColor.systemBackground.cgColor)
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        if let underlay {
+            context.draw(underlay, in: CGRect(x: 0, y: CGFloat(height) - size.height * ratio,
+                                              width: size.width * ratio, height: size.height * ratio))
+        }
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: ratio, y: -ratio)
         try await drawForPrinting(document, images: images, in: context, contentID: contentID)
