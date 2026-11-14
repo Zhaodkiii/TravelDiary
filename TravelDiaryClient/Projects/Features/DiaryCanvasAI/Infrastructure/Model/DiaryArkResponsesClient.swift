@@ -51,8 +51,8 @@ import Foundation
     }
 
     func respond(prompt: String?, images: [DiaryAIImage], continuation: Data?, results: [DiaryAIToolResult]) async throws -> DiaryAIModelReply {
-        var access = try await runtime.access("diary.layout")
-        var apiKey = access.credential.secret
+        let access = try await runtime.access("diary.layout")
+        let apiKey = access.credential.secret
         productionLog?.registerSecret(apiKey)
         var history = try continuation.map { try JSONSerialization.jsonObject(with: $0) as? [[String: Any]] ?? [] } ?? []
         func imageParts(_ values: [DiaryAIImage]) -> [[String: Any]] {
@@ -121,77 +121,43 @@ import Foundation
             "stream": true, "max_output_tokens": planning ? 4096 : 8192, "store": false]
         requestBody.merge(access.scene.parameters.mapValues(\.foundation)) { _, new in new }
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
-        var received: Data?
-        var refreshedCredential = false
-        for attempt in 0..<3 {
+        let data = try await runtime.meteredResponse(scene: "diary.layout", request: request) {
             try Task.checkCancellation()
-            try runtime.assertOwner()
             let started = Date()
-            onTransportEvent?("开始连接模型服务", "规划：\(planning ? "是" : "否") · 思考：\("low")")
-            productionLog?.record("request", ["endpoint": request.url!.absoluteString, "attempt": attempt])
-            if let body = request.httpBody { productionLog?.data("request-body", body) }
+            onTransportEvent?("开始连接模型服务", "")
             let (bytes, response) = try await session.bytes(for: request)
-            productionLog?.record("response-status", ["status": (response as? HTTPURLResponse)?.statusCode ?? 0, "headers": (response as? HTTPURLResponse)?.allHeaderFields.reduce(into: [String: String]()) { $0[String(describing: $1.key)] = String(describing: $1.value) } ?? [:]])
-            onTransportEvent?("已收到响应头", String(format: "连接并收到响应头 %.2f 秒", Date().timeIntervalSince(started)))
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if (200..<300).contains(status) {
-                guard (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")?.contains("text/event-stream") == true else {
-                    throw DiaryAIError.invalid("接口未返回 SSE 流，未执行任何未提交操作。")
+            let http = response as? HTTPURLResponse
+            let status = http?.statusCode ?? 0
+            guard (200..<300).contains(status) else {
+                var errorBody = Data()
+                for try await byte in bytes {
+                    errorBody.append(byte)
+                    if errorBody.count >= 16_384 { break }
                 }
-                let parser = DiaryAIStreamParser()
-                var firstEvent = false
-                for try await line in bytes.lines {
-                    try Task.checkCancellation()
-                    try runtime.assertOwner()
-                    guard Date().timeIntervalSince(started) < DiaryAIRequestLimits.requestDeadline else {
-                        throw DiaryAIError.invalid("本次模型请求超过总时限，已提交批次保留。手动重试会发起新请求，可能再次计费。")
-                    }
-                    if line.hasPrefix("data:"), let payload = line.dropFirst(5).data(using: .utf8) { productionLog?.data("sse", payload) }
-                    else if !line.isEmpty && !line.hasPrefix("event:") { productionLog?.record("sse", ["line": line]) }
-                    let parsed = try await parser.accept(line)
-                    if parsed.event, !firstEvent {
-                        firstEvent = true
-                        onTransportEvent?("已收到首个流式事件", String(format: "首事件耗时 %.2f 秒", Date().timeIntervalSince(started)))
-                    }
-                    if let completed = parsed.completed { received = completed; break }
+                let sanitized = Data(String(decoding: errorBody, as: UTF8.self)
+                    .replacingOccurrences(of: apiKey, with: "[REDACTED]").utf8)
+                throw DiaryAIServiceError.response(status: status, code: http?.value(forHTTPHeaderField: "x-error-code"), body: sanitized)
+            }
+            guard http?.value(forHTTPHeaderField: "Content-Type")?.contains("text/event-stream") == true else {
+                throw DiaryAIError.invalid("接口未返回 SSE 流。")
+            }
+            let parser = DiaryAIStreamParser()
+            var firstEvent = false
+            for try await line in bytes.lines {
+                try Task.checkCancellation()
+                try runtime.assertOwner()
+                guard Date().timeIntervalSince(started) < DiaryAIRequestLimits.requestDeadline else {
+                    throw DiaryAIError.invalid("模型请求超时，请重试当前批次。")
                 }
-                guard received != nil else { throw DiaryAIError.invalid("流式连接中断，未收到完整结果。已提交批次保留；重试可能产生新请求和费用。") }
-                onTransportEvent?("模型输出完整接收", String(format: "本次耗时 %.2f 秒；工具参数现在才进入校验", Date().timeIntervalSince(started)))
-                break
-            }
-            var errorBody = Data()
-            for try await byte in bytes {
-                errorBody.append(byte)
-                if errorBody.count >= 16_384 { break }
-            }
-            let sanitizedBody = Data(String(decoding: errorBody, as: UTF8.self).replacingOccurrences(of: apiKey, with: "[REDACTED]").utf8)
-            productionLog?.data("response-error", sanitizedBody)
-            if status == 401, !refreshedCredential, attempt < 2 {
-                refreshedCredential = true
-                let fresh = try await runtime.access("diary.layout", force: true)
-                if fresh.credential.version != access.credential.version {
-                    access = fresh; apiKey = fresh.credential.secret
-                    productionLog?.registerSecret(apiKey)
-                    request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-                    continue
+                let parsed = try await parser.accept(line)
+                if parsed.event, !firstEvent {
+                    firstEvent = true
+                    onTransportEvent?("已收到首个流式事件", "")
                 }
+                if let completed = parsed.completed { return completed }
             }
-            if status == 429, attempt < 2 {
-                let delay = min(15, max(1, Double((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After") ?? "") ?? Double(2 << attempt)))
-                try await Task.sleep(for: .seconds(delay)); continue
-            }
-            let serviceError = DiaryAIServiceError.response(status: status, code: (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "x-error-code"), body: sanitizedBody)
-            if case .authentication = serviceError { throw serviceError }
-            let message: String
-            switch status {
-            case 404: message = "当前模型或接口不可用，请确认模型访问权限。"
-            case 429: message = "请求过于频繁，请稍后重试。"
-            case 400, 422: throw serviceError
-            default: message = "模型服务暂不可用（HTTP \(status)），请重试。"
-            }
-            throw DiaryAIError.invalid(message)
+            throw DiaryAIError.invalid("流式连接中断，未收到完整结果。")
         }
-        guard let data = received else { throw DiaryAIError.invalid("模型服务未返回结果") }
         productionLog?.data("response-body", data)
         let reply = try Self.decode(data, maximumCalls: workspaceMode ? 30 : 12)
         let calls = try reply.calls.map { call in

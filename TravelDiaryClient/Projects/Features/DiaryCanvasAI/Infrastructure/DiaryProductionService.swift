@@ -4,22 +4,16 @@ import Combine
 struct DiaryProductionQuota: Decodable {
     struct Window: Decodable, Identifiable {
         let kind: String
-        let limit: Int
-        let used: Int
-        let reserved: Int
-        let available: Int
+        let remainingRatio: Double
         let resetAt: String?
         let startsAt: String?
         let status: String?
-        let policyVersion: Int?
         var id: String { kind }
     }
     let serverTime: String
     let policyVersion: Int
-    let canStart: Bool
+    let pendingUsage: Bool
     let serviceStatus: String?
-    let nextEligibleAt: String?
-    let blockedReasons: [String]?
     let entitled: Bool
     let windows: [Window]
 }
@@ -29,7 +23,6 @@ struct DiaryProductionTask: Codable {
     let state: String
     let version: Int
     let attemptKey: UUID
-    let expiresAt: String
 }
 
 @MainActor
@@ -70,6 +63,7 @@ final class DiaryProductionService: ObservableObject {
         let stamp = generation
         loading = true
         defer { if stamp == generation { loading = false } }
+        await flushUsage()
         do {
             let result: DiaryProductionQuota = try await request("quota/")
             guard stamp == generation else { return }
@@ -92,7 +86,7 @@ final class DiaryProductionService: ObservableObject {
     }
 
     func start(key: UUID, digest: String, scenes: [String] = ["diary.layout"]) async throws -> DiaryProductionTask {
-        try await request("tasks/", body: ["attempt_key": key.uuidString, "input_digest": digest, "client_capabilities": DiaryAITaskRuntime.capabilities, "required_scenes": scenes])
+        try await request("tasks/", body: ["usage_metering": true, "attempt_key": key.uuidString, "input_digest": digest, "client_capabilities": DiaryAITaskRuntime.capabilities, "required_scenes": scenes])
     }
 
     func task(_ id: UUID) async throws -> DiaryProductionTask {
@@ -101,6 +95,88 @@ final class DiaryProductionService: ObservableObject {
 
     func action(_ action: String, task: DiaryProductionTask) async throws -> DiaryProductionTask {
         try await request("tasks/\(task.id.uuidString.lowercased())/\(action)/", body: ["version": task.version])
+    }
+
+    struct Call: Decodable {
+        let accountingState: String
+        let quota: DiaryProductionQuota?
+    }
+
+    func authorizeCall(taskID: UUID, callID: UUID, scene: String, digest: String, parameters: [String: Any]) async throws {
+        await flushUsage()
+        let call: Call
+        do {
+            call = try await request("tasks/\(taskID.uuidString)/calls/", body: [
+                "call_id": callID.uuidString, "scene": scene, "input_digest": digest, "parameters": parameters
+            ])
+        } catch let error as SupportNetworkError {
+            guard case .http(_, let backend, _) = error, case .object(let details) = backend?.data,
+                  details["error_key"] == .string("QUOTA_INSUFFICIENT") else { throw error }
+            let windows: [String]
+            if case .array(let values) = details["blocked_windows"] {
+                windows = values.compactMap {
+                    switch $0 {
+                    case .string("short"): return "5 小时"
+                    case .string("weekly"): return "7 天"
+                    default: return nil
+                    }
+                }
+            } else { windows = [] }
+            let name = windows.isEmpty ? "制作" : windows.joined(separator: "、")
+            let date: Date?
+            if case .string(let value) = details["next_eligible_at"] {
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                date = formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+            } else { date = nil }
+            let recovery = date.map { "，\($0.formatted(date: .abbreviated, time: .shortened)) 恢复" } ?? ""
+            throw DiaryAIError.invalid("\(name)额度不足\(recovery)。")
+        }
+        guard call.accountingState == "pending" else { throw DiaryAIError.invalid("此调用许可已结束，请重新发起制作。") }
+    }
+
+    struct UsageReport: Codable {
+        let owner: String
+        let task: UUID
+        let call: UUID
+        let event: UUID
+        let state: String
+        let usage: [String: Int]
+        let providerRequestID: String
+    }
+
+    private var reporting: Set<UUID> = []
+
+    func recordUsage(_ report: UsageReport) async {
+        let key = "diary.ai.usage.\(report.owner).\(report.call.uuidString)"
+        if let data = try? JSONEncoder().encode(report) { UserDefaults.standard.set(data, forKey: key) }
+        await deliver(report, key: key)
+    }
+
+    private func deliver(_ report: UsageReport, key: String) async {
+        guard owner == report.owner, reporting.insert(report.call).inserted else { return }
+        defer { reporting.remove(report.call) }
+        do {
+            let result: Call = try await request(
+                "tasks/\(report.task.uuidString)/calls/\(report.call.uuidString)/usage/",
+                body: ["event_id": report.event.uuidString, "execution_state": report.state,
+                       "usage": report.usage, "provider_request_id": report.providerRequestID]
+            )
+            UserDefaults.standard.removeObject(forKey: key)
+            if owner == report.owner, let snapshot = result.quota { quota = snapshot }
+        } catch {
+            // Persisted under the original account for retry on refresh.
+        }
+    }
+
+    private func flushUsage() async {
+        guard let owner else { return }
+        let prefix = "diary.ai.usage.\(owner)."
+        for (key, value) in UserDefaults.standard.dictionaryRepresentation() where key.hasPrefix(prefix) {
+            if let data = value as? Data, let report = try? JSONDecoder().decode(UsageReport.self, from: data) {
+                await deliver(report, key: key)
+            }
+        }
     }
 
     func runtimeConfiguration(_ taskID: UUID) async throws -> DiaryAITaskRuntime.Configuration {

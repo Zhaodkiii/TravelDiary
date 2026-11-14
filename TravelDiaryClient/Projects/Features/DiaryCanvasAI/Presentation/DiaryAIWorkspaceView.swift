@@ -52,7 +52,7 @@ struct DiaryAIWorkspaceView: View {
                 if workspace.pending.isEmpty { Button("保存到作品") { Task { _ = await workspace.save() } } }
                 else { Button("保存已完成部分，保留待排素材") { Task { _ = await workspace.save() } } }
                 Button("继续排版", role: .cancel) {}
-            } message: { Text(workspace.requiresCloudSettlement ? "保存当前成果并使用 1 次制作额度。也可以保留进度，稍后继续。" : workspace.pending.isEmpty ? "发布为正式作品，可一次撤销整轮排版。" : "还有 \(workspace.pending.count) 项待排。保存后待排素材仍保留在项目中，但暂不显示在页面或导出中；下次进入可继续排版。") }
+            } message: { Text(workspace.requiresResultRecording ? "保存当前成果。也可以保留进度，稍后继续。" : workspace.pending.isEmpty ? "发布为正式作品，可一次撤销整轮排版。" : "还有 \(workspace.pending.count) 项待排。保存后待排素材仍保留在项目中，但暂不显示在页面或导出中；下次进入可继续排版。") }
             .alert("AI 排版", isPresented: Binding(get: { workspace.error != nil && !workspace.panelVisible }, set: { if !$0 { workspace.error = nil } })) {
                 Button("查看过程") { workspace.panelVisible = true }
             } message: { Text(workspace.error ?? "") }

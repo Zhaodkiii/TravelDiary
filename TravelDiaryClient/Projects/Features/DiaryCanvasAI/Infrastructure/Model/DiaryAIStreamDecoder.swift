@@ -24,10 +24,10 @@ nonisolated struct DiaryAIStreamDecoder {
             if String(decoding: data, as: UTF8.self) == "[DONE]" { return true }
             guard let event = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw DiaryAIError.invalid("流式事件格式无效") }
             switch event["type"] as? String {
-            case "response.completed":
-                guard let response = event["response"] as? [String: Any] else { throw DiaryAIError.invalid("流式响应缺少完成结果") }
+            case "response.completed", "response.failed", "response.incomplete":
+                guard let response = event["response"] as? [String: Any] else { throw DiaryAIError.invalid("流式响应缺少结果") }
                 completed = try JSONSerialization.data(withJSONObject: response)
-            case "response.failed", "response.incomplete", "error": throw DiaryAIError.invalid("模型响应失败或不完整；未提交的工具不会执行，请重试当前批次。")
+            case "error": throw DiaryAIError.invalid("模型响应失败或不完整；未提交的工具不会执行，请重试当前批次。")
             default: break
             }
             return true

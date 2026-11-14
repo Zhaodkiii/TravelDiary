@@ -511,6 +511,13 @@ import SwiftUI
         #expect(throws: (any Error).self) { try decoder.accept("") }
         #expect(decoder.completed == nil)
     }
+    @Test func incompleteStreamPreservesUsageForAccounting() throws {
+        var decoder = DiaryAIStreamDecoder()
+        _ = try decoder.acceptNetworkLine(#"data: {"type":"response.incomplete","response":{"status":"incomplete","usage":{"input_tokens":150,"output_tokens":20}}}"#)
+        let response = try #require(try JSONSerialization.jsonObject(with: #require(decoder.completed)) as? [String: Any])
+        #expect(response["status"] as? String == "incomplete")
+        #expect((response["usage"] as? [String: Int])?["output_tokens"] == 20)
+    }
     @Test func allStylePreviewsAreBundled() throws {
         for style in DiaryAIStyleLibrary.styles {
             let image = try #require(UIImage(named: style.imageName), "Missing style asset: \(style.imageName)")

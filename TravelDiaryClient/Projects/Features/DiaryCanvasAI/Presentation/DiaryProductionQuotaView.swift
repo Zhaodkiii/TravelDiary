@@ -13,18 +13,19 @@ struct DiaryProductionQuotaSection: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(window.kind == "short" ? "5 小时额度" : "7 天额度")
                             .font(.headline)
-                        Text("可用 \(window.available) 次，共 \(window.limit) 次")
-                        if window.reserved > 0 {
-                            Text("\(window.reserved) 次正在制作中").foregroundStyle(.secondary)
-                        }
+                        Text(DiaryProductionQuotaSection.remainingText(window.remainingRatio))
+                        ProgressView(value: window.remainingRatio)
+                            .tint(window.remainingRatio < 0.1 ? .orange : Color.accentColor)
                         if let reset = window.resetAt, let date = date(reset) {
-                            Text("恢复时间 \(date.formatted(date: .abbreviated, time: .shortened))")
+                            Text("\(date.formatted(date: .abbreviated, time: .shortened)) 恢复")
                                 .font(.footnote).foregroundStyle(.secondary)
                         } else {
                             Text(window.status == "awaiting_first_use" ? "额度已恢复，下次制作时开始新周期" : "首次制作时开始计时").font(.footnote).foregroundStyle(.secondary)
                         }
                     }.accessibilityElement(children: .combine)
                 }
+                if quota.pendingUsage { Text("用量更新中").foregroundStyle(.secondary) }
+                Text("按 AI 用量消耗额度，失败或取消也会消耗。").font(.footnote)
                 if quota.serviceStatus == "maintenance" {
                     Text("制作服务维护中，已有制作可继续").foregroundStyle(.secondary)
                 } else if quota.serviceStatus == "unconfigured" {
@@ -59,6 +60,11 @@ struct DiaryProductionQuotaSection: View {
         }
     }
 
+    static func remainingText(_ ratio: Double) -> String {
+        if ratio > 0 && ratio < 0.01 { return "剩余不足 1%" }
+        return "剩余 \(Int((min(1, max(0, ratio)) * 100).rounded(.down)))%"
+    }
+
     private func date(_ value: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -88,7 +94,7 @@ struct DiaryProductionQuotaButton: View {
             .frame(width: 24, height: 24)
         }
         .accessibilityLabel("查看制作额度")
-        .accessibilityValue("5 小时剩余 \(quotaDescription(short))，7 天剩余 \(quotaDescription(weekly))")
+        .accessibilityValue("5 小时 \(quotaDescription(short))，7 天 \(quotaDescription(weekly))")
         .accessibilityIdentifier("diary.ai.production-quota")
         .task(id: service.owner) {
             if service.owner != nil { await service.refresh() }
@@ -97,20 +103,29 @@ struct DiaryProductionQuotaButton: View {
             if phase == .active, service.owner != nil { Task { await service.refresh() } }
         }
         .popover(isPresented: $presented, arrowEdge: .top) {
-            Form { DiaryProductionQuotaSection() }
-                .frame(width: 300, height: 340)
-                .presentationCompactAdaptation(.popover)
+            NavigationStack {
+                Form { DiaryProductionQuotaSection() }
+                    .navigationTitle("制作额度")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("关闭") { presented = false }
+                        }
+                    }
+            }
+            .frame(idealWidth: 360, idealHeight: 440)
+            .presentationCompactAdaptation(.sheet)
+            .presentationDetents([.medium, .large])
         }
     }
 
     private func remainingFraction(for kind: String) -> Double? {
         guard let window = service.quota?.windows.first(where: { $0.kind == kind }) else { return nil }
-        guard window.limit > 0 else { return 0 }
-        return min(1, max(0, Double(window.available) / Double(window.limit)))
+        return window.remainingRatio
     }
 
     private func quotaDescription(_ fraction: Double?) -> String {
-        fraction?.formatted(.percent.precision(.fractionLength(0))) ?? "暂无数据"
+        fraction.map(DiaryProductionQuotaSection.remainingText) ?? "暂无数据"
     }
 
     private func quotaArc(start: Double, sweep: Double, remaining: Double?) -> some View {

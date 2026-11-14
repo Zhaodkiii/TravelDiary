@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Combine
 
 /// Credentials only live in memory. Restart/resume always authenticates and obtains a new lease.
@@ -96,6 +97,71 @@ import Combine
         }
         return Access(scene: scene, credential: credential)
     }
+    private var callRunning = false
+    private var waitingCalls: [CheckedContinuation<Void, Never>] = []
+
+    private func enterCallQueue() async {
+        if callRunning {
+            await withCheckedContinuation { waitingCalls.append($0) }
+        } else {
+            callRunning = true
+        }
+    }
+
+    private func leaveCallQueue() {
+        if waitingCalls.isEmpty { callRunning = false }
+        else { waitingCalls.removeFirst().resume() }
+    }
+
+    func meteredResponse(scene: String, request: URLRequest, operation: () async throws -> Data) async throws -> Data {
+        #if DEBUG
+        if Self.testConfiguration != nil { return try await operation() }
+        #endif
+        let stamp = generation
+        await enterCallQueue()
+        defer { leaveCallQueue() }
+        try Task.checkCancellation()
+        guard stamp == generation else { throw CancellationError() }
+        try assertOwner()
+        guard let taskID, let owner, let body = request.httpBody,
+              let payload = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+            throw DiaryAIError.invalid("AI 调用缺少制作上下文。")
+        }
+        let call = UUID()
+        var parameters: [String: Any] = [:]
+        for key in ["size", "max_output_tokens"] { parameters[key] = payload[key] }
+        let digest = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
+        let service = DiaryProductionService.shared
+        try await service.authorizeCall(taskID: taskID, callID: call, scene: scene, digest: digest, parameters: parameters)
+
+        let result: Result<Data, Error>
+        do {
+            try assertOwner()
+            try Task.checkCancellation()
+            result = .success(try await operation())
+        }
+        catch { result = .failure(error) }
+        let response = (try? result.get()).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let reported = response?["usage"] as? [String: Any] ?? [:]
+        var usage: [String: Int] = [:]
+        for key in ["input_tokens", "output_tokens", "generated_images", "cached_input_tokens"] {
+            usage[key] = reported[key] as? Int
+        }
+        if usage["cached_input_tokens"] == nil {
+            usage["cached_input_tokens"] = (reported["input_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int
+        }
+        let state: String
+        switch result {
+        case .failure(let error): state = error is CancellationError ? "cancelled" : "failed"
+        case .success:
+            state = response?["error"] != nil || ["failed", "incomplete"].contains(response?["status"] as? String ?? "") ? "failed" : "completed"
+        }
+        let report = DiaryProductionService.UsageReport(owner: owner, task: taskID, call: call, event: UUID(),
+            state: state, usage: usage, providerRequestID: response?["id"] as? String ?? "")
+        await Task { await service.recordUsage(report) }.value
+        return try result.get()
+    }
+
     func assertOwner() throws {
         #if DEBUG
         if Self.testConfiguration != nil { return }

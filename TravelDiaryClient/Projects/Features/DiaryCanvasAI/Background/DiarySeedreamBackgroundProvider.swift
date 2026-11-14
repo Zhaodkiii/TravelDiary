@@ -18,7 +18,7 @@ import Foundation
         if !reference.isEmpty { result["image"] = "data:image/jpeg;base64,\(reference.base64EncodedString())" }
         return result
     }
-    private func post(_ input: [String: Any], scene name: String, refreshed: Bool = false) async throws -> [String: Any] {
+    private func post(_ input: [String: Any], scene name: String) async throws -> [String: Any] {
         let access = try await runtime.access(name)
         let apiKey = access.credential.secret
         productionLog?.registerSecret(apiKey)
@@ -32,21 +32,18 @@ import Foundation
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         productionLog?.record("request", ["endpoint": url.absoluteString])
         if let bytes = request.httpBody { productionLog?.data("request-body", bytes) }
-        let (data, response) = try await session.data(for: request)
-        productionLog?.record("response-status", ["status": (response as? HTTPURLResponse)?.statusCode ?? 0, "headers": (response as? HTTPURLResponse)?.allHeaderFields.reduce(into: [String: String]()) { $0[String(describing: $1.key)] = String(describing: $1.value) } ?? [:]])
+        let data = try await runtime.meteredResponse(scene: name, request: request) {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw DiaryAIError.invalid("背景服务未返回有效响应") }
+            productionLog?.record("response-status", ["status": http.statusCode])
+            guard (200..<300).contains(http.statusCode) else {
+                throw DiaryAIServiceError.response(status: http.statusCode, code: http.value(forHTTPHeaderField: "x-error-code"), body: data)
+            }
+            return data
+        }
         productionLog?.data("response-body", data)
         try Task.checkCancellation()
         try runtime.assertOwner()
-        guard let http = response as? HTTPURLResponse else { throw DiaryAIError.invalid("背景服务未返回有效响应") }
-        if http.statusCode == 401, !refreshed {
-            let fresh = try await runtime.access(name, force: true)
-            if fresh.credential.version != access.credential.version {
-                return try await post(input, scene: name, refreshed: true)
-            }
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            throw DiaryAIServiceError.response(status: http.statusCode, code: http.value(forHTTPHeaderField: "x-error-code"), body: data)
-        }
         guard data.count <= 4_000_000, let object = try JSONSerialization.jsonObject(with: data) as? [String: Any], object["error"] == nil else { throw DiaryAIError.invalid("背景服务返回错误或无效数据") }
         return object
     }
