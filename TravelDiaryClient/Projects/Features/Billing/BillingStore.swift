@@ -1,7 +1,12 @@
 import Foundation
 import Combine
+import OSLog
 import StoreKit
 import RevenueCat
+
+struct AppStoreVerificationFailure: LocalizedError {
+    var errorDescription: String? { "暂时无法验证 App Store。请点「重新验证 App Store」后再试。" }
+}
 
 /// Account-bound billing. Every async response must still belong to this generation.
 @MainActor
@@ -23,6 +28,9 @@ final class BillingStore: ObservableObject {
     private var generation = UUID()
     private var identityTask: Task<Void, Error>?
     private var sdkTail: Task<Void, Never>?
+    private let clock = ContinuousClock()
+    private var nextAutomaticVerification: ContinuousClock.Instant?
+    private let billingLog = OSLog(subsystem: "cn.zhaodk.TravelDiary", category: "Billing")
 
     func configure(engine: SupportNetworkEngine, sessions: AppSessionStore) {
         self.engine = engine
@@ -54,7 +62,7 @@ final class BillingStore: ObservableObject {
         try validate(expected, stamp: stamp)
         return try JSONDecoder().decode(T.self, from: response.data)
     }
-    func ready(owner expected: String) async throws {
+    func ready(owner expected: String, reverifyAppStore: Bool = false) async throws {
         guard owner == expected, formalAccount else { throw BillingFailure("请先绑定正式账号，再使用会员与钻石服务") }
         if let info = bootstrapInfo {
             let formatter = ISO8601DateFormatter()
@@ -64,11 +72,19 @@ final class BillingStore: ObservableObject {
             bootstrapInfo = nil
         }
         if let identityTask { return try await identityTask.value }
+        if !reverifyAppStore, let retryAt = nextAutomaticVerification, clock.now < retryAt {
+            throw AppStoreVerificationFailure()
+        }
         let stamp = generation
         let task = Task { @MainActor in
-            let proof = try await AppTransaction.shared
-            guard case .verified = proof else { throw BillingFailure("无法验证 App Store 环境，请从 App Store 或 TestFlight 安装") }
-            let info: BillingBootstrap = try await request("bootstrap/", owner: expected, method: .post, body: ["signed_app_transaction": proof.jwsRepresentation])
+            let proof = try await appStoreProof(owner: expected, stamp: stamp, reverify: reverifyAppStore)
+            let info: BillingBootstrap
+            do {
+                info = try await request("bootstrap/", owner: expected, method: .post, body: ["signed_app_transaction": proof])
+            } catch {
+                logBillingError(error, stage: "billing.bootstrap")
+                throw error
+            }
             try validate(expected, stamp: stamp)
             guard info.public_key.hasPrefix("appl_") else { throw BillingFailure("充值服务尚未配置") }
             // Login operations are serialized, including across account changes.
@@ -91,6 +107,48 @@ final class BillingStore: ObservableObject {
         identityTask = task
         do { try await task.value; if generation == stamp { identityTask = nil } }
         catch { if generation == stamp { identityTask = nil }; throw error }
+    }
+
+    private func appStoreProof(owner: String, stamp: UUID, reverify: Bool) async throws -> String {
+        let stage = reverify ? "AppTransaction.refresh" : "AppTransaction.shared"
+        do {
+            let result: StoreKit.VerificationResult<AppTransaction>
+            if reverify {
+                result = try await AppTransaction.refresh()
+            } else {
+                result = try await AppTransaction.shared
+            }
+            try validate(owner, stamp: stamp)
+            switch result {
+            case .verified:
+                nextAutomaticVerification = nil
+                return result.jwsRepresentation
+            case .unverified(_, let error):
+                throw error
+            }
+        } catch {
+            try validate(owner, stamp: stamp)
+            nextAutomaticVerification = clock.now.advanced(by: .seconds(60))
+            if error is CancellationError { throw error }
+            if let storeKitError = error as? StoreKitError, case .userCancelled = storeKitError {
+                throw CancellationError()
+            }
+            logBillingError(error, stage: stage)
+            throw AppStoreVerificationFailure()
+        }
+    }
+
+    private func logBillingError(_ error: Error, stage: String) {
+        let failure = error as NSError
+        let underlying = (error as? StoreKitError).flatMap { storeKitError -> NSError? in
+            if case .systemError(let error) = storeKitError { return error as NSError }
+            return nil
+        } ?? failure.userInfo[NSUnderlyingErrorKey] as? NSError
+        var diagnostic = "\(stage) failed: \(failure.domain) (\(failure.code))"
+        if let underlying {
+            diagnostic += ", underlying: \(underlying.domain) (\(underlying.code))"
+        }
+        os_log("%{public}@", log: billingLog, type: .error, diagnostic)
     }
     /// Keep the RevenueCat identity fixed until StoreKit finishes the operation.
     private func serializedSDK<T: Sendable>(_ expected: String, stamp: UUID, operation: @escaping @MainActor () async throws -> T) async throws -> T {
@@ -227,12 +285,15 @@ extension BillingStore {
             allowed.contains($0.storeProduct.productIdentifier) && $0.storeProduct.subscriptionPeriod != nil
         }
     }
-    func refreshMembership(owner expected: String) async throws {
-        try await ready(owner: expected)
+    func refreshMembership(owner expected: String, reverifyAppStore: Bool = false) async throws {
+        try await ready(owner: expected, reverifyAppStore: reverifyAppStore)
         let value: MembershipStatus = try await request("membership/", owner: expected, method: .post, body: [:])
         if membership?.active != value.active { invalidateContentCatalogs(owner: expected) }
         membership = value
         if value.active && value.sync_state == "fresh" { setMembershipPending(false) }
+        if DiaryProductionService.shared.owner == expected {
+            await DiaryProductionService.shared.refreshQuota()
+        }
     }
     private func setMembershipPending(_ value: Bool) {
         membershipPending = value
@@ -249,7 +310,7 @@ extension BillingStore {
         guard ["cn.zhaodk.TravelDiary.member.monthly", "cn.zhaodk.TravelDiary.member.yearly"].contains(package.storeProduct.productIdentifier), package.storeProduct.subscriptionPeriod != nil else {
             throw BillingFailure("此套餐不属于当前会员订阅")
         }
-        guard membership?.sales_enabled == true, (membership?.member_content_count ?? 0) > 0 else { throw BillingFailure("会员服务暂未开放") }
+        guard membership?.sales_enabled == true, membership?.hasPurchasableBenefits == true else { throw BillingFailure("会员服务暂未开放") }
         guard membership?.active != true else { throw BillingFailure("已有有效会员，请通过管理订阅调整套餐") }
         guard !membershipPending, membership?.sync_state == "fresh" else { throw BillingFailure("请先同步或恢复上次购买记录") }
         setMembershipPending(true)

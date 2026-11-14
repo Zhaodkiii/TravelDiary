@@ -142,6 +142,8 @@ struct MembershipStatus: Decodable {
     let wallet_domain: String
     let sales_enabled: Bool
     let member_content_count: Int
+    let ai_production_included: Bool?
+    var hasPurchasableBenefits: Bool { member_content_count > 0 || ai_production_included == true }
     var title: String {
         if sync_state != "fresh" { return "会员状态待同步" }
         if active {

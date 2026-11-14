@@ -9,6 +9,11 @@ struct DiaryProductionQuotaSection: View {
             if service.owner == nil {
                 Text("登录后可查看制作额度").foregroundStyle(.secondary)
             } else if let quota = service.quota {
+                if let plan = quota.plan {
+                    Text(plan == "pro" ? "Pro 会员" : "免费版").font(.subheadline)
+                } else if quota.entitlementState == "unavailable" {
+                    Text("会员状态暂时无法确认，请刷新额度。").foregroundStyle(.secondary)
+                }
                 ForEach(quota.windows) { window in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(window.kind == "short" ? "5 小时额度" : "7 天额度")
@@ -23,6 +28,14 @@ struct DiaryProductionQuotaSection: View {
                             Text(window.status == "awaiting_first_use" ? "额度已恢复，下次制作时开始新周期" : "首次制作时开始计时").font(.footnote).foregroundStyle(.secondary)
                         }
                     }.accessibilityElement(children: .combine)
+                }
+                if quota.plan == "free", quota.serviceStatus == "available", let owner = service.owner {
+                    if service.canPurchaseMembership {
+                        NavigationLink("查看 Pro 权益") { MembershipPurchaseScreen(owner: owner) }
+                    } else {
+                        Text("绑定正式账号后可开通 Pro，获得更多制作额度。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 if quota.pendingUsage { Text("用量更新中").foregroundStyle(.secondary) }
                 Text("按 AI 用量消耗额度，失败或取消也会消耗。").font(.footnote)
@@ -47,8 +60,12 @@ struct DiaryProductionQuotaSection: View {
         }
         .task(id: service.owner) { if service.owner != nil { await service.refresh() } }
         .task(id: service.quota?.serverTime) {
-            guard let snapshot = service.quota, let serverDate = date(snapshot.serverTime),
-                  let reset = snapshot.windows.compactMap({ $0.resetAt.flatMap(date) }).min() else { return }
+            guard let snapshot = service.quota, let serverDate = date(snapshot.serverTime) else { return }
+            var events = snapshot.windows.compactMap { $0.resetAt.flatMap(date) }
+            if snapshot.plan == "pro", let expiry = snapshot.membershipExpiresAt.flatMap(date), expiry > serverDate {
+                events.append(expiry)
+            }
+            guard let reset = events.min() else { return }
             let delay = max(1, reset.timeIntervalSince(serverDate))
             do {
                 try await Task.sleep(for: .seconds(delay))
@@ -85,8 +102,12 @@ struct DiaryProductionQuotaButton: View {
             presented = true
         } label: {
             ZStack {
-                quotaArc(start: 192, sweep: 156, remaining: short)
-                quotaArc(start: 168, sweep: -156, remaining: weekly)
+                if short != nil {
+                    quotaArc(start: 192, sweep: 156, remaining: short)
+                    quotaArc(start: 168, sweep: -156, remaining: weekly)
+                } else {
+                    quotaArc(start: -90, sweep: 360, remaining: weekly)
+                }
                 Image(systemName: "diamond.fill")
                     .font(.system(size: 8))
                     .foregroundStyle(.secondary)
@@ -94,7 +115,7 @@ struct DiaryProductionQuotaButton: View {
             .frame(width: 24, height: 24)
         }
         .accessibilityLabel("查看制作额度")
-        .accessibilityValue("5 小时 \(quotaDescription(short))，7 天 \(quotaDescription(weekly))")
+        .accessibilityValue(short == nil ? "7 天 \(quotaDescription(weekly))" : "5 小时 \(quotaDescription(short))，7 天 \(quotaDescription(weekly))")
         .accessibilityIdentifier("diary.ai.production-quota")
         .task(id: service.owner) {
             if service.owner != nil { await service.refresh() }

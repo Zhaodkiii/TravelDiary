@@ -15,6 +15,9 @@ struct DiaryProductionQuota: Decodable {
     let pendingUsage: Bool
     let serviceStatus: String?
     let entitled: Bool
+    let plan: String?
+    let entitlementState: String?
+    let membershipExpiresAt: String?
     let windows: [Window]
 }
 
@@ -33,6 +36,8 @@ final class DiaryProductionService: ObservableObject {
     @Published private(set) var error: String?
     @Published private(set) var loading = false
     @Published private(set) var owner: String?
+    @Published private(set) var canPurchaseMembership = false
+    @Published private(set) var upgradeSuggested = false
     private var engine: SupportNetworkEngine?
     private var subscription: AnyCancellable?
     private var generation = UUID()
@@ -45,17 +50,33 @@ final class DiaryProductionService: ObservableObject {
             // Device and registered accounts share production ownership and quota.
             if case let .signedIn(session) = state {
                 account = String(session.accountID)
+                canPurchaseMembership = !session.isDeviceAccount
             } else {
                 account = nil
+                canPurchaseMembership = false
             }
             guard account != owner else { return }
             owner = account
             generation = UUID()
             quota = nil
+            upgradeSuggested = false
             runtimeManifestValue = nil
             error = nil
             loading = false
         }
+    }
+
+    func refreshQuota() async {
+        let stamp = generation
+        if let snapshot: DiaryProductionQuota = try? await request("quota/"), stamp == generation {
+            applyQuota(snapshot)
+        }
+    }
+
+    private func applyQuota(_ snapshot: DiaryProductionQuota) {
+        if let current = quota, current.serverTime > snapshot.serverTime { return }
+        quota = snapshot
+        if snapshot.plan != "free" { upgradeSuggested = false }
     }
 
     func refresh() async {
@@ -67,7 +88,7 @@ final class DiaryProductionService: ObservableObject {
         do {
             let result: DiaryProductionQuota = try await request("quota/")
             guard stamp == generation else { return }
-            quota = result
+            applyQuota(result)
             let manifest = try await runtimeManifest()
             guard stamp == generation else { return }
             runtimeManifestValue = manifest
@@ -103,6 +124,7 @@ final class DiaryProductionService: ObservableObject {
     }
 
     func authorizeCall(taskID: UUID, callID: UUID, scene: String, digest: String, parameters: [String: Any]) async throws {
+        upgradeSuggested = false
         await flushUsage()
         let call: Call
         do {
@@ -112,6 +134,8 @@ final class DiaryProductionService: ObservableObject {
         } catch let error as SupportNetworkError {
             guard case .http(_, let backend, _) = error, case .object(let details) = backend?.data,
                   details["error_key"] == .string("QUOTA_INSUFFICIENT") else { throw error }
+            upgradeSuggested = details["plan"] == .string("free")
+            await refreshQuota()
             let windows: [String]
             if case .array(let values) = details["blocked_windows"] {
                 windows = values.compactMap {
@@ -163,7 +187,7 @@ final class DiaryProductionService: ObservableObject {
                        "usage": report.usage, "provider_request_id": report.providerRequestID]
             )
             UserDefaults.standard.removeObject(forKey: key)
-            if owner == report.owner, let snapshot = result.quota { quota = snapshot }
+            if owner == report.owner, let snapshot = result.quota { applyQuota(snapshot) }
         } catch {
             // Persisted under the original account for retry on refresh.
         }
@@ -190,12 +214,25 @@ final class DiaryProductionService: ObservableObject {
         guard owner != nil else { throw DiaryAIError.invalid("登录后可查看制作额度") }
         guard let engine else { throw DiaryAIError.invalid("制作服务尚未初始化") }
         let stamp = generation
+        var headers: [String: String] = [:]
+        let billing = BillingStore.shared
+        if !runtime, let account = billing.owner, account == owner, let info = billing.bootstrapInfo {
+            // Refresh an existing billing session before using it in the store environment.
+            if path == "quota/" || (body != nil && path.hasSuffix("/calls/")) {
+                try await billing.ready(owner: account)
+                guard stamp == generation else { throw CancellationError() }
+                headers["X-Billing-Session"] = billing.bootstrapInfo?.session_id
+            } else {
+                headers["X-Billing-Session"] = info.session_id
+            }
+        }
         let data = try body.map { try JSONSerialization.data(withJSONObject: $0) }
         let operation = CacheableSupportNetworkOperation(
             name: "AIProduction", apiName: "AIProductionAPI",
             request: .init(
                 method: body == nil ? .get : .post,
                 path: (runtime ? "/api/v1/ai-runtime/" : "/api/v1/ai-production/") + path,
+                headers: headers,
                 body: data.map { .raw($0, contentType: "application/json") } ?? .none,
                 timeoutInterval: 240,
                 strategy: .init(requiresAuth: true, allowETag: false)

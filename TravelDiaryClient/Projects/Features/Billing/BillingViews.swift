@@ -252,6 +252,7 @@ struct MembershipPurchaseScreen: View {
     @ObservedObject private var store = BillingStore.shared
     @State private var offering: RevenueCat.Offering?
     @State private var error: String?
+    @State private var appStoreVerificationFailed = false
     @State private var loading = false
     @State private var showPaywall = false
     @Environment(\.scenePhase) private var scenePhase
@@ -274,15 +275,22 @@ struct MembershipPurchaseScreen: View {
                             .buttonStyle(.borderedProminent)
                             .disabled(offering == nil || loading || store.busy)
                     }
-                    Button("同步会员状态") { Task { await load() } }.disabled(loading || store.busy)
+                    if store.membership?.ai_production_included == true {
+                        Text("Pro 包含更多 AI 制作额度，5 小时和 7 天额度按周期恢复。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if store.membershipPending { Text("购买权益同步中，可刷新会员状态或恢复购买。") }
+                    if appStoreVerificationFailed {
+                        Text("暂时无法验证 App Store。重新验证后即可同步会员状态。")
+                            .foregroundStyle(.secondary)
+                        Button("重新验证 App Store") { Task { await load(reverifyAppStore: true) } }
+                            .disabled(loading || store.busy)
+                    } else {
+                        Button("同步会员状态") { Task { await load() } }.disabled(loading || store.busy)
+                    }
                     Button("恢复购买") { Task { await restore() } }.disabled(loading || store.busy)
                 }
         .navigationTitle("会员服务")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("同步状态") { Task { await load() } }.disabled(loading || store.busy)
-            }
-        }
         .sheet(isPresented: $showPaywall, onDismiss: { Task { await load() } }) {
             if let offering {
                 subscriptionPaywall(offering)
@@ -310,7 +318,7 @@ struct MembershipPurchaseScreen: View {
                         Task { @MainActor in
                             defer { resume(shouldProceed: false) }
                             do {
-                                guard store.membership?.member_content_count ?? 0 > 0 else { throw BillingFailure("会员内容正在准备中") }
+                                guard store.membership?.hasPurchasableBenefits == true else { throw BillingFailure("会员权益正在准备中") }
                                 if let id = gift?.id, gift?.sku == package.storeProduct.productIdentifier {
                                     let service = PrintOrderService.shared
                                     let body = try service.json(["plan_id":id,"sku":package.storeProduct.productIdentifier])
@@ -341,24 +349,41 @@ struct MembershipPurchaseScreen: View {
                         }
                     }
     }
-    private func load() async {
+    private func load(reverifyAppStore: Bool = false) async {
         guard !loading else { return }
         loading = true; defer { loading = false }
         do {
-            try await store.refreshMembership(owner: owner)
+            try await store.refreshMembership(owner: owner, reverifyAppStore: reverifyAppStore)
+            appStoreVerificationFailed = false
+            error = nil
             if store.membership?.active != true {
                 offering = try await store.membershipOffering(owner: owner)
                 let offer: Gift? = try? await PrintOrderService.shared.request("campaign/annual/", owner: owner)
                 gift = offering?.availablePackages.contains(where: { $0.storeProduct.productIdentifier == offer?.sku && $0.packageType == .annual }) == true && store.membership?.wallet_domain == "production" ? offer : nil
             }
-        } catch { self.error = error.localizedDescription }
+        } catch is AppStoreVerificationFailure {
+            error = nil
+            appStoreVerificationFailed = true
+            offering = nil
+        } catch is CancellationError {
+            // Leave the verification action available after a dismissed App Store prompt.
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
     private func restore() async {
         do {
             try await store.restoreMembership(owner: owner)
             if store.membership?.active == true { showPaywall = false }
             if store.membership?.active != true { error = "未发现有效会员，请确认登录原购买账号。" }
-        } catch { self.error = error.localizedDescription }
+        } catch is AppStoreVerificationFailure {
+            error = nil
+            appStoreVerificationFailed = true
+            offering = nil
+        } catch is CancellationError {
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 }
 

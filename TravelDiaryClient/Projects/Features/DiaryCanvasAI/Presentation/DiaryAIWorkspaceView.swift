@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct DiaryAIWorkspaceView: View {
     var onCloseDetails: (() -> Void)? = nil
     @ObservedObject var workspace: DiaryAIWorkspace
+    @ObservedObject private var quotaService = DiaryProductionService.shared
     @State private var exitConfirmation = false
     @State private var saveConfirmation = false
     @State private var showOriginal = false
@@ -18,6 +19,13 @@ struct DiaryAIWorkspaceView: View {
                     canvas
                         .frame(height: max(120, geometry.size.height * (workspace.panelVisible ? 0.38 : 0.62)))
                     tray
+                    if workspace.error != nil, quotaService.upgradeSuggested,
+                       quotaService.canPurchaseMembership, let owner = quotaService.owner {
+                        NavigationLink("升级 Pro，获得更多制作额度") {
+                            MembershipPurchaseScreen(owner: owner)
+                        }
+                        .font(.footnote)
+                    }
                     if !workspace.panelVisible {
                         Button { workspace.panelVisible = true } label: {
                             Label(workspace.stage, systemImage: workspace.running ? "sparkles" : "list.bullet.rectangle")
