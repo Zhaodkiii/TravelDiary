@@ -40,7 +40,6 @@ struct DiaryAICreationSheet: View {
     @State private var appeared = false
     @State private var librarySource = "推荐"
     @State private var discardsDraft = false
-    @AppStorage(DiaryAILayoutMode.preferenceKey) private var preferredLayoutMode: DiaryAILayoutMode = .native
     private let paper = Color(uiColor: .systemBackground)
     private let ink = Color(red: 0.24, green: 0.39, blue: 0.34)
     private enum Route: Hashable { case stickers, design, preview, library, photo(UUID), sticker(String), story }
@@ -71,8 +70,8 @@ struct DiaryAICreationSheet: View {
         .onAppear {
             flow.resumePreparation()
             guard !appeared else { return }; appeared = true
-            if flow.draft.step == 1 { path = [.stickers] }
-            if flow.draft.step == 2 { path = [.stickers, .design] }
+            if flow.draft.step == 1 { path = [.design] }
+            if flow.draft.step == 2 { path = [.design] }
         }
         .onChange(of: path) { _, value in
             let step = value.contains(.design) ? 2 : value.contains(.stickers) ? 1 : 0
@@ -206,7 +205,7 @@ struct DiaryAICreationSheet: View {
 
             }
         }
-        .safeAreaInset(edge: .bottom) { footer("继续搭配贴纸", disabled: !flow.canContinue) { path.append(.stickers) } }
+        .safeAreaInset(edge: .bottom) { footer("选择手账风格", disabled: !flow.canContinue) { path.append(.design) } }
         .photosPicker(isPresented: $picking, selection: $photos, maxSelectionCount: max(1, 30 - flow.selectedPhotoCount), selectionBehavior: .ordered, matching: .images, preferredItemEncoding: .current)
         .onChange(of: photos) { _, values in guard !values.isEmpty else { return }; photos = []; flow.importPhotos(values) }
     }
@@ -404,9 +403,6 @@ struct DiaryAICreationSheet: View {
             }
             Text("构图预览 · 制作后仍可调整").font(.caption).foregroundStyle(.secondary)
             if flow.draft.photos.count > 8 { Text("照片较多，成品中会较小；可返回删减或调整主照。").font(.footnote).foregroundStyle(.orange) }
-            Picker("排版方式", selection: Binding(get: { flow.draft.request.layoutMode ?? preferredLayoutMode }, set: { flow.setLayoutMode($0) })) {
-                ForEach(DiaryAILayoutMode.allCases) { Text($0.title).tag($0) }
-            }.pickerStyle(.menu)
             DiaryAIDesignChooser(selection: Binding(get: { flow.design }, set: { flow.setDesign($0) }), photos: flow.photoPreviews)
             NavigationLink(value: Route.story) { Label("故事与制作说明（选填）", systemImage: "square.and.pencil") }
         }

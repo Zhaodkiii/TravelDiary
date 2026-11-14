@@ -290,11 +290,6 @@ struct DiaryAIInlinePanel: View {
                 ScrollView(.vertical, showsIndicators: false) {
                   VStack(spacing: 10) {
                     materialPage
-                    Picker("排版方式", selection: Binding(get: { layoutMode }, set: { selectedLayoutMode = $0 })) {
-                        ForEach(DiaryAILayoutMode.allCases) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.menu)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     if let error = workspace.error {
                         Text(error).font(.caption).foregroundStyle(.orange)
                     }
@@ -503,50 +498,6 @@ struct DiaryAIInlinePanel: View {
                     }
                 }
             }.frame(height: 76)
-            HStack {
-                Label("贴纸 · \(workspace.stickerCount)/8", systemImage: "face.smiling")
-                let selectedStickers = materialStickers.filter { workspace.selected.contains($0.id) }
-                if !selectedStickers.isEmpty {
-                    Button("移除所选（\(selectedStickers.count)）", role: .destructive) {
-                        Task { for item in selectedStickers { await workspace.removePendingMaterial(item.id) } }
-                    }
-                }
-                Spacer()
-                Button("贴纸库", systemImage: "chevron.right", action: onStickers)
-                    .disabled(!workspace.canAddSticker)
-            }.font(.caption)
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 12) {
-                    ForEach(materialStickers) { item in
-                        if let image = workspace.thumbnails[item.id] {
-                            Button { workspace.toggle(item.id) } label: {
-                                Image(uiImage: image).resizable().scaledToFit().frame(width: 56, height: 56)
-                                    .padding(4)
-                                    .background(workspace.selected.contains(item.id) ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 10))
-                                    .overlay(alignment: .topTrailing) {
-                                        Image(systemName: workspace.selected.contains(item.id) ? "checkmark.circle.fill" : "circle")
-                                            .foregroundStyle(workspace.selected.contains(item.id) ? Color.accentColor : Color.secondary)
-                                    }
-                            }.accessibilityLabel("选择贴纸：" + item.name)
-                                .contextMenu {
-                                    Button("移除贴纸", systemImage: "trash", role: .destructive) {
-                                        Task { await workspace.removePendingMaterial(item.id) }
-                                    }
-                                }
-                        }
-                    }
-                    if materialStickers.isEmpty && (started || workspace.running) {
-                        Text(stickers.isEmpty ? "未添加贴纸" : "贴纸已全部放入画布").font(.caption).foregroundStyle(.secondary).frame(height: 64)
-                    }
-                    if !started && !workspace.running {
-                      Button(action: onStickers) {
-                        Image(systemName: "plus").font(.title3)
-                            .frame(width: 64, height: 64)
-                            .background(.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
-                      }.accessibilityLabel("添加贴纸").disabled(!workspace.canAddSticker)
-                    }
-                }
-            }.frame(height: 64)
         }.disabled(workspace.running)
     }
     private func designToggle(_ title: String, symbol: String, value: Int) -> some View {

@@ -341,6 +341,39 @@ extension DiaryAIDesignSelection {
                        captionPhotoIDs: Set<String> = []) -> [DiaryAILayoutRegion] {
         let photos = context.objects.filter { $0.role == "photo" && $0.editable }
         guard (1...8).contains(photos.count) else { return [] }
+        // Build the reading entrance before allocating supporting photos.
+        if layout == .automatic || layout == .hero {
+            let width = Double(context.size.width)
+            let height = Double(context.size.height)
+            let margin = width * 0.04
+            let middle = context.spineX ?? width * 0.5
+            let pageWidth = middle - margin * 2
+            let rightX = middle + margin
+            let gap = height * 0.035
+            var result: [DiaryAILayoutRegion] = []
+            let top = allowsText ? height * 0.20 : margin
+            let bottom = allowsText ? height * 0.84 : height - margin
+            if allowsText {
+                result.append(.init(role: "text", x: margin, y: height * 0.045,
+                                    width: pageWidth, height: height * 0.13))
+                result.append(.init(role: "text", x: margin, y: height * 0.87,
+                                    width: pageWidth, height: height * 0.085))
+            }
+            result.append(.init(role: "photo", objectID: photos[0].id.uuidString,
+                                x: margin, y: top, width: pageWidth, height: bottom - top))
+            let supporting = Array(photos.dropFirst())
+            let columns = supporting.count > 3 ? 2 : 1
+            let rows = max(1, Int(ceil(Double(supporting.count) / Double(columns))))
+            let cellWidth = (pageWidth - gap * Double(columns - 1)) / Double(columns)
+            let cellHeight = (height - margin * 2 - gap * Double(rows - 1)) / Double(rows)
+            for (index, photo) in supporting.enumerated() {
+                result.append(.init(role: "photo", objectID: photo.id.uuidString,
+                    x: rightX + Double(index % columns) * (cellWidth + gap),
+                    y: margin + Double(index / columns) * (cellHeight + gap),
+                    width: cellWidth, height: cellHeight))
+            }
+            return result
+        }
         let bytes = Array(seed.uuidString.utf8)
         let variants: [DiaryAILayout] = layout == .automatic ? [.hero, .story, .headline, .collage, .editorial] : [layout]
         let preferred: Set<DiaryAILayout>
@@ -409,7 +442,7 @@ extension DiaryAIDesignSelection {
                 // Protect readable supporting photos while keeping the main photo visually dominant.
                 score += smallest * Double(photos.count)
                 let heroRatio = supportingArea > 0 ? heroArea / supportingArea : 1.7
-                score *= 1 + 0.14 * min(1.7, heroRatio)
+                score *= heroRatio >= 1.45 ? 1.6 : max(0.15, heroRatio / 1.45)
                 if layout == .automatic && preferred.contains(style) { score *= 1.08 }
                 let heroRegion = regions.first { $0.role == "photo" && $0.objectID == photos.first?.id.uuidString }
                 let textRegions = regions.filter { $0.role == "text" }
@@ -420,7 +453,7 @@ extension DiaryAIDesignSelection {
                         let samePage = context.spineX.map { (title.midX < $0) == (hero.midX < $0) } ?? true
                         let distance = hypot((title.midX - hero.midX) / context.size.width,
                                              (title.midY - hero.midY) / context.size.height)
-                        let leading = title.midY < hero.midY ? 0.16 : 0.08
+                        let leading = title.midY < hero.minY ? 0.8 : 0.02
                         score *= 1 + (samePage ? leading : 0.02) * max(0, 1 - distance)
                     }
                     if !captionPhotoIDs.isEmpty {
@@ -429,14 +462,14 @@ extension DiaryAIDesignSelection {
                         let distance = sources.compactMap { source in
                             text.map { hypot($0.midX - source.bounds.midX, $0.midY - source.bounds.midY) }.min()
                         }.min()
-                        if let distance { score *= 1 + 0.10 * max(0, 1 - distance / context.size.width) }
+                        if let distance { score *= 1 + 0.65 * max(0, 1 - distance / context.size.width) }
                     }
                 }
                 candidates.append((regions, score, styleIndex * 12 + variant % 12))
             }
         }
         guard let bestScore = candidates.map(\.score).max() else { return [] }
-        let qualified = candidates.filter { $0.score >= bestScore * 0.72 }
+        let qualified = candidates.filter { $0.score >= bestScore * 0.97 }
         let families = Dictionary(grouping: qualified, by: \.family)
         let seedValue = bytes.reduce(UInt64(0xcbf29ce484222325)) { ($0 ^ UInt64($1)) &* 0x100000001b3 }
         let keys = families.keys.sorted()

@@ -839,7 +839,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             do {
                 log("timing", "制作任务开始执行")
                 if let mode = request.layoutMode {
-                    log("layout-mode", mode.title, "mode=\(mode.rawValue)，pipelineVersion=1")
+                    log("layout-mode", mode.title, "mode=\(mode.rawValue)，pipelineVersion=2")
                 }
                 if awaitingConfirmation { try await finishConfirmation() }
                 if restartCheckpoint == nil, let working {
@@ -903,7 +903,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
                             ids = Array(objects.filter { $0.editable && $0.role != "background" && (!request.selectedOnly || $0.id == source?.selectedID) && (request.action != .writing || $0.role == "text") }.prefix(Self.maximumBatchLayers).map(\.id))
                         } else if !((request.canCreateText || nativeContent != nil) && !textDone && pending.allSatisfy { id in objects.first { $0.id == id }?.role != "photo" }) { break }
                     }
-                    if efficientExecution && request.layoutMode != .ai && autoAll && revisionFreePhotoBatch(ids),
+                    if efficientExecution && nativeContent != nil && autoAll && revisionFreePhotoBatch(ids),
                        try await applyPlannedPhotoBatch(ids: ids, token: token) {
                         queue.removeAll { ids.contains($0) }
                         batches += 1
@@ -1096,6 +1096,13 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         \(measured)
         """
         let textRegions = objects.filter { $0.role == "text" && $0.visible }.map(\.bounds)
+        if let content = nativeContent, backgroundRecord?.redesignReason == nil,
+           backgroundRecord?.plannedOnFinalLayout != true {
+            backgroundRecord?.designBrief = content.backgroundBrief
+            backgroundRecord?.generationPrompt = content.backgroundPrompt
+            backgroundRecord?.plannedOnFinalLayout = true
+            backgroundRecord?.inputDigest = digest
+        }
         if backgroundRecord?.remoteURL == nil && backgroundRecord?.filename == nil {
             if backgroundRecord?.generationPrompt == nil || (usesFinalLayout && backgroundRecord?.plannedOnFinalLayout != true) {
                 stage = "理解照片主题与排版位置"
@@ -1194,7 +1201,12 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         try await persist()
         if backgroundRecord?.verified != true {
             try await recordingBackgroundRejection(token: token, recordID: recordID) {
-                if usesFinalLayout, backgroundRecord?.plannedOnFinalLayout == true,
+                if nativeContent != nil {
+                    guard let image = UIImage(data: bytes)?.cgImage else {
+                        throw DiaryAIError.invalid("背景图片无法解码")
+                    }
+                    try DiaryAIBackgroundImaging.validateNativeBackground(image, canvas: size, textRegions: textRegions)
+                } else if usesFinalLayout, backgroundRecord?.plannedOnFinalLayout == true,
                    let brief = backgroundRecord?.designBrief, let prompt = backgroundRecord?.generationPrompt {
                     let composite = try await bridge.backgroundCompositePreview(bytes)
                     try await backgroundProvider.validate(reference: reference, background: bytes, style: style,
@@ -1308,13 +1320,15 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         let prompt = """
         只调用compose_content一次。读取编号原图，逐张返回objectID及正立方向rotation（0、90、-90、180），以照片实际内容判断。
         heroID从照片中选取，用户指定优先：\(request.heroID?.uuidString ?? "自动")。
-        按交付手帐的留白方式写文案：一处4至9字标题，加一条8至20字照片短注。丰富记录可再加一条短注。标题选这组照片中可辨认的具体意象，避免通用旅行感想和无依据的时间顺序。每条新增旁注只绑定一张照片，物体、姿态和相对位置必须在该张图同时可见；一眼无法确认的动作或活动状态省略，看不清的标语不引用，不拼接另一张图里的细节。没有可信细节时仅保留标题。用户原样文字按原要求完整保留。根据用户明确提供的「可润色」内容写的正文用body角色与空sourceIDs，保留事实与核心含义。
+        没有用户记录时不写“一日”“这天”“一晚”“生日夜”、笑声、声音、具体日期或行程顺序，标题无需时间词。
+        先读整组照片，确定一个能同时承接人物与环境的主题。生日插牌与合照支持生日纪念，山水与同行支持旅行记录。标题4至9字，概括整组事件或场景，避免只用一种食物、动物或用品命名。主照服从用户指定，文字与背景围绕主照并结合辅助照片展开。
+        写一条8至20字第一人称短注，可以表达“我想留下”“我喜欢这张”的感受或愿望。不要虚构亲历、关系或行程。每条caption通过sourceIDs绑定一张照片，细节必须同时在该照片可见。丰富记录可增加另一张照片的短注。原样文字完整保留。
         仅使用可见事实与用户明确提供的信息。照片只证明画面中出现的物体、姿态与颜色。避免描述风吹、温度、声音、运动速度、先后次序或推断地点、亲属关系、日期。
         用户原样文字完整保留，每项独立成段，仅调整换行。本轮 texts 必须返回 \(textCount.lowerBound) 至 \(textCount.upperBound) 段。
         用户资料：\(request.creationBrief?.modelInstructions ?? "")
         必须完整写入：\(request.creationBrief?.requiredStoryTexts.joined(separator: " | ") ?? "")
         地点写入权限=\(request.writesLocation)。\(request.writesLocation ? "" : "即使照片招牌清晰可读，也禁止把其地名、地标正式名称或完整标语抄入标题和短注。使用可见形态、颜色、光线命名，用户明确要求原样写入的条目优先。")用户要求：\(request.instruction)。文字量：\(request.textDensity)。
-        backgroundBrief用一句话说明本组最值得记住的具体线索，写清主照有什么辨识度，以及不同环境的辅助照中有什么可呼应。backgroundPrompt用60至140字补充来自真实照片的颜色、形状、局部纹理，优先描述能代表主题的线索。主照是合影时，可记录其独特物件、颜色或形状作为背景线索；人物及动作只用于解释主题，不生成其副本。只取可见证据，不将餐具列成整桌清单，不拼接不同地点，也不推断地点、季节和时段。backgroundSourceID填最能证明主题的照片objectID。版式落位后另行设计背景。
+        backgroundBrief概括整组主题与主照依据。backgroundPrompt直接给出可生图的完整连贯背景，100至180字，只写环境、光色、纸张和空间，不引用照片编号或相对照片的位置。远中近景跨越整幅纸面，统一透明水彩和细钢笔线描，纸纤维贯穿景物，避免摄影质感和满幅高对比实景。照片保留最高对比。光线连续。山海由天空、水面、岩岸连接，室内由浅墙和木纹桌面连接。细节尺度克制，筷子、餐具和花草只作小型辅助，禁止将单个物件放大横贯画面。主体照片优先，顶部保留低对比浅色净空供标题，环境在中下部连续延伸。不要生成文字、人像、相框、册页外壳、书脊或新地标。backgroundSourceID为环境依据最充分的照片ID。
         为标题选择一种展示字体，为正文选择一种清晰字体。同角色统一字体。标题优先直接落纸（none），短注可用细纸条、短便签或手撕纸。每页最多一种强调纸卡，避免用整栏白卡承托短句。使用工具定义中的fontID和paper，按\(design.style.name)风格选择。版式与所有坐标由客户端计算。照片编号：\(photos.map { $0.id.uuidString }.joined(separator: ","))
         """
         let response = try await timedRequest(prompt: prompt, images: images, continuation: nil, results: [], token: token)
@@ -1343,6 +1357,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
         content.backgroundSourceID = content.backgroundSourceID ?? content.heroID
         var ordered = context
         let hero = request.heroID?.uuidString ?? content.heroID
+        content.heroID = hero
         ordered.objects.sort { ($0.id.uuidString == hero ? 0 : 1) < ($1.id.uuidString == hero ? 0 : 1) }
         for index in ordered.objects.indices {
             if let orientation = content.photos.first(where: { $0.objectID == ordered.objects[index].id.uuidString }),
@@ -1541,7 +1556,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private var supportsNativeLayout: Bool {
         let photoCount = objects.filter { $0.role == "photo" && $0.editable }.count
         return efficientExecution && request.action == .relayout && request.design != nil
-            && !request.selectedOnly && request.instruction.isEmpty && !hasFixedForeground && (1...8).contains(photoCount)
+            && !request.selectedOnly && !hasFixedForeground && (1...8).contains(photoCount)
             && (request.layoutMode == .native || model is DiaryArkResponsesClient)
     }
 
@@ -1557,7 +1572,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
     private func plan(token: UUID) async throws {
         log("timing", "开始规划路由")
         nativeContent = nil
-        if request.layoutMode != .ai && runsParallel && supportsNativeLayout {
+        if runsParallel && supportsNativeLayout {
             try await planNativeContent(token: token)
             return
         }
@@ -1851,7 +1866,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             log("geometry", "按实际照片计算文字区", try DiaryAIDraftController.json(availableTextRegions))
         }
         let canvas = nativeContent == nil ? try await adapter.originalPreview() : Data()
-        let assets = nativeContent == nil ? try await adapter.inspect(.init(contextID: context.id, objectIDs: ids, view: "fullAsset")) : []
+        let assets = nativeContent == nil && !ids.isEmpty ? try await adapter.inspect(.init(contextID: context.id, objectIDs: ids, view: "fullAsset")) : []
         let shared = """
         本轮runID=\(token)，planID=\(planID)，基础版本=\(baseVersion)。
         \(req.designBrief)

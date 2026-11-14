@@ -498,8 +498,7 @@ nonisolated struct DiaryCreationDraft: Codable {
         let sticker: DiaryCreationSticker?
     }
     private var preparationInputs: [PreparationInput] {
-        draft.photos.map { .init(key: "photo:" + $0.id.uuidString + ":" + $0.digest + ":" + $0.filename, filename: $0.filename, sticker: nil) } +
-        draft.stickers.map { .init(key: "sticker:" + $0.id + ":" + String($0.item.revision) + ":" + $0.filename, filename: $0.filename, sticker: $0) }
+        draft.photos.map { .init(key: "photo:" + $0.id.uuidString + ":" + $0.digest + ":" + $0.filename, filename: $0.filename, sticker: nil) }
     }
     private func preparationCacheURL(_ key: String) -> URL {
         let identity = "v2:" + draft.id.uuidString + ":" + draft.baseline + ":" + key
@@ -630,34 +629,19 @@ nonisolated struct DiaryCreationDraft: Codable {
             await photoTask?.value
             await job?.value
             try Task.checkCancellation()
-            guard !stickerLoadFailed else { throw DiaryAIError.invalid("贴纸读取失败，请返回重试或选择不用贴纸。") }
             guard ownerValid, !draft.photos.isEmpty, failures.isEmpty else {
                 throw DiaryAIError.invalid("有照片读取失败或尚未选入，请返回照片页重试或移除。")
             }
             guard try DiaryEditorAIBridge.digest(session.document) == draft.baseline else { throw DiaryAIError.invalid("原页面已发生变化，请关闭本次准备后重新打开制作。") }
             status = "正在核验素材…"
-            // Re-authorize cloud assets at the final boundary. Downloads reuse verified cache bytes.
-            for sticker in draft.stickers where sticker.item.revision > 0 { _ = try await PresetDownloadManager.shared.materialData(sticker.item) { _ in } }
             guard ownerValid else { throw CancellationError() }
             var request = draft.request
-            request.layoutMode = request.layoutMode ?? DiaryAILayoutMode.preferred
-            if request.layoutMode == .native && (draft.photos.count > 8 || !draft.story.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || draft.photoNotes?.values.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) == true
-                || !request.instruction.isEmpty) {
-                throw DiaryAIError.invalid("当前照片数量或自定义说明需要使用 AI 自由排版，请切换排版方式。")
-            }
+            request.layoutMode = draft.photos.count <= 8 ? .native : .ai
             request.selectedOnly = false
             if !draft.story.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { request.instruction += "\n用户故事：" + draft.story }
             let photoURLs = draft.photos.map { directory.appendingPathComponent($0.filename) }
-            let stickerValues = draft.stickers
-            let sourceDirectory = directory
             let photos = try await DiaryAIImageWork.run { try photoURLs.map { try Data(contentsOf: $0) } }
-            let stickers = try await DiaryAIImageWork.run {
-                try stickerValues.map { value in
-                    (try Data(contentsOf: sourceDirectory.appendingPathComponent(value.filename)), value.item.name,
-                     value.item.revision > 0 ? DiaryMaterialSource(materialID: value.id, revision: value.item.revision, libraryID: value.item.library_id, libraryVersion: value.item.library_version) : nil)
-                }
-            }
+            let stickers: [(Data, String, DiaryMaterialSource?)] = []
             let heroIndex = draft.photos.firstIndex { $0.id == draft.heroID } ?? 0
             preparationSuspended = false
             schedulePreparation()
