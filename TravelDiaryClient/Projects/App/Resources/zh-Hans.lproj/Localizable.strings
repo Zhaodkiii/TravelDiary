@@ -377,3 +377,5 @@
 "app.preparing.failed" = "手帐暂时未能准备好，请重试。";
 
 "app.preparing.retry" = "重新打开";
+
+"auth.device.credential_not_registered" = "暂时无法验证设备登录凭证。请稍后重试；若正在升级游客账号，请联系支持恢复账号。";

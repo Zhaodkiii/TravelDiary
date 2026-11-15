@@ -54,6 +54,9 @@ enum AuthUserFacingErrorMapper {
         case .transport:
             return L10n.text("auth.notification.network_unavailable")
         case .http(let statusCode, let backend, _):
+            if statusCode == 401, backend?.msg == "device_credential_not_registered" {
+                return L10n.text("auth.device.credential_not_registered")
+            }
             let backendMessage = BackendErrorLocalizer.message(for: backend, statusCode: statusCode)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if scenario == .deviceSignIn {

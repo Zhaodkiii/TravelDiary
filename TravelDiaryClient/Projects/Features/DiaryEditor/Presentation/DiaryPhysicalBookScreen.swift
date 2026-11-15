@@ -1377,7 +1377,7 @@ private struct DiaryBookPaper: View {
     let splitHalf: Bool?
     let showsAddPlaceholder: Bool
     let plainPaper: Bool
-    @ObservedObject var playback: DiaryReadingPlayback
+    let playback: DiaryReadingPlayback
     var body: some View {
         GeometryReader { geometry in
         ZStack {

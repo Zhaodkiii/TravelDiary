@@ -377,3 +377,5 @@
 "app.preparing.failed" = "Your journal could not be prepared. Please try again.";
 
 "app.preparing.retry" = "Try again";
+
+"auth.device.credential_not_registered" = "Unable to verify this device credential. Try again later. If you are upgrading a guest account, contact support to recover it.";

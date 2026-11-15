@@ -1,5 +1,4 @@
 import SwiftUI
-import Combine
 import UIKit
 import AVFoundation
 
@@ -15,10 +14,10 @@ struct DiaryReadingPresentation {
 }
 
 @MainActor
-final class DiaryReadingPlayback: ObservableObject {
+final class DiaryReadingPlayback {
     enum Phase { case background, playing, complete }
-    @Published var phase: Phase = .background
-    var began: CFTimeInterval = 0
+    private(set) var phase: Phase = .background
+    private(set) var began: CFTimeInterval = 0
     func prepare() { phase = .background }
     func play(at time: CFTimeInterval) {
         began = time
@@ -191,7 +190,7 @@ struct DiaryAnimatedReadingPage: View {
     let page: DiaryPageEntry
     let store: DiaryDocumentStore
     let half: Bool?
-    @ObservedObject var playback: DiaryReadingPlayback
+    let playback: DiaryReadingPlayback
     @State private var source: DiaryDocumentStore.Loaded?
     @State private var failed = false
     init(page: DiaryPageEntry, store: DiaryDocumentStore, half: Bool?, playback: DiaryReadingPlayback) {
@@ -201,7 +200,7 @@ struct DiaryAnimatedReadingPage: View {
     var body: some View {
         Group {
             if let source {
-                DiaryReadingSurface(source: source, half: half, phase: playback.phase, began: playback.began)
+                DiaryReadingSurface(source: source, half: half, playback: playback)
             } else {
                 GeometryReader { geometry in
                     DiaryPagePreview(page: page, store: store, large: true, undecorated: true)
@@ -228,10 +227,12 @@ protocol DiaryReadingSurfaceControlling: AnyObject {
 private struct DiaryReadingSurface: UIViewRepresentable {
     let source: DiaryDocumentStore.Loaded
     let half: Bool?
-    let phase: DiaryReadingPlayback.Phase
-    let began: CFTimeInterval
+    let playback: DiaryReadingPlayback
     func makeUIView(context: Context) -> Surface { Surface(source: source, half: half) }
-    func updateUIView(_ view: Surface, context: Context) { view.update(phase: phase, began: began) }
+    func updateUIView(_ view: Surface, context: Context) {
+        // A surface mounted after loading must start with the controller's current playback state.
+        view.update(phase: playback.phase, began: playback.began)
+    }
     static func dismantleUIView(_ view: Surface, coordinator: ()) { view.stop() }
 
     final class Surface: UIView, DiaryReadingSurfaceControlling {

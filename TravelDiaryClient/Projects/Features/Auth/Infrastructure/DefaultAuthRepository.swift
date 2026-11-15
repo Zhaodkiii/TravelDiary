@@ -260,14 +260,27 @@ final class DefaultAuthRepository: AuthRepository {
         let deviceId = try SupportKeychain.getOrCreatePersistentDeviceID()
         let deviceSecret = SupportKeychain.loadDeviceSecret() ?? ""
 
-        let result = try await backend.otp.verifyPhoneOTP(
-            otpId: otpID,
-            phoneNumber: phoneNumber,
-            code: verificationCode,
-            bundleId: bundleId,
-            deviceId: deviceId,
-            deviceSecret: deviceSecret
-        )
+        // 账号切换只暂停运行时，不清除快照；在请求前保留游客升级上下文。
+        let currentSession = await snapshotStore.load()
+        let protectsGuestAccount = currentSession.map {
+            $0.isDeviceAccount || $0.signInMethod == .device
+        } ?? false
+        let result = try await PhoneOTPDeviceCredentialRecovery.verify(
+            deviceSecret: deviceSecret,
+            protectsGuestAccount: protectsGuestAccount
+        ) { secret in
+            if secret.isEmpty && !deviceSecret.isEmpty {
+                self.logger.warning("手机号登录：设备凭证未登记，保留本地密钥并使用空凭证重试一次", module: .auth)
+            }
+            return try await self.backend.otp.verifyPhoneOTP(
+                otpId: otpID,
+                phoneNumber: phoneNumber,
+                code: verificationCode,
+                bundleId: bundleId,
+                deviceId: deviceId,
+                deviceSecret: secret
+            )
+        }
         logger.info(
             "认证仓储：手机号 OTP 远端响应已返回 userId=\(result.userId) phone=\(result.phoneNumber) isPro=\(result.isPro ?? false) isNewUser=\(result.isNewUser ?? false)",
             module: .auth
