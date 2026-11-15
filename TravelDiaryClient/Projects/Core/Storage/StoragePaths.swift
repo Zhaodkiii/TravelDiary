@@ -21,7 +21,22 @@ nonisolated struct StoragePaths: Sendable {
     static func digest(_ value: String) -> String {
         SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
-    static func scopeKey(_ owner: String) -> String { digest("account:" + owner) }
+    static func scopeKey(_ owner: String) -> String {
+        let revision = UserDefaults.standard.string(forKey: "storage.accountIsolation." + digest(owner))
+        return digest("account:" + owner + (revision.map { ":" + $0 } ?? ""))
+    }
+
+    /// Preserve local-only work in its old directory; a newly authenticated server must
+    /// not inherit it just because the two databases happen to use the same numeric ID.
+    static func isolateAccountAfterAuthFailure(_ owner: String) {
+        let oldScope = scopeKey(owner)
+        ResourceCache.shared.clear(scope: oldScope)
+        let historyKey = "storage.retainedAccountScopes." + digest(owner)
+        var retained = UserDefaults.standard.stringArray(forKey: historyKey) ?? []
+        if !retained.contains(oldScope) { retained.append(oldScope) }
+        UserDefaults.standard.set(retained, forKey: historyKey)
+        UserDefaults.standard.set(UUID().uuidString, forKey: "storage.accountIsolation." + digest(owner))
+    }
     var persistentRoot: URL { support.appendingPathComponent("TravelDiary", isDirectory: true) }
     var cacheRoot: URL { caches.appendingPathComponent("TravelDiary", isDirectory: true) }
     var temporaryRoot: URL { temporary.appendingPathComponent("TravelDiary", isDirectory: true) }

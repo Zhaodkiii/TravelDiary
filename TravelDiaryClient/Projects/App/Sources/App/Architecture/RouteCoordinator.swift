@@ -26,13 +26,14 @@ final class RouteCoordinator {
             .receive(on: RunLoop.main)
             .sink { [weak self] notification in
                 let message = notification.userInfo?["message"] as? String ?? ""
+                let generation = notification.userInfo?["sessionGeneration"] as? UInt64
                 let source = notification.userInfo?["source"] as? String ?? "-"
                 Task { @MainActor in
                     self?.logger.warning(
                         "路由流程：收到服务端鉴权失效事件 source=\(source) message=\(message)",
                         module: .auth
                     )
-                    await self?.lifecycle?.handleServerAuthInvalidationIfNeeded(invalidationMessage: message)
+                    await self?.lifecycle?.handleServerAuthInvalidationIfNeeded(invalidationMessage: message, expectedGeneration: generation)
                 }
             }
             .store(in: &cancellables)

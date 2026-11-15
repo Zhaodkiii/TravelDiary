@@ -11,6 +11,8 @@ enum DeviceRegistrationReason: String, Sendable {
 final class DeviceRegistrationCoordinator {
     private let backend: SupportBackend
     private let logger: Logger
+    private var registrationGeneration = UUID()
+    private var pending: [String: Task<DeviceRegistrationRequestOutcome, Never>] = [:]
     private var lastRegisteredKey: String?
     private var isSubmissionSuspended = false
 
@@ -20,6 +22,9 @@ final class DeviceRegistrationCoordinator {
     }
 
     func reset() {
+        registrationGeneration = UUID()
+        pending.values.forEach { $0.cancel() }
+        pending.removeAll()
         lastRegisteredKey = nil
         isSubmissionSuspended = false
     }
@@ -82,10 +87,25 @@ final class DeviceRegistrationCoordinator {
     }
 
     private func requestRegister(
+        userID: Int64?, accountID: Int64?, authenticated: Bool, reason: DeviceRegistrationReason
+    ) async -> DeviceRegistrationRequestOutcome {
+        let generation = registrationGeneration
+        let key = "\(authenticated)-\(userID ?? 0)-\(PushAdapter.shared.token ?? "unknown")-\(String(describing: PushAdapter.shared.notificationsEnabled))"
+        if let task = pending[key] { return await task.value }
+        let task = Task { await self.performRegister(userID: userID, accountID: accountID,
+            authenticated: authenticated, reason: reason, generation: generation) }
+        pending[key] = task
+        let outcome = await task.value
+        if registrationGeneration == generation { pending[key] = nil }
+        return outcome
+    }
+
+    private func performRegister(
         userID: Int64?,
         accountID: Int64?,
         authenticated: Bool,
-        reason: DeviceRegistrationReason
+        reason: DeviceRegistrationReason,
+        generation: UUID
     ) async -> DeviceRegistrationRequestOutcome {
         if isSubmissionSuspended {
             logger.warning(
@@ -140,6 +160,7 @@ final class DeviceRegistrationCoordinator {
 
         do {
             let response = try await backend.device.register(request, authenticated: authenticated)
+            guard generation == registrationGeneration, !isSubmissionSuspended else { return .failedRetryable }
             lastRegisteredKey = key
             logger.info(
                 "设备登记成功 id=\(response.deviceID ?? info.installationDeviceID) created=\(response.registered.map(String.init(describing:)) ?? "-")",
@@ -151,6 +172,7 @@ final class DeviceRegistrationCoordinator {
             )
             return .submitted
         } catch {
+            guard generation == registrationGeneration else { return .failedRetryable }
             if SupportCancellationClassifier.isCancellation(error) {
                 let cancelReason = SupportCancellationClassifier.reason(for: error)
                 logger.warning(
@@ -180,12 +202,9 @@ final class DeviceRegistrationCoordinator {
     private func isAuthSessionInvalidation(_ error: Error) -> Bool {
         if let networkError = error as? SupportNetworkError {
             switch networkError {
-            case .refreshFailed(let backend, _):
-                return SupportAuthSessionInvalidation.shouldInvalidate(
-                    statusCode: 401,
-                    backendCode: backend?.code,
-                    message: backend?.msg ?? networkError.localizedDescription
-                )
+            case .refreshFailed(_, let underlying):
+                guard let underlying else { return false }
+                return isAuthSessionInvalidation(underlying)
             case .http(let statusCode, let backend, _):
                 return SupportAuthSessionInvalidation.shouldInvalidate(
                     statusCode: statusCode,

@@ -68,6 +68,10 @@ final class AppSessionStore: ObservableObject {
         Task { await verifyPersistedSnapshotMatchesMemory(session, context: "setAuthenticated") }
     }
 
+    func isCurrentTokenGeneration(_ expected: UInt64) async -> Bool {
+        await tokenProvider.sessionGeneration() == expected
+    }
+
     /// 完整登出清理（鉴权失效等路径）：清 snapshot + token + UI 状态。
     func signOut() async {
         await snapshotStore.clear()

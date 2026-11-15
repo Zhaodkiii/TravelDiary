@@ -2,6 +2,40 @@ import XCTest
 @testable import TravelDiary
 
 final class SupportNetworkEngineAuthTests: XCTestCase {
+    private actor PausedRefreshTransport: SupportNetworkTransport {
+        private var continuation: CheckedContinuation<SupportTransportResponse, Never>?
+        func send(_ request: URLRequest) async throws -> SupportTransportResponse {
+            await withCheckedContinuation { continuation = $0 }
+        }
+        func started() -> Bool { continuation != nil }
+        func reject() {
+            continuation?.resume(returning: SupportTransportResponse(
+                data: Data(#"{"code":40103,"msg":"user_inactive"}"#.utf8),
+                httpResponse: HTTPURLResponse(url: URL(string: "https://example.test")!,
+                    statusCode: 401, httpVersion: nil, headerFields: nil)!))
+            continuation = nil
+        }
+    }
+
+    func testOldRefreshFailureCannotClearNewLogin() async throws {
+        let transport = PausedRefreshTransport()
+        let provider = AuthTokenProvider(transport: transport, baseURL: URL(string: "https://example.test")!,
+            keychainService: "auth-race-\(UUID().uuidString)")
+        await provider.setTokens(AuthTokens(accessToken: "old", refreshToken: "old-refresh",
+            expiresAt: Date().addingTimeInterval(3600), tokenType: "Bearer"))
+        let task = Task { try await provider.forceRefreshTokens() }
+        while !(await transport.started()) { await Task.yield() }
+        await provider.setTokens(AuthTokens(accessToken: "new", refreshToken: "new-refresh",
+            expiresAt: Date().addingTimeInterval(3600), tokenType: "Bearer"))
+        await transport.reject()
+        do { _ = try await task.value; XCTFail("Old refresh must be discarded") }
+        catch is CancellationError { }
+        catch { XCTFail("Unexpected error: \(error)") }
+        let header = try await provider.authorizationHeaderValue()
+        XCTAssertEqual(header, "Bearer new")
+        await provider.clearTokens()
+    }
+
     private struct StubHTTPResponse {
         var statusCode: Int
         var headers: [String: String]

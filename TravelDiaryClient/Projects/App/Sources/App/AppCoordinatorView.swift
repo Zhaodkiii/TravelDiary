@@ -21,6 +21,9 @@ struct AppCoordinatorView: View {
                 NetworkGateView(monitor: networkMonitor)
             }
         }
+        .alert("登录已失效，请重新登录。", isPresented: $lifecycle.showsSessionExpired) {
+            Button("好", role: .cancel) { }
+        }
         .task {
             networkMonitor.start()
         }

@@ -94,7 +94,13 @@ struct StorageRegistry {
                     PreviewImagePipeline.shared.activate(owner: String(accountID))
                     PresetPreviewRepository.shared.reset()
                     await storageService.activate(owner: String(accountID))
-                case .signOut:
+                case .signOut(let accountID):
+                    if let accountID {
+                        // ResourceCache contains rebuildable resources only; drafts stay on disk.
+                        ResourceCache.shared.clear(scope: StoragePaths.scopeKey(String(accountID)))
+                    }
+                    DeviceCache().clearETagResponseCache()
+                    DeviceCache().clearAuthenticatedDeviceState()
                     PreviewImagePipeline.shared.activate(owner: nil)
                     PresetPreviewRepository.shared.reset()
                     await storageService.activate(owner: nil)

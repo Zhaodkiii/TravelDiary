@@ -69,9 +69,11 @@ final class SupportNetworkEngine {
     /// 原始发送接口，供 Operation 层复用。
     /// 负责完整的串行调度、重试、鉴权和 ETag 合并，但不负责 JSON 解码。
     func sendRaw(_ request: SupportNetworkRequest) async throws -> SupportNetworkResponse {
+        let generation = await authProvider.sessionGeneration()
         let serialKey = request.strategy.serialKey ?? request.path
 
         var retryCount = 0
+        var didRefresh = false
         while true {
             // 首次请求用业务优先级，重试走统一 `.retry`，避免饿死其它请求。
             let priority: SerialRequestGate.Priority = retryCount == 0
@@ -81,26 +83,25 @@ final class SupportNetworkEngine {
 
             do {
                 let response = try await gate.enqueue(serialKey: serialKey, priority: priority) {
-                    try await self.performAttempt(request)
+                    try await self.authProvider.requireSession(generation)
+                    let response = try await self.performAttempt(request, generation: generation)
+                    try await self.authProvider.requireSession(generation)
+                    return response
                 }
 
                 // 401：强制刷新 token 后重试；`AuthTokenProvider` 内会去重并发刷新。
                 if request.strategy.requiresAuth,
                    request.strategy.allowsAuthRefreshOn401,
                    response.httpResponse.statusCode == 401,
-                   retryCount < request.strategy.retryConfig.maxRetryCount + 1 {
+                   !didRefresh {
                     logger.info(SupportNetworkingStrings.HTTPClient.authRefreshTriggered(path: request.path), module: .network)
                     do {
-                        _ = try await authProvider.forceRefreshTokens()
+                        didRefresh = true
+                        _ = try await authProvider.forceRefreshTokens(expectedGeneration: generation)
                     } catch {
                         let backendError = try? decodeBackendError(from: response.data)
-                        postAuthInvalidationIfNeeded(
-                            statusCode: response.httpResponse.statusCode,
-                            backendCode: backendError?.code,
-                            message: backendError?.msg ?? "",
-                            source: "SupportNetworkEngine.sendRaw.refreshFailed",
-                            refreshError: error
-                        )
+                        // The provider owns definitive refresh invalidation. Never post twice.
+                        if error is CancellationError { throw CancellationError() }
                         throw SupportNetworkError.refreshFailed(backendError, error)
                     }
                     retryCount += 1
@@ -126,12 +127,15 @@ final class SupportNetworkEngine {
                     continue
                 }
 
-                SupportAuthSessionInvalidation.postIfNeeded(
-                    statusCode: response.httpResponse.statusCode,
-                    backendCode: backendError?.code,
-                    message: backendError?.msg ?? "",
-                    source: "SupportNetworkEngine.sendRaw"
-                )
+                if request.strategy.requiresAuth {
+                    await authProvider.invalidateSession(
+                        expectedGeneration: generation,
+                        statusCode: response.httpResponse.statusCode,
+                        backendCode: backendError?.code,
+                        message: backendError?.msg ?? "",
+                        source: "SupportNetworkEngine.sendRaw"
+                    )
+                }
                 throw SupportNetworkError.http(
                     statusCode: response.httpResponse.statusCode,
                     backend: backendError,
@@ -174,38 +178,10 @@ final class SupportNetworkEngine {
     /// 与引擎关联的设备/ETag 等缓存句柄。
     func cache() -> DeviceCache { deviceCache }
 
-    private func postAuthInvalidationIfNeeded(
-        statusCode: Int,
-        backendCode: Int?,
-        message: String,
-        source: String,
-        refreshError: Error
-    ) {
-        let shouldInvalidateForRefreshError: Bool
-        if let providerError = refreshError as? AuthTokenProviderError {
-            switch providerError {
-            case .missingTokens, .refreshFailed:
-                shouldInvalidateForRefreshError = true
-            case .refreshTemporarilyUnavailable, .invalidRefreshResponse:
-                shouldInvalidateForRefreshError = false
-            }
-        } else {
-            shouldInvalidateForRefreshError = false
-        }
-
-        guard shouldInvalidateForRefreshError else { return }
-        SupportAuthSessionInvalidation.postIfNeeded(
-            statusCode: statusCode,
-            backendCode: backendCode,
-            message: message,
-            source: source
-        )
-    }
-
     // MARK: - 单次请求：组装与发送
 
     /// 构建 `URLRequest`，注入鉴权与 ETag，经 transport 发送并做 304 合并（若启用）。
-    private func performAttempt(_ request: SupportNetworkRequest) async throws -> SupportNetworkResponse {
+    private func performAttempt(_ request: SupportNetworkRequest, generation: UInt64) async throws -> SupportNetworkResponse {
         var urlComponents = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
         // 手动拼接 path，避免 `URLComponents` 与 base 斜杠重复或缺失。
         let basePath = urlComponents?.path ?? ""
@@ -276,7 +252,9 @@ final class SupportNetworkEngine {
             } else { urlRequest.setValue(nil, forHTTPHeaderField: "If-None-Match") }
         }
 
+        try await authProvider.requireSession(generation)
         let transportResponse = try await transport.send(urlRequest)
+        try await authProvider.requireSession(generation)
         if let cacheKey, request.strategy.allowETag {
             // 更新本地 ETag/304 合并 body。
             return etagInterceptor.intercept(

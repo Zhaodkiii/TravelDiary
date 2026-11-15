@@ -534,15 +534,17 @@ nonisolated enum SupportAuthSessionInvalidation {
         statusCode: Int,
         backendCode: Int?,
         message: String,
-        source: String
+        source: String,
+        sessionGeneration: UInt64? = nil
     ) {
         guard shouldInvalidate(statusCode: statusCode, backendCode: backendCode, message: message) else { return }
-        let userInfo: [AnyHashable: Any] = [
+        var userInfo: [AnyHashable: Any] = [
             "statusCode": statusCode,
             "backendCode": backendCode ?? -1,
             "message": message,
             "source": source
         ]
+        if let sessionGeneration { userInfo["sessionGeneration"] = sessionGeneration }
         NotificationCenter.default.post(
             name: notificationName,
             object: nil,

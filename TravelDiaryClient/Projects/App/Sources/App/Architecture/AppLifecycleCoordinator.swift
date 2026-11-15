@@ -6,6 +6,7 @@ final class AppLifecycleCoordinator: ObservableObject {
     @Published private(set) var sessionState: AppSessionState = .loading
     @Published private(set) var preparedAccountID: Int64?
     @Published private(set) var preparationFailed = false
+    @Published var showsSessionExpired = false
 
     private let sessionStore: AppSessionStore
     private let appBootstrapper: AppBootstrapper
@@ -90,7 +91,10 @@ final class AppLifecycleCoordinator: ObservableObject {
         logger.info("Signed-out session cleanup complete", module: .auth)
     }
 
-    func handleServerAuthInvalidationIfNeeded(invalidationMessage: String = "") async {
+    func handleServerAuthInvalidationIfNeeded(invalidationMessage: String = "", expectedGeneration: UInt64? = nil) async {
+        if let expectedGeneration {
+            guard await sessionStore.isCurrentTokenGeneration(expectedGeneration) else { return }
+        }
         guard isHandlingServerAuthInvalidation == false else { return }
 
         switch sessionStore.state {
@@ -110,10 +114,12 @@ final class AppLifecycleCoordinator: ObservableObject {
         preparedAccountID = nil
         defer { isHandlingServerAuthInvalidation = false }
 
+        if case .signedIn(let session) = sessionStore.state {
+            StoragePaths.isolateAccountAfterAuthFailure(String(session.accountID))
+        }
         await sessionStore.signOut()
-        await appBootstrapper.resetLaunchBootstrap()
-        await accountSessionRuntime.activateGuest()
-        deviceRegistration.reset()
+        showsSessionExpired = true
+        await handleSignedOutTask()
         logger.info("认证流程：服务端鉴权失效处理完成，已回到未登录态", module: .auth)
     }
 

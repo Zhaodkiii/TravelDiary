@@ -56,6 +56,13 @@ actor AuthTokenProvider {
 
     private let refreshPath: String = "/api/v1/auth/token/refresh/"
 
+    private var generation: UInt64 = 0
+    func sessionGeneration() -> UInt64 { generation }
+
+    func requireSession(_ expected: UInt64) throws {
+        guard expected == generation else { throw CancellationError() }
+    }
+
     private var cachedTokens: AuthTokens?
     private var refreshTask: Task<AuthTokens, Error>?
 
@@ -72,11 +79,17 @@ actor AuthTokenProvider {
     }
 
     func setTokens(_ tokens: AuthTokens) {
+        generation &+= 1
+        refreshTask?.cancel()
+        refreshTask = nil
         cachedTokens = tokens
         saveToKeychain(tokens)
     }
 
     func clearTokens() {
+        generation &+= 1
+        refreshTask?.cancel()
+        refreshTask = nil
         let hadKeychainAccess = keychainGet("accessToken") != nil
         cachedTokens = nil
         keychainDelete("accessToken")
@@ -86,6 +99,14 @@ actor AuthTokenProvider {
         logger.debug("AuthTokenProvider：已清除 Keychain 令牌 hadAccess=\(hadKeychainAccess)", module: .auth)
     }
 
+    func invalidateSession(expectedGeneration: UInt64, statusCode: Int, backendCode: Int?, message: String, source: String) {
+        guard generation == expectedGeneration,
+              SupportAuthSessionInvalidation.shouldInvalidate(statusCode: statusCode, backendCode: backendCode, message: message) else { return }
+        clearTokens()
+        SupportAuthSessionInvalidation.postIfNeeded(statusCode: statusCode, backendCode: backendCode,
+            message: message, source: source, sessionGeneration: generation)
+    }
+
     func authorizationHeaderValue() async throws -> String {
         let tokens = try await validTokens()
         return "\(tokens.tokenType) \(tokens.accessToken)"
@@ -93,7 +114,8 @@ actor AuthTokenProvider {
 
     /// Forces a refresh even if current access token is not yet near `expiresAt`.
     /// Used when the server rejects the token (e.g. 401).
-    func forceRefreshTokens() async throws -> AuthTokens {
+    func forceRefreshTokens(expectedGeneration: UInt64? = nil) async throws -> AuthTokens {
+        if let expectedGeneration { try requireSession(expectedGeneration) }
         cachedTokens = nil
         return try await refreshTokensDeDuplicated()
     }
@@ -144,18 +166,20 @@ actor AuthTokenProvider {
             throw AuthTokenProviderError.missingTokens
         }
 
+        let expected = generation
         let task = Task<AuthTokens, Error> {
-            try await self.performRefresh()
+            try await self.performRefresh(expectedGeneration: expected)
         }
         refreshTask = task
         defer {
             // Only the creator reaches this defer; concurrent callers awaited `refreshTask`.
-            refreshTask = nil
+            if generation == expected { refreshTask = nil }
         }
         return try await task.value
     }
 
-    private func performRefresh() async throws -> AuthTokens {
+    private func performRefresh(expectedGeneration: UInt64) async throws -> AuthTokens {
+        try requireSession(expectedGeneration)
         guard let refreshToken = loadRefreshToken() else {
             logger.warning("刷新令牌读取失败，判定为未登录态。", module: .auth)
             clearTokens()
@@ -181,7 +205,9 @@ actor AuthTokenProvider {
 
         logger.info(SupportNetworkingStrings.Auth.refreshing(), module: .auth)
 
+        try requireSession(expectedGeneration)
         let response = try await transport.send(urlRequest)
+        try requireSession(expectedGeneration)
 
         // Success: SimpleJWT 风格 { "access","refresh" } 或网关/账户服务常用 { "access_token","refresh_token","token_type" }。
         if (200...299).contains(response.httpResponse.statusCode) {
@@ -227,9 +253,9 @@ actor AuthTokenProvider {
 
         // 仅在响应体可解析且业务码/msg 明确为鉴权失效时清理 token；仅凭 HTTP 状态或网关/HTML 错误页时保留本地登录态。
         if let backend = backendError, isDefinitiveRefreshAuthFailure(backend) {
-            clearTokens()
             logger.error(SupportNetworkingStrings.Auth.refreshFailed(), module: .auth)
-            SupportAuthSessionInvalidation.postIfNeeded(
+            invalidateSession(
+                expectedGeneration: expectedGeneration,
                 statusCode: statusCode,
                 backendCode: backend.code,
                 message: backend.msg,
