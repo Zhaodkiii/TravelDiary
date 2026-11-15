@@ -59,7 +59,12 @@ nonisolated struct DiaryCreationDraft: Codable {
     private var photoTask: Task<Void, Never>?
     private var photoGeneration = UUID()
     private var failedPhotoLoads: [UUID: PhotoLoader] = [:]
-    var selectedPhotoCount: Int { draft.photos.count + pendingPhotoIDs.count }
+    var selectedPhotoIDs: [UUID] {
+        let readyIDs = draft.photos.map(\.id)
+        let readyIDSet = Set(readyIDs)
+        return readyIDs + pendingPhotoIDs.filter { !readyIDSet.contains($0) }
+    }
+    var selectedPhotoCount: Int { selectedPhotoIDs.count }
 
     @Published var loadingCatalog = false
     @Published var error: String?

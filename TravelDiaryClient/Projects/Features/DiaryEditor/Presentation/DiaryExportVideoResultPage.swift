@@ -28,6 +28,7 @@ struct DiaryExportVideoResultPage: View {
             if saving { ProgressView("正在保存到相册…") }
             else if saved { Label("已保存到相册", systemImage: "checkmark").foregroundStyle(.secondary) }
             else { Button("保存到相册", action: onSave).buttonStyle(.borderedProminent) }
+            NavigationLink("生成邀请海报，邀请好友") { InvitationCenterView() }
             ShareLink(item: result.url) { Label("分享视频", systemImage: "square.and.arrow.up") }
                 .buttonStyle(.bordered).disabled(saving)
             Button("存储到文件", systemImage: "folder") { exportingFile = true }.disabled(saving)

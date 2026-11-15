@@ -21,6 +21,7 @@ struct DiaryExportResultPage: View {
             if result.usedFallbackFonts { Text("部分字体暂不可用，已使用替代字体，文字排版可能变化。").font(.caption).foregroundStyle(.orange) }
             if !saved { Button("重试保存到相册") { onRetry() }.disabled(busy) }
             if saving { ProgressView("正在保存到相册…") }
+            NavigationLink("生成邀请海报，邀请好友") { InvitationCenterView() }
             ShareLink(items: result.urls) { Label("分享图片", systemImage: "square.and.arrow.up") }.buttonStyle(.borderedProminent).disabled(busy)
             previewGallery
         }.frame(maxWidth: .infinity).padding(.vertical, 24)

@@ -28,6 +28,7 @@ struct SettingsView: View {
             }.buttonStyle(.plain).accessibilityHint("打开账户管理")
             VStack(alignment: .leading, spacing: 10) {
                 sectionTitle("我的资源")
+                NavigationLink { InvitationCenterView() } label: { SupportNavigationRow(title: "邀请有礼", symbol: "gift", detail: "邀请好友、制作重置卡与装订奖励") }.buttonStyle(.plain).feedbackPaperCard()
                 NavigationLink { FontGalleryScreen(mine: true) } label: { SupportNavigationRow(title: "我的字体", symbol: "textformat", detail: "已获取、收藏与最近使用") }.buttonStyle(.plain).feedbackPaperCard()
                 NavigationLink { StickerGalleryScreen(mine: true) } label: { SupportNavigationRow(title: "我的贴纸", symbol: "heart", detail: "贴纸包与收藏") }.buttonStyle(.plain).feedbackPaperCard()
                 NavigationLink { FontGalleryScreen() } label: { SupportNavigationRow(title: "字体集市", symbol: "textformat.abc", detail: "发现适合旅途记录的字体") }.buttonStyle(.plain).feedbackPaperCard()

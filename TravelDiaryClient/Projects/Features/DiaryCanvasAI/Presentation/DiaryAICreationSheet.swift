@@ -134,56 +134,45 @@ struct DiaryAICreationSheet: View {
             .padding(.horizontal, 20).padding(.vertical, 12).background(.regularMaterial)
     }
     private var photoPage: some View {
-        page("确认照片", step: "照片 · 1/3 · 已选 \(flow.selectedPhotoCount) 张") {
+        let photoIDs = flow.selectedPhotoIDs
+        let readyPhotos = flow.draft.photos
+        let photoCount = photoIDs.count
+        return page("确认照片", step: "照片 · 1/3 · 已选 \(photoCount) 张") {
             HStack {
-                Text("已选 \(flow.selectedPhotoCount) 张").font(.headline)
+                Text("已选 \(photoCount) 张").font(.headline)
                 Spacer()
                 Button { picking = true } label: { Label("添加照片", systemImage: "plus") }
-                    .disabled(flow.selectedPhotoCount >= 30 || flow.isSubmitting)
+                    .disabled(photoCount >= 30 || flow.isSubmitting)
             }.frame(minHeight: 44)
-            if flow.selectedPhotoCount > 0 {
+            if photoCount > 0 {
                 Text("轻点预览，长按可排序。").font(.subheadline).foregroundStyle(.secondary)
             }
-            let readyPhotos = flow.draft.photos
-            let readyIDs = Set(readyPhotos.map(\.id))
-            let pendingIDs = flow.pendingPhotoIDs.filter { !readyIDs.contains($0) }
-            let photoColumns = flow.selectedPhotoCount == 1 ? [GridItem(.flexible())] : columns
+            let photoColumns = photoCount == 1 ? [GridItem(.flexible())] : columns
             LazyVGrid(columns: photoColumns, spacing: 12) {
-                ForEach(Array(readyPhotos.enumerated()), id: \.element.id) { index, photo in
+                ForEach(Array(photoIDs.enumerated()), id: \.element) { index, id in
                     ZStack(alignment: .topTrailing) {
-                        NavigationLink(value: Route.photo(photo.id)) {
-                            photoTile(flow.images[photo.filename], index: index)
-                        }.accessibilityLabel("第 \(index + 1) 张照片，查看大图")
-                        Button { flow.removePhoto(photo.id) } label: {
-                            Image(systemName: "minus.circle.fill").symbolRenderingMode(.palette)
-                                .foregroundStyle(.black, .white).font(.title3).frame(width: 44, height: 44)
-                        }.accessibilityLabel("移除第 \(index + 1) 张照片")
-                    }
-                    .contextMenu {
-                        Button("设为主照片", systemImage: "star") { flow.setHero(photo.id) }
-                        Button("前移", systemImage: "arrow.left") { flow.movePhoto(photo.id, offset: -1) }.disabled(index == 0)
-                        Button("后移", systemImage: "arrow.right") { flow.movePhoto(photo.id, offset: 1) }.disabled(index == flow.draft.photos.count - 1)
-                    }
-                    .buttonStyle(.plain)
-                    .draggable(photo.id.uuidString)
-                    .dropDestination(for: String.self) { values, _ in
-                        guard let first = values.first, let id = UUID(uuidString: first) else { return false }
-                        flow.movePhoto(id, before: photo.id); return true
-                    }
-                    .accessibilityAction(named: "前移") { flow.movePhoto(photo.id, offset: -1) }
-                    .accessibilityAction(named: "后移") { flow.movePhoto(photo.id, offset: 1) }
-                }
-                ForEach(Array(pendingIDs.enumerated()), id: \.element) { index, id in
-                    ZStack(alignment: .topTrailing) {
-                        photoTile(flow.selectedPhotoImages[id], index: readyPhotos.count + index)
+                        ZStack {
+                            if readyPhotos.indices.contains(index) {
+                                readyPhotoTile(readyPhotos[index], index: index, count: readyPhotos.count)
+                            } else {
+                                photoTile(flow.selectedPhotoImages[id])
+                            }
+                        }
+                        .overlay(alignment: .topLeading) {
+                            Text(String(index + 1)).font(.caption.bold().monospacedDigit()).foregroundStyle(.white)
+                                .frame(minWidth: 24, minHeight: 24)
+                                .background(.black.opacity(0.72), in: Circle()).padding(8)
+                                .accessibilityHidden(true)
+                                .allowsHitTesting(false)
+                        }
                         Button { flow.removePhoto(id) } label: {
                             Image(systemName: "minus.circle.fill").symbolRenderingMode(.palette)
                                 .foregroundStyle(.black, .white).font(.title3).frame(width: 44, height: 44)
-                        }.accessibilityLabel("移除正在读取的照片")
-                    }
+                        }.accessibilityLabel("移除第 \(index + 1) 张照片")
+                    }.transition(.identity)
                 }
             }.disabled(flow.isSubmitting)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: flow.draft.photos.map(\.id))
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: photoIDs)
             if flow.removedPhoto != nil {
                 HStack {
                     Text("已移除照片").foregroundStyle(.secondary)
@@ -209,7 +198,27 @@ struct DiaryAICreationSheet: View {
         .photosPicker(isPresented: $picking, selection: $photos, maxSelectionCount: max(1, 30 - flow.selectedPhotoCount), selectionBehavior: .ordered, matching: .images, preferredItemEncoding: .current)
         .onChange(of: photos) { _, values in guard !values.isEmpty else { return }; photos = []; flow.importPhotos(values) }
     }
-    private func photoTile(_ image: UIImage?, index: Int) -> some View {
+    private func readyPhotoTile(_ photo: DiaryCreationPhoto, index: Int, count: Int) -> some View {
+        NavigationLink(value: Route.photo(photo.id)) {
+            photoTile(flow.images[photo.filename])
+        }
+        .accessibilityLabel("第 \(index + 1) 张照片，查看大图")
+        .contextMenu {
+            Button("设为主照片", systemImage: "star") { flow.setHero(photo.id) }
+            Button("前移", systemImage: "arrow.left") { flow.movePhoto(photo.id, offset: -1) }.disabled(index == 0)
+            Button("后移", systemImage: "arrow.right") { flow.movePhoto(photo.id, offset: 1) }.disabled(index == count - 1)
+        }
+        .buttonStyle(.plain)
+        .draggable(photo.id.uuidString)
+        .dropDestination(for: String.self) { values, _ in
+            guard let first = values.first, let id = UUID(uuidString: first) else { return false }
+            flow.movePhoto(id, before: photo.id)
+            return true
+        }
+        .accessibilityAction(named: "前移") { flow.movePhoto(photo.id, offset: -1) }
+        .accessibilityAction(named: "后移") { flow.movePhoto(photo.id, offset: 1) }
+    }
+    private func photoTile(_ image: UIImage?) -> some View {
         GeometryReader { proxy in
             ZStack {
                 Color(uiColor: .secondarySystemBackground)
@@ -218,14 +227,9 @@ struct DiaryAICreationSheet: View {
                         .frame(width: proxy.size.width, height: proxy.size.height).clipped()
                 } else { ProgressView().accessibilityLabel("正在读取照片") }
             }
-        }.aspectRatio(1, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(alignment: .topLeading) {
-                Text(String(index + 1)).font(.caption.bold().monospacedDigit()).foregroundStyle(.white)
-                    .frame(minWidth: 24, minHeight: 24)
-                    .background(.black.opacity(0.72), in: Circle()).padding(8)
-                    .accessibilityHidden(true)
-            }
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
     @ViewBuilder private func thumbnail(_ file: String) -> some View {
         if let image = flow.images[file] { Image(uiImage: image).resizable().scaledToFit() }

@@ -210,11 +210,12 @@ final class DiaryProductionService: ObservableObject {
         try await request("manifest/", runtime: true)
     }
 
-    private func request<T: Decodable>(_ path: String, body: [String: Any]? = nil, runtime: Bool = false) async throws -> T {
+    private func request<T: Decodable>(_ path: String, body: [String: Any]? = nil, runtime: Bool = false, requestKey: UUID? = nil) async throws -> T {
         guard owner != nil else { throw DiaryAIError.invalid("登录后可查看制作额度") }
         guard let engine else { throw DiaryAIError.invalid("制作服务尚未初始化") }
         let stamp = generation
         var headers: [String: String] = [:]
+        if let requestKey { headers["Idempotency-Key"] = requestKey.uuidString }
         let billing = BillingStore.shared
         if !runtime, let account = billing.owner, account == owner, let info = billing.bootstrapInfo {
             // Refresh an existing billing session before using it in the store environment.
@@ -231,7 +232,7 @@ final class DiaryProductionService: ObservableObject {
             name: "AIProduction", apiName: "AIProductionAPI",
             request: .init(
                 method: body == nil ? .get : .post,
-                path: (runtime ? "/api/v1/ai-runtime/" : "/api/v1/ai-production/") + path,
+                path: path.hasPrefix("/") ? path : (runtime ? "/api/v1/ai-runtime/" : "/api/v1/ai-production/") + path,
                 headers: headers,
                 body: data.map { .raw($0, contentType: "application/json") } ?? .none,
                 timeoutInterval: 240,
@@ -253,5 +254,12 @@ final class DiaryProductionService: ObservableObject {
             .executeDecoded(T.self, operation: operation, decoder: decoder)
         guard stamp == generation else { throw CancellationError() }
         return value
+    }
+}
+
+
+extension DiaryProductionService {
+    func invitationRequest<T: Decodable>(_ path: String, body: [String: Any]? = nil, key: UUID? = nil) async throws -> T {
+        try await request(path, body: body, requestKey: key)
     }
 }

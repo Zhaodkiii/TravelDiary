@@ -48,6 +48,7 @@ struct DiaryProductionQuotaSection: View {
                     Text("当前账号暂无 AI 制作权益").foregroundStyle(.secondary)
                 }
             }
+            if service.owner != nil { NavigationLink("邀请有礼与重置卡") { InvitationCenterView() } }
             if let error = service.error {
                 Text(error).font(.footnote).foregroundStyle(.secondary)
             }
