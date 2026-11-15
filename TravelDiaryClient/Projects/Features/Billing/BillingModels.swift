@@ -4,6 +4,7 @@ struct BillingBootstrap: Decodable {
     let session_id: String
     let expires_at: String
     let rc_app_user_id: String
+    let deployment: String
     let wallet_domain: String
     let public_key: String
     let flags: BillingFlags

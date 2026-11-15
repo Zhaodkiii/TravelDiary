@@ -86,6 +86,14 @@ final class BillingStore: ObservableObject {
                 throw error
             }
             try validate(expected, stamp: stamp)
+            #if DEBUG
+            let expectedDeployment = "development"
+            #else
+            let expectedDeployment = "production"
+            #endif
+            guard info.deployment == expectedDeployment else {
+                throw BillingFailure("订阅服务环境不匹配，请更新服务端配置后重试")
+            }
             guard info.public_key.hasPrefix("appl_") else { throw BillingFailure("充值服务尚未配置") }
             // Login operations are serialized, including across account changes.
             let previous = sdkTail
