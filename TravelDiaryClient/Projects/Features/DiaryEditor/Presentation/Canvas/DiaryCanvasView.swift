@@ -23,6 +23,11 @@ struct DiaryCanvasView: UIViewRepresentable {
 
 /// 每个对象使用独立设计坐标；视口可包含负坐标，装饰伸出照片时仍保留原位置。
 final class DiaryCanvasSurface: UIView {
+    var entrancePhotosFirst = false
+    var usesPreloadedImages = false
+    var automaticallyPlaysEntrance = false
+    var onEntranceReady: ((DiaryCanvasSurface) -> Void)?
+    var entrancePageIndex = 0
     var stagesEntrance = false {
         didSet { if oldValue && !stagesEntrance { finishEntrance() } }
     }
@@ -185,7 +190,7 @@ final class DiaryCanvasSurface: UIView {
             CATransaction.commit()
             let pixelsPerPoint = previewScale * (window?.screen.scale ?? traitCollection.displayScale) * viewportZoom
             renderCache.prepareResolution(pointsToPixels: pixelsPerPoint)
-            session.requestEditorImages(longestEdge: max(session.canvasBounds.width, session.canvasBounds.height) * pixelsPerPoint)
+            if !usesPreloadedImages { session.requestEditorImages(longestEdge: max(session.canvasBounds.width, session.canvasBounds.height) * pixelsPerPoint) }
             updateArtwork()
             scheduleRasters()
         } else if lastDraftLayer != session.transformDraft?.layer {
@@ -208,13 +213,17 @@ final class DiaryCanvasSurface: UIView {
         entranceFinished = true
         entrancePlaying = false
         entranceWork.forEach { $0.cancel() }; entranceWork.removeAll()
-        for layer in retainedLayers.values { layer.removeAnimation(forKey: "travel.materialEntrance"); layer.mask = nil }
+        for layer in retainedLayers.values { layer.removeAnimation(forKey: "travel.materialEntrance"); layer.removeAnimation(forKey: "travel.photoFocus"); layer.removeAnimation(forKey: "travel.photoPosition"); layer.mask = nil }
         refresh(force: true)
     }
     /// 只改变呈现层；背景先显示，其余按文字、照片、贴纸、其他顺序入场。
     func animateMaterialEntrance(completion: (() -> Void)? = nil) {
         guard stagesEntrance, !entranceFinished, !entrancePlaying else { return }
         guard !UIAccessibility.isReduceMotionEnabled else { finishEntrance(); completion?(); return }
+        if entrancePhotosFirst {
+            animatePhotoStory(completion: completion)
+            return
+        }
         entrancePlaying = true
         entranceTextHaptic.prepare(); entrancePhotoHaptic.prepare(); entranceStickerHaptic.prepare()
         let entries = renderCache.ordered.filter { !isEntranceBackground($0.source) && $0.source.visible }
@@ -225,7 +234,15 @@ final class DiaryCanvasSurface: UIView {
             return 3
         }
         var delay = 0.0
-        for entry in entries.sorted(by: { rank($0.source) < rank($1.source) }) {
+        func playbackRank(_ layer: DiaryLayer) -> Int {
+            let value = rank(layer)
+            return entrancePhotosFirst ? [2, 0, 1, 1][value] : value
+        }
+        for entry in entries.enumerated().sorted(by: {
+            let left = playbackRank($0.element.source)
+            let right = playbackRank($1.element.source)
+            return left == right ? $0.offset < $1.offset : left < right
+        }).map(\.element) {
             guard let layer = retainedLayers[entry.id] else { continue }
             let text = rank(entry.source) == 0
             let count = max(1, min(100, entry.source.text.count))
@@ -282,6 +299,84 @@ final class DiaryCanvasSurface: UIView {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.5, execute: finish)
     }
 
+    /// A fixed spread-wide timeline gives the photographs time before decoration and text.
+    private func animatePhotoStory(completion: (() -> Void)?) {
+        entrancePlaying = true
+        let entries = renderCache.ordered.filter { $0.source.visible }
+        let photos = entries.filter { $0.source.isContentPhoto || $0.source.semanticKind == .photo }
+        let heroID = photos.max(by: { $0.rect.width * $0.rect.height < $1.rect.width * $1.rect.height })?.id
+        var photoIndex = 0
+        var detailIndex = 0
+        for entry in entries {
+            guard let layer = retainedLayers[entry.id] else { continue }
+            let photo = entry.source.isContentPhoto || entry.source.semanticKind == .photo
+            let hero = entrancePageIndex == 0 && entry.id == heroID
+            let background = isEntranceBackground(entry.source)
+            let text = entry.source.kind == .text || entry.source.category == .textImage || entry.source.semanticKind == .text
+            let delay: Double
+            if hero { delay = 0.15 }
+            else if photo {
+                delay = 2.5 + Double(entrancePageIndex) * 0.5 + Double(photoIndex) * 0.22
+                photoIndex += 1
+            } else if background { delay = 3.65 }
+            else if text { delay = 4.9 }
+            else {
+                delay = 4.1 + min(0.5, Double(detailIndex) * 0.08)
+                detailIndex += 1
+            }
+            let work = DispatchWorkItem { [weak self, weak layer] in
+                guard let self, let layer, self.window != nil else { return }
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                layer.opacity = Float(entry.source.effectiveOpacity)
+                CATransaction.commit()
+                let fade = CABasicAnimation(keyPath: "opacity")
+                fade.fromValue = 0
+                fade.toValue = layer.opacity
+                fade.duration = hero ? 0.35 : 0.55
+                layer.add(fade, forKey: "travel.materialEntrance")
+                if hero {
+                    let scale = CAKeyframeAnimation(keyPath: "transform.scale")
+                    scale.isAdditive = false
+                    let page = self.session?.canvasBounds ?? self.artwork.bounds
+                    let projected = self.displayTransform(entry.source).projection.bounds(entry.rect)
+                    let enlargement = max(1, min(1.65, page.width * 0.90 / max(1, projected.width),
+                                                  page.height * 0.90 / max(1, projected.height)))
+                    scale.values = [enlargement, enlargement, 1.0]
+                    let position = CAKeyframeAnimation(keyPath: "position")
+                    let focused = CGPoint(
+                        x: layer.position.x + page.midX - projected.midX - (enlargement - 1) * projected.width / 2,
+                        y: layer.position.y + page.midY - projected.midY - (enlargement - 1) * projected.height / 2)
+                    position.values = [NSValue(cgPoint: focused), NSValue(cgPoint: focused), NSValue(cgPoint: layer.position)]
+                    position.keyTimes = [0, 0.55, 1]
+                    position.duration = 2.2
+                    position.timingFunctions = [CAMediaTimingFunction(name: .linear), CAMediaTimingFunction(name: .easeInEaseOut)]
+                    layer.add(position, forKey: "travel.photoPosition")
+                    scale.keyTimes = [0, 0.55, 1]
+                    scale.duration = 2.2
+                    scale.timingFunctions = [CAMediaTimingFunction(name: .linear), CAMediaTimingFunction(name: .easeInEaseOut)]
+                    layer.add(scale, forKey: "travel.photoFocus")
+                    layer.zPosition = 1000
+                    let land = DispatchWorkItem { [weak self, weak layer] in
+                        guard let self, let layer else { return }
+                        layer.zPosition = CGFloat(self.renderCache.ordered.firstIndex(where: { $0.id == entry.id }) ?? 0)
+                        self.playEntranceHaptic(1)
+                    }
+                    self.entranceWork.append(land)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: land)
+                }
+            }
+            entranceWork.append(work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        }
+        let finish = DispatchWorkItem { [weak self] in
+            self?.finishEntrance()
+            completion?()
+        }
+        entranceWork.append(finish)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6.2, execute: finish)
+    }
+
     private func updateArtwork() {
         guard !entrancePlaying else { return }
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -295,7 +390,7 @@ final class DiaryCanvasSurface: UIView {
             layer.name = entry.id.uuidString
             layer.zPosition = CGFloat(index)
             layer.isHidden = artwork.composited || !entry.source.visible
-            layer.opacity = stagesEntrance && !entranceFinished && !isEntranceBackground(entry.source) ? 0 : Float(entry.source.effectiveOpacity)
+            layer.opacity = stagesEntrance && !entranceFinished && (entrancePhotosFirst || !isEntranceBackground(entry.source)) ? 0 : Float(entry.source.effectiveOpacity)
             layer.contents = entry.image?.cgImage
             layer.contentsGravity = .resize
             if entry.source.displayBounds != nil, let child = entry.source.contentID,
@@ -343,6 +438,10 @@ final class DiaryCanvasSurface: UIView {
                 guard let next = self.renderCache.ordered.first(where: { $0.source.visible && $0.needsRaster }) else {
                     self.renderCache.rasterizeInk()
                     self.updateArtwork()
+                    if self.window != nil {
+                        if let ready = self.onEntranceReady { ready(self) }
+                        else if self.automaticallyPlaysEntrance { self.animateMaterialEntrance() }
+                    }
                     return
                 }
                 self.renderCache.rasterize(next)

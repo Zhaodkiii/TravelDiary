@@ -7,6 +7,7 @@ private struct InvitationSummary: Decodable {
     struct Record: Decodable, Identifiable { let id: String; let createdAt: Date; let status: String }
     let campaign: Campaign?
     let link: String?
+    let inviteToken: String?
     let count: Int
     let records: [Record]
 }
@@ -22,6 +23,7 @@ private struct ResetResult: Decodable { let card: InvitationRewards.Card; let qu
 struct InvitationCenterView: View {
     @ObservedObject private var service = DiaryProductionService.shared
     @State private var summary: InvitationSummary?
+    @State private var sharingURL: URL?
     @State private var rewards: InvitationRewards?
     @State private var error: String?
     @State private var busy = false
@@ -42,8 +44,11 @@ struct InvitationCenterView: View {
                     ProgressView("10 人：标准装订免费券", value: Double(min(summary?.count ?? 0, 10)), total: 10)
                     Text(campaign.rules).font(.footnote)
                     Button("生成二维码邀请海报") { Task { await createPoster() } }.disabled(busy)
-                    if let link = summary?.link {
-                        ShareLink(item: "邀请你一起收藏旅途！扫码或打开链接登记，下载后使用同一手机号登录／绑定，或绑定相同邮箱。\n\(link)") { Label("分享邀请文案", systemImage: "square.and.arrow.up") }
+                    if let link = sharingURL {
+                        ShareLink(item: link,
+                                  preview: SharePreview("一起收藏旅途 · 寻寻仔", image: Image("InvitationShareCover"))) {
+                            Label("分享邀请链接", systemImage: "square.and.arrow.up")
+                        }
                     }
                     if let poster { Image(uiImage: poster).resizable().scaledToFit(); Button("分享或保存海报") { shareOpen = true } }
                 }
@@ -79,7 +84,7 @@ struct InvitationCenterView: View {
             Button("刷新进度与奖励") { Task { await load() } }.disabled(busy)
         }
         .navigationTitle("邀请有礼")
-        .task(id: service.owner) { summary=nil; rewards=nil; poster=nil; preview=nil; selectedCard=nil; useKeys=[:]; await load() }
+        .task(id: service.owner) { summary=nil; sharingURL=nil; rewards=nil; poster=nil; preview=nil; selectedCard=nil; useKeys=[:]; await load() }
         .sheet(isPresented: $shareOpen) { if let poster { InvitationActivitySheet(image: poster) } }
         .alert("确认使用重置卡？", isPresented: $confirm) {
             Button("取消", role: .cancel) {}
@@ -92,6 +97,8 @@ struct InvitationCenterView: View {
         guard !busy, service.owner != nil else { return }; busy=true; defer { busy=false }; error=nil
         do {
             summary = try await service.invitationRequest("/api/v1/experience/invitations/me/")
+            sharingURL = try service.invitationShareURL(token: summary?.inviteToken, legacyLink: summary?.link)
+            poster = nil
             rewards = try await service.invitationRequest("/api/v1/experience/rewards/")
             await service.refreshQuota()
         } catch { self.error=error.localizedDescription }
@@ -99,8 +106,9 @@ struct InvitationCenterView: View {
     private func createPoster() async {
         guard let c=summary?.campaign, !busy else { return };busy=true;defer{busy=false}
         do {
-            if summary?.link == nil { summary = try await service.invitationRequest("/api/v1/experience/invitations/me/",body:["campaign_id":c.id]) }
-            guard let link=summary?.link else { return }
+            if summary?.inviteToken == nil && summary?.link == nil { summary = try await service.invitationRequest("/api/v1/experience/invitations/me/",body:["campaign_id":c.id]) }
+            sharingURL = try service.invitationShareURL(token: summary?.inviteToken, legacyLink: summary?.link)
+            guard let link=sharingURL?.absoluteString else { return }
             poster=InvitationPoster.render(title:c.title,rules:c.rules,link:link)
             if poster == nil { error="海报生成失败，请重试" }
         } catch { self.error=error.localizedDescription }

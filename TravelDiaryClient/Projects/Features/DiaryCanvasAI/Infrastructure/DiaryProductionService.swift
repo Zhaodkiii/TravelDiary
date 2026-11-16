@@ -154,7 +154,7 @@ final class DiaryProductionService: ObservableObject {
                 date = formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
             } else { date = nil }
             let recovery = date.map { "，\($0.formatted(date: .abbreviated, time: .shortened)) 恢复" } ?? ""
-            throw DiaryAIError.invalid("\(name)额度不足\(recovery)。")
+            throw DiaryAIError.invalid("\(name)额度已用完\(recovery)。")
         }
         guard call.accountingState == "pending" else { throw DiaryAIError.invalid("此调用许可已结束，请重新发起制作。") }
     }
@@ -259,6 +259,28 @@ final class DiaryProductionService: ObservableObject {
 
 
 extension DiaryProductionService {
+    /// Use the same network engine as the invitation request, including its actual environment.
+    func invitationShareURL(token: String?, legacyLink: String?) throws -> URL? {
+        guard token != nil || legacyLink != nil else { return nil }
+        guard let base = engine?.serviceBaseURL,
+              var components = URLComponents(url: base, resolvingAgainstBaseURL: false),
+              ["https", "http"].contains(components.scheme ?? ""), components.host != nil else {
+            throw DiaryAIError.invalid("邀请服务尚未初始化")
+        }
+        // During a rolling server upgrade, retain only the UUID from the old link.
+        let rawToken = token ?? legacyLink.flatMap { URL(string: $0)?.lastPathComponent }
+        guard let rawToken, let identifier = UUID(uuidString: rawToken) else {
+            throw DiaryAIError.invalid("邀请码无效，请刷新后重试")
+        }
+        components.path = "/invite/" + identifier.uuidString.lowercased()
+        components.query = nil
+        components.fragment = nil
+        components.user = nil
+        components.password = nil
+        guard let url = components.url else { throw DiaryAIError.invalid("邀请链接生成失败") }
+        return url
+    }
+
     func invitationRequest<T: Decodable>(_ path: String, body: [String: Any]? = nil, key: UUID? = nil) async throws -> T {
         try await request(path, body: body, requestKey: key)
     }

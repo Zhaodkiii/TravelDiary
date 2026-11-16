@@ -5,7 +5,19 @@ struct DiaryOnboardingView: View {
     var isPreparingHome = false
     let onFinish: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var page = 0
+    @State private var page = Self.initialPage
+
+    private static var initialPage: Int {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let flag = arguments.firstIndex(of: "-diary-onboarding-page"),
+           let value = arguments.dropFirst(flag + 1).first.flatMap(Int.init),
+           (1...3).contains(value) {
+            return value - 1
+        }
+        #endif
+        return 0
+    }
     @State private var showDetails = false
 
     private let ink = Color(red: 0.14, green: 0.15, blue: 0.13)
@@ -176,10 +188,8 @@ struct DiaryOnboardingView: View {
     }
 
     private var preview: some View {
-        Image("OnboardingSpread" + String(min(page, 2)))
-            .resizable().scaledToFit()
+        DiaryOnboardingPlayback(index: min(page, 2))
             .padding(18)
-            .shadow(color: ink.opacity(0.13), radius: 12, y: 8)
-            .accessibilityLabel(["龙龛与洱海湖岸完整跨页", "喜洲古镇完整跨页", "周城扎染完整跨页"][min(page, 2)])
+            .id(page)
     }
 }
