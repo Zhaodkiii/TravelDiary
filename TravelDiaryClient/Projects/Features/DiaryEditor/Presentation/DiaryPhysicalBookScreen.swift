@@ -121,6 +121,8 @@ struct DiaryPhysicalBookScreen: View {
     @State private var campaignPages: Int?
     private enum CampaignDestination { case checkout, wallet, orders, order }
     @State private var makingCover = false
+    @State private var choosingCoverStyle = false
+    @State private var openCoverEditorAfterPicker = false
     @State private var editor: DiaryEditorSession?
     @State private var editingRightHalf = false
     @State private var loadingEditor = false
@@ -143,7 +145,8 @@ struct DiaryPhysicalBookScreen: View {
         self.completedCanvas = completedCanvas
         self.store = store
         self.onShowList = onShowList
-        let position = initialPageID.flatMap { id in DiaryReadingLeaf.project(book).firstIndex { $0.page?.id == id } }.map { $0 / 2 } ?? 0
+        let openingPageID = completedCanvas ? (book.effectiveCover?.id ?? initialPageID) : initialPageID
+        let position = openingPageID.flatMap { id in DiaryReadingLeaf.project(book).firstIndex { $0.page?.id == id } }.map { $0 / 2 } ?? 0
         _spread = State(initialValue: position)
         _opened = State(initialValue: initialPageID != nil || book.shell == nil)
     }
@@ -303,6 +306,17 @@ struct DiaryPhysicalBookScreen: View {
                     if let last = innerPages.last { reveal(last.id) }
                 }
             }
+            .sheet(isPresented: $choosingCoverStyle, onDismiss: {
+                Task {
+                    await refreshAfterEditing()
+                    if openCoverEditorAfterPicker {
+                        openCoverEditorAfterPicker = false
+                        makingCover = true
+                    }
+                }
+            }) {
+                DiaryCoverStylePicker(book: book, store: store) { openCoverEditorAfterPicker = true }
+            }
             .fullScreenCover(isPresented: $makingCover, onDismiss: { Task { await refreshAfterEditing() } }) {
                 DiaryCoverEditorScreen(store: store)
             }
@@ -357,6 +371,10 @@ struct DiaryPhysicalBookScreen: View {
                     } label: { Image(systemName: "waveform") }
                     .accessibilityLabel("阅读动画与反馈")
                     #endif
+                    if spread == 0 && opened {
+                        Button { choosingCoverStyle = true } label: { Image(systemName: "rectangle.portrait.on.rectangle.portrait") }
+                            .accessibilityLabel(book.effectiveCover == nil ? "添加封面" : "更换封面")
+                    }
                     Button { showingExport = true } label: { Image(systemName: "square.and.arrow.up") }
                         .accessibilityLabel("导出手帐").disabled(book.pages.isEmpty || turningCover)
                     if let onShowList {
@@ -466,7 +484,7 @@ struct DiaryPhysicalBookScreen: View {
     }
     private func handleAdd(_ action: DiaryReaderAddAction) {
         switch action {
-        case .cover: makingCover = true
+        case .cover: choosingCoverStyle = true
         case .blank: Task { await createPage(data: nil) }
         case .photo: pickingPhoto = true
         case .preset: choosingPreset = true
@@ -491,7 +509,7 @@ struct DiaryPhysicalBookScreen: View {
                 document.objects[document.rootContentID]?.layers.insert(
                     DiaryLayer.photoBackground(asset: asset, pageSize: book.defaultPageSize), at: 0)
             }
-            try await store.save(document)
+            try await store.save(document, addDefaultCover: data != nil)
             book = try await store.loadBook()
             reveal(document.id)
             editingRightHalf = false
@@ -1038,6 +1056,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
     let reduceMotion: Bool
     var allowsPageActions = true
     var showsBinding = true
+    var onTransitionChange: ((Bool, Int) -> Void)? = nil
     let makePaper: (Int, @escaping () -> Bool) -> UIViewController
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -1201,8 +1220,12 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
             // The gesture gate rejects new pans while this transition is running.
             updateMotionPolicy(in: controller)
             // Refreshing read-only paper views during rotation is not a page turn.
+            let notifiesTransition = displayed >= 0
             let animateTurn = animated && target != displayed
             if animateTurn { setRingsVisible(false, animated: false) }
+            if notifiesTransition {
+                DispatchQueue.main.async { [weak self] in self?.parent.onTransitionChange?(true, target) }
+            }
             controller.setViewControllers([left, right], direction: direction, animated: animateTurn) { [weak self, weak controller] finished in
                 // UIKit is still unwinding its transition inside this callback.
                 // Keep the lock until the next main-queue turn before starting another curl.
@@ -1210,6 +1233,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
                     guard let self, let controller else { return }
                     if finished { self.displayed = target }
                     self.transitioning = false
+                    if notifiesTransition { self.parent.onTransitionChange?(false, self.displayed) }
                     self.show(self.parent.spread, in: controller, animated: !self.parent.reduceMotion)
                     self.restoreAfterTransition(in: controller)
                     self.presentReading(in: controller, animated: finished)
@@ -1258,6 +1282,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
         func pageViewController(_ pageViewController: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
             prepareReading()
             transitioning = true
+            parent.onTransitionChange?(true, displayed)
             setRingsVisible(false, animated: !parent.reduceMotion)
         }
         func pageViewController(_ pageViewController: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
@@ -1276,6 +1301,7 @@ struct DiaryPageCurlReader: UIViewControllerRepresentable {
                     self.parent.spread = min(max(self.displayed, 0), max(self.parent.spreadCount - 1, 0))
                     self.show(self.parent.spread, in: pageViewController, animated: false)
                 }
+                self.parent.onTransitionChange?(false, self.displayed)
                 self.restoreAfterTransition(in: pageViewController)
                 self.presentReading(in: pageViewController, animated: completed)
             }
@@ -1380,6 +1406,7 @@ private struct DiaryBookPaper: View {
     let playback: DiaryReadingPlayback
     var body: some View {
         GeometryReader { geometry in
+            let boundRadius = DiaryBookStageLayout.boundPaperCornerRadius(width: geometry.size.width * (1 - DiaryBookSpine.halfGapFraction))
         ZStack {
             Color(red: 0.96, green: 0.92, blue: 0.82)
             if insideCover {
@@ -1404,12 +1431,12 @@ private struct DiaryBookPaper: View {
             }.allowsHitTesting(false)
         }
         .frame(width: geometry.size.width * (1 - DiaryBookSpine.halfGapFraction), height: geometry.size.height)
-        // 只裁每张纸的外侧两角；卷页容器不加蒙版，保留 UIKit 卷曲与投影。
+        // 只裁纸面，卷页容器保留原生动画的可见范围。
         .clipShape(UnevenRoundedRectangle(
-            topLeadingRadius: plainPaper && left ? DiaryBookStageLayout.paperCornerRadius : 0,
-            bottomLeadingRadius: plainPaper && left ? DiaryBookStageLayout.paperCornerRadius : 0,
-            bottomTrailingRadius: plainPaper && !left ? DiaryBookStageLayout.paperCornerRadius : 0,
-            topTrailingRadius: plainPaper && !left ? DiaryBookStageLayout.paperCornerRadius : 0,
+            topLeadingRadius: plainPaper ? (left ? DiaryBookStageLayout.paperCornerRadius : 0) : boundRadius,
+            bottomLeadingRadius: plainPaper ? (left ? DiaryBookStageLayout.paperCornerRadius : 0) : boundRadius,
+            bottomTrailingRadius: plainPaper ? (left ? 0 : DiaryBookStageLayout.paperCornerRadius) : boundRadius,
+            topTrailingRadius: plainPaper ? (left ? 0 : DiaryBookStageLayout.paperCornerRadius) : boundRadius,
             style: .continuous))
         .shadow(color: .black.opacity(plainPaper ? 0 : 0.35), radius: 1.5, x: left ? 1.5 : -1.5)
         .frame(width: geometry.size.width, height: geometry.size.height, alignment: left ? .leading : .trailing)

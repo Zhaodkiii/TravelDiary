@@ -30,7 +30,7 @@ struct DiaryBookAccessStore {
         if let data = try? JSONEncoder().encode(records) { defaults.set(data, forKey: key) }
     }
     static func resumePage(in book: DiaryBook, preferred: UUID?) -> DiaryPageEntry? {
-        book.contentPages.first { $0.id == preferred } ?? book.contentPages.first
+        book.contentPages.first { $0.id == preferred } ?? book.bodyPages.first ?? book.effectiveCover
     }
 }
 

@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import ImageIO
+import CoreText
 import CryptoKit
 import PencilKit
 #if DEBUG
@@ -212,12 +213,12 @@ nonisolated final class DiaryDocumentStore: Sendable {
                 } else { try bytes.write(to: targetURL, options: .atomic) }
             }
         }
-        try await save(published)
+        try await save(published, addDefaultCover: true)
     }
 
     /// 保存完成表示文档和素材引用已可靠提交。阅读派生图由阅读入口按需准备，
     /// 避免草稿与正式页重复合成，也避免保存后的后台绘制抢占编辑交互。
-    func save(_ document: DiaryDocument) async throws {
+    func save(_ document: DiaryDocument, addDefaultCover: Bool = false) async throws {
         try await run {
             guard document.bookID == self.bookID else { throw DiaryEditorError.invalidDocument.logged() }
             let directory = self.directory(document.id)
@@ -235,6 +236,10 @@ nonisolated final class DiaryDocumentStore: Sendable {
                     book.pages[index].size = document.root.referenceSize
                     book.pages[index].revisionID = revision
                     book.pages[index].updatedAt = Date()
+                    if let id = book.pages[index].defaultCover?.boundTitleLayerID,
+                       document.layer(id)?.text != Self.coverTitle(book.title) {
+                        book.pages[index].defaultCover?.boundTitleLayerID = nil
+                    }
                 } else {
                     guard self.opened.values[document.id] == nil,
                           !book.trashedPages.contains(where: { $0.id == document.id }) else { throw DiaryEditorError.pageConflict.logged() }
@@ -247,6 +252,10 @@ nonisolated final class DiaryDocumentStore: Sendable {
                     book.pages[i].aiOriginTask = origin.task
                     book.pages[i].aiFirstSavedAt = Date()
                     book.pages[i].aiSaveAnchor = UserDefaults.standard.string(forKey: "print.ai.anchor.\(self.ownerID).\(bookID.uuidString)")
+                }
+                if addDefaultCover, book.bodyPages.contains(where: { $0.id == document.id }),
+                   !document.root.layers.isEmpty || !document.root.drawing.isEmpty || document.root.background != nil {
+                    self.addDefaultCoverIfNeeded(to: &book)
                 }
                 try self.publish(book)
                 self.opened.values[document.id] = revision
@@ -761,6 +770,7 @@ extension DiaryDocumentStore {
             }
             book.coverPageID = draft.pages.first(where: { $0.role == .cover }).flatMap { candidate in book.pages.first(where: { $0.id == candidate.id && $0.canBeCover })?.id }
             try cancellation?.check()
+            target.addDefaultCoverIfNeeded(to: &book)
             let prepared = try target.publish(book)
             try FileManager.default.moveItem(at: target.root, to: self.libraryRoot.appendingPathComponent(draft.id.uuidString))
             return prepared
@@ -777,9 +787,149 @@ extension DiaryDocumentStore {
         try await mutateBook { book in
             let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty, name.count <= 60 else { throw DiaryEditorError.invalidName.logged() }
+            guard name != book.title else { return }
+            if let cover = book.effectiveCover, let index = book.pages.firstIndex(where: { $0.id == cover.id }),
+               let titleID = cover.defaultCover?.boundTitleLayerID {
+                var document = try self.readCover(cover)
+                if document.layer(titleID)?.text == Self.coverTitle(book.title) {
+                    document.update(titleID) { layer in
+                        layer.text = Self.coverTitle(name)
+                        layer.fontSize = Self.coverFontSize(layer.text, width: layer.size.width)
+                    }
+                    book.pages[index] = try self.writeCover(document, updating: cover)
+                }
+            }
             book.title = name
         }
     }
+
+    /// Uses the same serialized publication as the body page, so duplicate callbacks can't add two covers.
+    private nonisolated func addDefaultCoverIfNeeded(to book: inout DiaryBook) {
+        guard book.coverPageID == nil, book.automaticCoverDisabled != true, !book.bodyPages.isEmpty else { return }
+        do {
+            let entry = try makeDefaultCover(style: .linen, for: book)
+            book.pages.insert(entry, at: 0)
+            book.coverPageID = entry.id
+        } catch {
+            SupportLogger.log(level: .error, module: .diaryEditor, message: "default_cover_failed book=\(book.id) error=\(error)")
+        }
+    }
+
+    func applyDefaultCover(_ style: DiaryDefaultCoverStyle, expectedCover: DiaryPageEntry?) async throws {
+        try await mutateBook { book in
+            guard book.effectiveCover == expectedCover else { throw DiaryEditorError.pageConflict }
+            if let cover = expectedCover, var details = cover.defaultCover,
+               let index = book.pages.firstIndex(where: { $0.id == cover.id }) {
+                var document = try self.readCover(cover)
+                try self.setCoverBackground(style, layerID: details.backgroundLayerID, in: &document, allowPaperFallback: false)
+                details.style = style
+                var entry = try self.writeCover(document, updating: cover)
+                entry.defaultCover = details
+                book.pages[index] = entry
+            } else {
+                let entry = try self.makeDefaultCover(style: style, for: book, allowPaperFallback: false)
+                Self.archiveCover(in: &book)
+                book.pages.insert(entry, at: 0)
+                book.coverPageID = entry.id
+            }
+            book.automaticCoverDisabled = nil
+        }
+    }
+
+    private nonisolated func makeDefaultCover(style: DiaryDefaultCoverStyle, for book: DiaryBook,
+                                  allowPaperFallback: Bool = true) throws -> DiaryPageEntry {
+        var document = DiaryDocument()
+        document.bookID = book.id
+        document.title = "封面"
+        let size = DiaryBook.coverSize
+        document.objects[document.rootContentID]?.referenceSize = size
+        let backgroundID = UUID()
+        try setCoverBackground(style, layerID: backgroundID, in: &document, allowPaperFallback: allowPaperFallback)
+
+        let titleSize = CGSize(width: size.width * 0.72, height: size.height * 0.25)
+        var title = DiaryLayer(name: "封面标题", kind: .text,
+            transform: DiaryTransform(position: CGPoint(x: size.width * 0.14, y: size.height * 0.23), pivot: .zero),
+            size: titleSize)
+        title.text = Self.coverTitle(book.title)
+        title.fontSize = Self.coverFontSize(title.text, width: titleSize.width)
+        title.textAlignment = .center
+        title.textColor = DiaryColor(red: 0.22, green: 0.18, blue: 0.12)
+        var appearance = DiaryTextAppearance()
+        appearance.minimumCardHeight = Double(titleSize.height)
+        title.textAppearance = appearance
+        document.appendObject(containing: title)
+        let titleID = document.objects.values.first(where: { $0.role == .text })?.primaryLayerID
+
+        var entry = DiaryPageEntry(id: document.id, title: document.title, revisionID: UUID(), size: size)
+        entry.defaultCover = DiaryDefaultCoverDetails(style: style, backgroundLayerID: backgroundID, boundTitleLayerID: titleID)
+        return try writeCover(document, updating: entry)
+    }
+
+    private nonisolated func setCoverBackground(_ style: DiaryDefaultCoverStyle, layerID: UUID,
+                                    in document: inout DiaryDocument, allowPaperFallback: Bool) throws {
+        let rootID = document.rootContentID
+        guard let url = style.resource(), let bytes = try? Data(contentsOf: url),
+              let source = CGImageSourceCreateWithData(bytes as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue == Double(DiaryBook.coverSize.width),
+              (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue == Double(DiaryBook.coverSize.height) else {
+            if allowPaperFallback {
+                document.objects[rootID]?.background = .paper
+                return
+            }
+            throw DiaryEditorError.missingResource
+        }
+        // Use the same content-addressed asset path as other locally imported images.
+        let asset = try writeImportedImage(bytes, documentID: document.id).0
+        document.assets[asset.id] = asset
+        let size = document.root.referenceSize
+        var background = DiaryLayer(id: layerID, name: "封面底图", kind: .sticker,
+            transform: DiaryTransform(position: .zero, pivot: .zero), size: size, assetID: asset.id)
+        background.locked = true
+        background.isLibraryBackground = true
+        if let index = document.root.layers.firstIndex(where: { $0.id == layerID }) {
+            let previousAsset = document.root.layers[index].assetID
+            document.objects[rootID]?.layers[index] = background
+            if let previousAsset, previousAsset != asset.id,
+               !document.objects.values.contains(where: { $0.layers.contains { $0.referencedAssetIDs.contains(previousAsset) } }) {
+                document.assets.removeValue(forKey: previousAsset)
+            }
+        } else {
+            document.objects[rootID]?.layers.insert(background, at: 0)
+        }
+    }
+
+    private nonisolated static func coverTitle(_ title: String) -> String {
+        let normalized = title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return normalized.isEmpty ? "我的手帐" : normalized
+    }
+
+    private nonisolated static func coverFontSize(_ title: String, width: CGFloat) -> CGFloat {
+        for size in stride(from: 210, through: 44, by: -4) {
+            let font = CTFontCreateWithName("Helvetica" as CFString, CGFloat(size), nil)
+            let text = NSAttributedString(string: title, attributes: [
+                NSAttributedString.Key(kCTFontAttributeName as String): font
+            ])
+            let frame = CTFramesetterCreateWithAttributedString(text)
+            let measured = CTFramesetterSuggestFrameSizeWithConstraints(frame, CFRange(location: 0, length: 0), nil,
+                CGSize(width: width, height: .greatestFiniteMagnitude), nil)
+            if measured.height <= min(530, CGFloat(size) * 3.2) { return CGFloat(size) }
+        }
+        return 44
+    }
+
+    private nonisolated func readCover(_ entry: DiaryPageEntry) throws -> DiaryDocument {
+        try readSnapshot("revisions/\(entry.revisionID.uuidString)/manifest.json", directory: directory(entry.id), documentID: entry.id)
+    }
+
+    private nonisolated func writeCover(_ document: DiaryDocument, updating entry: DiaryPageEntry) throws -> DiaryPageEntry {
+        let path = try writeSnapshot(document, prefix: "revisions", directory: directory(document.id))
+        var entry = entry
+        entry.revisionID = UUID(uuidString: String(path.split(separator: "/")[1]))!
+        entry.updatedAt = Date()
+        return entry
+    }
+
     /// A draft has its own catalog reference and is never a body page or an export page.
     func prepareCoverDraft() async throws -> Loaded {
         let id = try await run {
@@ -810,7 +960,7 @@ extension DiaryDocumentStore {
             Self.archiveCover(in: &book)
             draft.title = "封面"
             book.pages.insert(draft, at: 0)
-            book.coverPageID = id; book.coverDraft = nil
+            book.coverPageID = id; book.coverDraft = nil; book.automaticCoverDisabled = nil
         }
     }
     private nonisolated static func archiveCover(in book: inout DiaryBook) {
@@ -821,7 +971,11 @@ extension DiaryDocumentStore {
     }
     nonisolated func setCover(_ id: UUID?) async throws {
         try await mutateBook { book in
-            guard let id else { Self.archiveCover(in: &book); return }
+            guard let id else {
+                Self.archiveCover(in: &book)
+                book.automaticCoverDisabled = true
+                return
+            }
             guard id != book.coverPageID else { return }
             guard let index = book.pages.firstIndex(where: { $0.id == id }),
                   book.pages[index].canBeCover, id != book.shellPageID,
@@ -830,6 +984,7 @@ extension DiaryDocumentStore {
             page.presetSpreadID = nil; page.presetSpreadSide = nil
             Self.archiveCover(in: &book)
             book.pages.insert(page, at: 0); book.coverPageID = id
+            book.automaticCoverDisabled = nil
         }
     }
     /// Copies the immutable page revision without moving or splitting its original spread.
@@ -846,6 +1001,7 @@ extension DiaryDocumentStore {
             Self.archiveCover(in: &book)
             book.pages.insert(DiaryPageEntry(id: document.id, title: "封面", revisionID: revision, size: source.size), at: 0)
             book.coverPageID = document.id
+            book.automaticCoverDisabled = nil
             try self.publish(book)
         }
     }
@@ -879,7 +1035,10 @@ extension DiaryDocumentStore {
         try await mutateBook { book in
             guard let index = book.pages.firstIndex(where: { $0.id == id }) else { throw DiaryEditorError.invalidDocument.logged() }
             book.trashedPages.append(DiaryTrashedPage(entry: book.pages.remove(at: index), originalIndex: index))
-            if book.coverPageID == id { book.coverPageID = nil }
+            if book.coverPageID == id {
+                book.coverPageID = nil
+                book.automaticCoverDisabled = true
+            }
             if book.shellPageID == id { book.shellPageID = nil }
         }
     }
@@ -893,7 +1052,10 @@ extension DiaryDocumentStore {
                 throw DiaryEditorError.invalidDocument
             }
             book.pages.remove(at: index)
-            if book.coverPageID == id { book.coverPageID = nil }
+            if book.coverPageID == id {
+                book.coverPageID = nil
+                book.automaticCoverDisabled = true
+            }
             if book.shellPageID == id { book.shellPageID = nil }
             try self.publish(book)
             let directory = self.directory(id)
@@ -1292,6 +1454,7 @@ extension DiaryDocumentStore {
             try log("publishing")
             progress("正在保存手帐…")
             if isNew {
+                target.addDefaultCoverIfNeeded(to: &book)
                 let prepared = try target.publish(book)
                 try FileManager.default.moveItem(at: target.root, to: self.libraryRoot.appendingPathComponent(destinationID.uuidString))
                 self.finishImportStatistics(journal, at: journalURL)
@@ -1318,6 +1481,7 @@ extension DiaryDocumentStore {
                         try FileManager.default.moveItem(at: item, to: dest); moved.append(dest)
                     }
                 }
+                self.addDefaultCoverIfNeeded(to: &book)
                 let result = try self.publish(book)
                 self.finishImportStatistics(journal, at: journalURL)
                 return result

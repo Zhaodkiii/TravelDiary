@@ -6,6 +6,9 @@ struct DiaryOnboardingView: View {
     let onFinish: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var page = Self.initialPage
+    @State private var requestedSpread = Self.initialPage
+    @State private var isTurning = false
+    @State private var hasLeftIntroduction = Self.initialPage != 0
 
     private static var initialPage: Int {
         #if DEBUG
@@ -18,10 +21,11 @@ struct DiaryOnboardingView: View {
         #endif
         return 0
     }
-    @State private var showDetails = false
 
     private let ink = Color(red: 0.14, green: 0.15, blue: 0.13)
     private let yellow = Color(red: 1, green: 0.79, blue: 0.28)
+    private let buttonFill = Color(red: 0.15, green: 0.145, blue: 0.135)
+    private let buttonInk = Color(red: 0.99, green: 0.98, blue: 0.96)
     private let titles = ["把旅行，留在纸上", "看看一页旅行的模样", "把手艺与风景一起收藏", "选一个喜欢的风格"]
     private let captions = [
         "照片、票根和一句心情，\n拼成值得翻看的旅行手帐。",
@@ -35,12 +39,12 @@ struct DiaryOnboardingView: View {
             VStack(spacing: 0) {
                 HStack {
                     Button {
-                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) { page -= 1 }
+                        navigate(to: page - 1)
                     } label: {
                         Image(systemName: "chevron.left").frame(width: 44, height: 44)
                     }
                     .opacity(page == 0 ? 0 : 1)
-                    .disabled(page == 0 || isPreparingHome)
+                    .disabled(page == 0 || isPreparingHome || isTurning)
                     .accessibilityLabel("上一步")
                     Spacer()
                     Text("旅行手帐")
@@ -72,14 +76,10 @@ struct DiaryOnboardingView: View {
                                 .foregroundStyle(ink.opacity(0.6))
                                 .lineSpacing(5)
                         }
+                        .opacity(isTurning ? 0 : 1)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isTurning)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
-                        if page < 3 {
-                            Button("放大看看", systemImage: "arrow.up.left.and.arrow.down.right") {
-                                showDetails = true
-                            }
-                            .font(.system(size: 14, weight: .medium))
-                        }
                     }.padding(.bottom, 20)
                 }
                 .scrollIndicators(.hidden)
@@ -96,19 +96,21 @@ struct DiaryOnboardingView: View {
                     Button {
                         if page == 3 { onFinish() }
                         else {
-                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) { page += 1 }
+                            navigate(to: page + 1)
                         }
                     } label: {
                         HStack(spacing: 10) {
-                            if isPreparingHome { ProgressView().tint(yellow) }
-                            Text(isPreparingHome ? "正在准备首页…" : ["看看样册", "继续", "选择风格", "先逛逛"][page])
+                            if isPreparingHome { ProgressView().tint(buttonInk) }
+                            Text(isPreparingHome ? "正在准备首页…" : "下一步")
                         }
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(yellow)
-                        .frame(maxWidth: .infinity).frame(minHeight: 54)
-                        .background(ink, in: Capsule())
+                        .foregroundStyle(buttonInk)
+                        .frame(maxWidth: .infinity, minHeight: 44)
                     }
-                    .disabled(isPreparingHome)
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+                    .tint(buttonFill)
+                    .disabled(isPreparingHome || isTurning)
                     .accessibilityIdentifier("onboarding.next")
                 }
                 .padding(.horizontal, 30).padding(.top, 12).padding(.bottom, 20)
@@ -119,18 +121,31 @@ struct DiaryOnboardingView: View {
         .foregroundStyle(ink)
         .background(Color(red: 0.98, green: 0.97, blue: 0.94).ignoresSafeArea())
         .preferredColorScheme(.light)
-        .sheet(isPresented: $showDetails) {
-            NavigationStack {
-                preview.padding(20)
-                    .navigationTitle(["龙龛与洱海湖岸", "喜洲古镇", "周城扎染"][min(page, 2)])
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("完成") { showDetails = false }
-                        }
-                    }
+        .task {
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-onboarding-verify") {
+                try? await Task.sleep(for: .seconds(2))
+                navigate(to: 1)
+                try? await Task.sleep(for: .seconds(3))
+                print("ONBOARDING_CHECK early page=\(page) turning=\(isTurning)")
+                navigate(to: 2)
+                try? await Task.sleep(for: .seconds(3))
+                print("ONBOARDING_CHECK next page=\(page) turning=\(isTurning)")
+                navigate(to: 1)
+                try? await Task.sleep(for: .seconds(3))
+                print("ONBOARDING_CHECK back page=\(page) turning=\(isTurning)")
+                navigate(to: 2)
+                try? await Task.sleep(for: .seconds(2))
+                navigate(to: 3)
+                try? await Task.sleep(for: .seconds(2))
+                print("ONBOARDING_CHECK styles page=\(page) turning=\(isTurning)")
+                navigate(to: 2)
+                try? await Task.sleep(for: .seconds(2))
+                print("ONBOARDING_CHECK return page=\(page) turning=\(isTurning)")
             }
+            #endif
         }
+
     }
 
     private var stylePicker: some View {
@@ -187,9 +202,26 @@ struct DiaryOnboardingView: View {
         .accessibilityIdentifier("onboarding.styles")
     }
 
+    private func navigate(to target: Int) {
+        guard !isTurning, (0...3).contains(target) else { return }
+        if target == 3 || page == 3 {
+            hasLeftIntroduction = true
+            requestedSpread = min(target, 2)
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { page = target }
+        } else {
+            isTurning = true
+            requestedSpread = target
+        }
+    }
+
     private var preview: some View {
-        DiaryOnboardingPlayback(index: min(page, 2))
+        DiaryOnboardingBook(requestedSpread: requestedSpread, playsIntroduction: !hasLeftIntroduction,
+            onTurning: { isTurning = $0 }, onSettled: { displayed in
+                guard (0...2).contains(displayed) else { return }
+                page = displayed
+                requestedSpread = displayed
+                if displayed > 0 { hasLeftIntroduction = true }
+            })
             .padding(18)
-            .id(page)
     }
 }

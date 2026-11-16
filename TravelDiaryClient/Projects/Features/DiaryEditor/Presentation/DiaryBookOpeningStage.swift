@@ -44,7 +44,7 @@ struct DiaryBookOpeningStage<Pages: View>: View, Animatable {
                 if p < 0.9999, let firstPage {
                     DiaryPagePreview(page: firstPage, store: store, large: true, undecorated: true)
                         .frame(width: (width - rim) * (1 - DiaryBookSpine.halfGapFraction), height: height - 2 * rim)
-                        .clipped()
+                        .clipShape(RoundedRectangle(cornerRadius: DiaryBookStageLayout.boundPaperCornerRadius(width: width - rim), style: .continuous))
                         .position(x: spine + (width - rim) * (1 + DiaryBookSpine.halfGapFraction) / 2, y: viewport.height / 2)
                 }
             }
@@ -115,6 +115,10 @@ nonisolated enum DiaryBookSpine {
 /// Shared fitted bounds for rendering and the immersive background hit area.
 nonisolated enum DiaryBookStageLayout {
     static let paperCornerRadius: CGFloat = 24
+
+    static func boundPaperCornerRadius(width: CGFloat) -> CGFloat {
+        min(7, max(0, width) * 0.028)
+    }
 
     /// Duo 横屏纯纸面：尺寸包含装订缝，扣除缝隙后每张纸保持内容比例。
     static func paperSize(viewport: CGSize, paperRatio: CGFloat) -> CGSize {

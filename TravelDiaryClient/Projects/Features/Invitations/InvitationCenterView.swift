@@ -24,6 +24,7 @@ private struct ResetResult: Decodable { let card: InvitationRewards.Card; let qu
 struct InvitationCenterView: View {
     @ObservedObject private var service = DiaryProductionService.shared
     @State private var summary: InvitationSummary?
+    @State private var textShareOpen = false
     @State private var sharingURL: URL?
     @State private var rewards: InvitationRewards?
     @State private var error: String?
@@ -170,6 +171,10 @@ struct InvitationCenterView: View {
         }
         .task(id: service.owner) { summary=nil; sharingURL=nil; rewards=nil; poster=nil; preview=nil; selectedCard=nil; useKeys=[:]; await load() }
         .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await load() } } }
+        .onReceive(NotificationCenter.default.publisher(for: .invitationWeChatReturned)) { notification in
+            guard let code = notification.userInfo?["code"] as? Int32 else { return }
+            notice = code == -2 ? "已取消微信分享" : code == 0 ? "已返回微信分享结果；邀请进度以好友完成验证为准。" : "微信未完成分享，请重试或使用分享海报。"
+        }
         .sheet(isPresented: $sharePreviewOpen) { sharePreview }
         .alert("确认使用重置卡？", isPresented: $confirm) {
             Button("取消", role: .cancel) {}
@@ -187,9 +192,16 @@ struct InvitationCenterView: View {
                     Text("好友扫码登记后，使用同一手机号或邮箱在 App 验证，才会计为有效邀请。")
                         .font(.footnote).foregroundStyle(.secondary)
                     if let link = sharingURL {
-                        ShareLink(item: link, preview: SharePreview("一起收藏旅途 · 寻寻仔", image: Image("InvitationRealJournalHero"))) {
-                            Label("分享邀请链接", systemImage: "link").frame(maxWidth: .infinity)
+                        if WeChatPrintPayment.shared.isConfigured {
+                            Button { Task { await shareToWeChat(link) } } label: {
+                                Label("分享给微信好友", systemImage: "message").frame(maxWidth: .infinity)
+                            }.buttonStyle(.borderedProminent).disabled(busy)
+                        }
+                        Button { textShareOpen = true } label: {
+                            Label("分享邀请文案与链接", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
                         }.buttonStyle(.borderedProminent)
+                        Text("可选择微信发送文案与链接；也可以分享下方海报，让好友扫码加入。")
+                            .font(.caption).foregroundStyle(.secondary)
                         Button("复制邀请链接") { UIPasteboard.general.url = link; notice = "邀请链接已复制" }
                     }
                     HStack {
@@ -203,7 +215,23 @@ struct InvitationCenterView: View {
             .navigationTitle("邀请预览").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { sharePreviewOpen = false } } }
             .sheet(isPresented: $shareOpen) { if let poster { InvitationActivitySheet(image: poster) } }
+            .sheet(isPresented: $textShareOpen) {
+                if let link = sharingURL { InvitationTextActivitySheet(url: link) }
+            }
         }.tint(accent)
+    }
+
+    @MainActor private func shareToWeChat(_ link: URL) async {
+        guard !busy else { return }
+        busy = true; defer { busy = false }
+        notice = nil
+        do {
+            guard let cover = UIImage(named: "InvitationShareCover") else {
+                notice = "分享封面暂不可用，请使用分享海报。"; return
+            }
+            try await WeChatPrintPayment.shared.shareInvitation(url: link, cover: cover)
+            if notice == nil { notice = "已请求打开微信，请在微信中选择好友并确认发送。" }
+        } catch { notice = error.localizedDescription }
     }
 
     @MainActor private func savePoster() async {
@@ -214,7 +242,10 @@ struct InvitationCenterView: View {
             notice = "无法写入相册。可使用“分享海报”保存到文件，或在系统设置中允许添加照片。"; return
         }
         do {
-            try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.creationRequestForAsset(from: poster) }
+            guard let imageData = poster.pngData() else {
+                notice = "海报图片处理失败，请重新生成后再试。"; return
+            }
+            try await InvitationPhotoWriter.savePNG(imageData)
             notice = "海报已保存到相册"
         } catch { notice = "保存失败，请重试或使用分享海报。" }
     }
@@ -299,4 +330,27 @@ private struct InvitationActivitySheet:UIViewControllerRepresentable {
     let image:UIImage
     func makeUIViewController(context:Context)->UIActivityViewController{UIActivityViewController(activityItems:[image],applicationActivities:nil)}
     func updateUIViewController(_ controller:UIActivityViewController,context:Context){}
+}
+
+/// A single plain string avoids Transferable URL + preview representations rejected by WeChat.
+private struct InvitationTextActivitySheet: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let text = "邀请你一起收藏旅途 · 寻寻仔\n打开链接验证手机号或邮箱，下载 App 后用相同联系方式登录或绑定。\n\(url.absoluteString)"
+        return UIActivityViewController(activityItems: [text], applicationActivities: nil)
+    }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+/// Photos invokes its transaction block on its own queue, never the UI actor.
+private enum InvitationPhotoWriter {
+    nonisolated static func savePNG(_ data: Data) async throws {
+        let changes: @Sendable () -> Void = {
+            let options = PHAssetResourceCreationOptions()
+            options.originalFilename = "寻寻仔-好友邀请.png"
+            options.uniformTypeIdentifier = "public.png"
+            PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: options)
+        }
+        try await PHPhotoLibrary.shared().performChanges(changes)
+    }
 }

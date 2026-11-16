@@ -7,6 +7,7 @@ struct DiaryCanvasView: UIViewRepresentable {
     var compactViewport = false
     var stagesEntrance = false
     var showsSelection = true
+    var roundsBoundPaper = false
     var editingTextLayer: DiaryLayer? = nil
     var lockedTextID: UUID? = nil
     var onTextAdjustment: ((DiaryLayer) -> Void)? = nil
@@ -14,15 +15,17 @@ struct DiaryCanvasView: UIViewRepresentable {
     var onSelectionViewportRect: ((CGRect?) -> Void)? = nil
     var onEdit: () -> Void = {}
     func makeUIView(context: Context) -> DiaryCanvasSurface {
-        let view = DiaryCanvasSurface(); view.stagesEntrance = stagesEntrance; view.session = session; view.compactViewport = compactViewport; view.editingTextLayer = editingTextLayer; view.lockedTextID = lockedTextID; view.onTextAdjustment = onTextAdjustment; view.showsSelection = showsSelection; view.focusedLayerID = focusedLayerID; view.onEdit = onEdit; view.onSelectionViewportRect = onSelectionViewportRect; return view
+        let view = DiaryCanvasSurface(); view.stagesEntrance = stagesEntrance; view.session = session; view.compactViewport = compactViewport; view.editingTextLayer = editingTextLayer; view.lockedTextID = lockedTextID; view.onTextAdjustment = onTextAdjustment; view.showsSelection = showsSelection; view.roundsBoundPaper = roundsBoundPaper; view.focusedLayerID = focusedLayerID; view.onEdit = onEdit; view.onSelectionViewportRect = onSelectionViewportRect; return view
     }
     func updateUIView(_ view: DiaryCanvasSurface, context: Context) {
-        view.stagesEntrance = stagesEntrance; view.session = session; view.compactViewport = compactViewport; view.editingTextLayer = editingTextLayer; view.lockedTextID = lockedTextID; view.onTextAdjustment = onTextAdjustment; view.showsSelection = showsSelection; view.focusedLayerID = focusedLayerID; view.onEdit = onEdit; view.onSelectionViewportRect = onSelectionViewportRect; view.refresh()
+        view.stagesEntrance = stagesEntrance; view.session = session; view.compactViewport = compactViewport; view.editingTextLayer = editingTextLayer; view.lockedTextID = lockedTextID; view.onTextAdjustment = onTextAdjustment; view.showsSelection = showsSelection; view.roundsBoundPaper = roundsBoundPaper; view.focusedLayerID = focusedLayerID; view.onEdit = onEdit; view.onSelectionViewportRect = onSelectionViewportRect; view.refresh()
     }
 }
 
 /// 每个对象使用独立设计坐标；视口可包含负坐标，装饰伸出照片时仍保留原位置。
 final class DiaryCanvasSurface: UIView {
+    var previewPaperCornerRadius: CGFloat?
+    var roundsBoundPaper = false
     var entrancePhotosFirst = false
     var usesPreloadedImages = false
     var automaticallyPlaysEntrance = false
@@ -148,6 +151,10 @@ final class DiaryCanvasSurface: UIView {
     func refresh(force: Bool = false) {
         guard !viewportInteracting else { viewportNeedsRefresh = true; return }
         guard let session, fit > 0, bounds.height > 0 else { return }
+        artwork.layer.cornerCurve = .continuous
+        artwork.layer.cornerRadius = previewPaperCornerRadius ?? (roundsBoundPaper
+            ? DiaryBookStageLayout.boundPaperCornerRadius(width: session.canvasBounds.width * fit / 2) / fit
+            : 0)
         if lastDraftLayer != nil && session.transformDraft == nil {
             preview=nil; warpStart=nil; warpHandle=nil
         }

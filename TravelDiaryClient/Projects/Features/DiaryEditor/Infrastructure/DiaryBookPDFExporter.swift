@@ -25,6 +25,9 @@ enum DiaryBookPDFExporter {
     }
 
     static func pageSize(for designSize: CGSize) -> CGSize {
+        if designSize == DiaryBook.coverSize {
+            return CGSize(width: 185 / 25.4 * 72, height: 265 / 25.4 * 72)
+        }
         if designSize == DiaryPagePreset.a5.size {
             return CGSize(width: 148 / 25.4 * 72, height: 210 / 25.4 * 72)
         }

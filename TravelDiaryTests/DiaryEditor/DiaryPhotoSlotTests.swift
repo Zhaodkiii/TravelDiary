@@ -154,7 +154,7 @@ struct DiaryPhotoSlotTests {
         let library = DiaryDocumentStore(ownerID: "slot-import-test", baseDirectory: folder)
         let book = try await library.importPreset(package, pageIDs: [page.id], title: "槽位验证", operationID: UUID(), replacementPhotos: [file], replacementFill: .stretch)
         let store = DiaryDocumentStore(ownerID: "slot-import-test", baseDirectory: folder, bookID: book.id)
-        let loaded = try await store.load(book.pages[0].id)
+        let loaded = try await store.load(try #require(book.pages.first { $0.presetSource?.pageID == page.id }).id)
         let layer = try #require(loaded.document.replaceablePhotos().first)
         let slot = try #require(layer.photoSlot)
         #expect(slot.fill == .stretch)

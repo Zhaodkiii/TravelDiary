@@ -393,7 +393,7 @@ struct DiaryEditorScreen: View {
                                 .offset(x: margin, y: margin)
                                 .allowsHitTesting(false).accessibilityHidden(true)
                         }
-                        DiaryCanvasView(session: canvasSession, compactViewport: toolOpen, stagesEntrance: supportsSpreadPreview && !aiMode && creationRequest == nil, onSelectionViewportRect: { rect in
+                        DiaryCanvasView(session: canvasSession, compactViewport: toolOpen, stagesEntrance: supportsSpreadPreview && !aiMode && creationRequest == nil, roundsBoundPaper: supportsSpreadPreview && showsSpreadShell, onSelectionViewportRect: { rect in
                             DispatchQueue.main.async {
                                 if selectionViewportRect != rect { selectionViewportRect = rect }
                             }
@@ -634,12 +634,14 @@ private struct DiaryLiveSpreadShell: View {
     var body: some View {
         GeometryReader { geometry in
             let rim = geometry.size.width * 0.0225
+            let paperRadius = DiaryBookStageLayout.boundPaperCornerRadius(width: geometry.size.width / 2)
             Image("DiaryBookLeather").resizable()
                 .frame(width: geometry.size.width + rim * 2, height: geometry.size.height + rim * 2)
                 .mask {
                     Path { path in
                         path.addRect(CGRect(x: 0, y: 0, width: geometry.size.width + rim * 2, height: geometry.size.height + rim * 2))
-                        path.addRect(CGRect(x: rim, y: rim, width: geometry.size.width, height: geometry.size.height))
+                        path.addRoundedRect(in: CGRect(x: rim, y: rim, width: geometry.size.width, height: geometry.size.height),
+                                            cornerSize: CGSize(width: paperRadius, height: paperRadius), style: .continuous)
                     }.fill(style: FillStyle(eoFill: true))
                 }
                 .offset(x: -rim, y: -rim)

@@ -777,7 +777,7 @@ nonisolated struct DiaryAIWorkspaceArchive: Codable, Sendable {
             guard source.applyAIDraft(published, expected: baseline.restoredDocument, additionalImages: working.images) else { throw DiaryAIError.invalid("无法发布当前工作版本") }
             self.baseline = .init(source.document, pending: pending)
             try await persist()
-            try await source.save()
+            try await source.save(addDefaultCover: true)
             try await source.creationPublish?()
             let needsBackgroundRecovery = request.background != nil && (backgroundRecord?.layerID == nil || (request.background?.saveToAlbum == true && backgroundRecord?.albumState != "saved"))
             if pending.isEmpty && !needsTextCompletion && !needsBackgroundRecovery && visualRevision == nil && !awaitingConfirmation { try await removeArchive() }

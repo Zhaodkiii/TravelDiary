@@ -7,6 +7,8 @@ struct DiaryBookScreen: View {
     @State private var book: DiaryBook
     @State private var store: DiaryDocumentStore
     @State private var makingCover = false
+    @State private var choosingCoverStyle = false
+    @State private var openCoverEditorAfterPicker = false
     @State private var editor: DiaryEditorSession?
     @State private var photo: PhotosPickerItem?
     @State private var pickingPhoto = false
@@ -42,8 +44,8 @@ struct DiaryBookScreen: View {
         GeometryReader { viewport in
         ScrollView {
             if book.effectiveCover == nil {
-                Button { makingCover = true } label: {
-                    Label(book.coverDraft == nil ? "添加封面" : "继续制作封面", systemImage: "plus.rectangle.portrait")
+                Button { choosingCoverStyle = true } label: {
+                    Label("添加封面", systemImage: "plus.rectangle.portrait")
                         .frame(maxWidth: .infinity).frame(height: 120)
                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 16))
                 }.padding()
@@ -152,6 +154,7 @@ struct DiaryBookScreen: View {
                         }
                     }
                 }
+                Button(book.effectiveCover == nil ? "选择封面样式" : "更换封面", systemImage: "book.closed") { choosingCoverStyle = true }
                 Button(book.coverDraft == nil ? "制作新封面" : "继续制作封面") { makingCover = true }
                 if book.effectiveCover != nil {
                     Button("移除封面", role: .destructive) { perform { try await store.setCover(nil) } }
@@ -199,6 +202,17 @@ struct DiaryBookScreen: View {
             }
         }
         .sheet(isPresented: $showingExport) { DiaryBookExportSheet(book: book, store: store) }
+        .sheet(isPresented: $choosingCoverStyle, onDismiss: {
+            Task {
+                await refresh()
+                if openCoverEditorAfterPicker {
+                    openCoverEditorAfterPicker = false
+                    makingCover = true
+                }
+            }
+        }) {
+            DiaryCoverStylePicker(book: book, store: store) { openCoverEditorAfterPicker = true }
+        }
         .sheet(isPresented: $showingTrash) { trashPanel }
         .alert("手帐", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("确定") { message = nil }
@@ -327,7 +341,7 @@ struct DiaryBookScreen: View {
                     .disabled(!page.canBeCover || page.id == book.shellPageID || page.presetSpreadID != nil)
                 if !page.canBeCover { Text("封面需使用竖版单页") }
             } else {
-                Button("制作新封面") { makingCover = true }
+                Button("更换封面") { choosingCoverStyle = true }
                 Button("移除封面", role: .destructive) { perform { try await store.setCover(nil) } }
             }
             Button("前移一页") { perform { try await store.movePage(page.id, forward: false) } }.disabled(index == 0 || page.id == book.coverPageID || book.pages[index - 1].id == book.coverPageID)
@@ -387,7 +401,7 @@ struct DiaryBookScreen: View {
                 document.objects[document.rootContentID]?.layers.insert(
                     DiaryLayer.photoBackground(asset: asset, pageSize: book.defaultPageSize), at: 0)
             }
-            try await store.save(document)
+            try await store.save(document, addDefaultCover: data != nil)
             await refresh()
             editor = DiaryEditorSession(document: document, images: images, store: store)
         } catch { message = error.localizedDescription }

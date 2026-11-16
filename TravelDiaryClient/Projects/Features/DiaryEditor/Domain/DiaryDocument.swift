@@ -299,7 +299,7 @@ nonisolated enum DiaryBlendMode: String, Codable, Sendable {
 }
 
 extension DiaryDocument {
-    func layer(_ id: UUID?) -> DiaryLayer? {
+    nonisolated func layer(_ id: UUID?) -> DiaryLayer? {
         guard let id else { return nil }
         return objects.values.lazy.compactMap { $0.layers.first { $0.id == id } }.first
     }

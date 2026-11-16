@@ -105,18 +105,19 @@ import SwiftUI
             try DiaryDocumentStore.validate(loaded.document)
         }
     }
-    @Test func blankBookHasEditableFirstPageAndSelectedPaper() async throws {
+    @Test func blankBookAddsDefaultCoverAndKeepsSelectedBodyPaper() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = DiaryDocumentStore(ownerID: "blank", baseDirectory: folder)
         var value = DiaryAlbumDraft(); value.pages = [DiaryAlbumPage(role: .blank, theme: .film, paletteID: "1")]
         let book = try await store.createAlbum(value, photoDirectory: folder)
-        let page = try #require(book.pages.first)
+        let page = try #require(book.bodyPages.first)
         let reader = DiaryDocumentStore(ownerID: "blank", baseDirectory: folder, bookID: book.id)
         let loaded = try await reader.load(page.id)
         #expect(loaded.document.root.background == DiaryAlbumTheme.film.palette("1").paper)
         #expect(loaded.document.root.layers.isEmpty)
-        #expect(book.coverPageID == page.id)
+        #expect(book.effectiveCover?.defaultCover?.style == .linen)
+        #expect(book.bodyPageCount == 1)
     }
     @Test func renderThemeContactSheet() throws {
         let themes = DiaryAlbumTheme.allCases

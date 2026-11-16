@@ -400,13 +400,13 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
             do { try await self.save() } catch { self.errorMessage = error.localizedDescription }
         }
     }
-    func save() async throws {
+    func save(addDefaultCover: Bool = false) async throws {
         guard !closing, !childOpen, !aiTransientSession else { return }
         let state = snapshot
         let savingRevision = revision
         saveStatus = "保存中…"
         do {
-            if isRoot { try await store.save(state.document) }
+            if isRoot { try await store.save(state.document, addDefaultCover: addDefaultCover) }
             else { try await store.saveDraft(state.document, contentID: contentID, baseRevision: baseRevision) }
             if savingRevision == revision { saveStatus = "已保存" }
         } catch {
@@ -436,7 +436,13 @@ final class DiaryEditorSession: ObservableObject, Identifiable {
         defer { busy = false }
         finishInteraction()
         saveTask?.cancel()
-        do { try await save(); try await creationPublish?(); try await beforeClosing?(); closing = true; return true }
+        do {
+            try await save(addDefaultCover: true)
+            try await creationPublish?()
+            try await beforeClosing?()
+            closing = true
+            return true
+        }
         catch { errorMessage = error.localizedDescription; return false }
     }
 

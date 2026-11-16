@@ -1,0 +1,18 @@
+{
+  "mode": "built-in image_gen",
+  "purpose": "视觉提案，尚非足尺寸印刷母版",
+  "prompts": [
+    {
+      "name": "linen",
+      "prompt": "Use case: stylized-concept. Create a single flat full-bleed portrait journal cover background, requested final format 2185x3130 pixels, aspect ratio 18.5:26.5. Style: warm ivory linen and handmade paper, subtle woven fibers, restrained embossed thin rectangular frame with generous margins, a tiny pressed olive twig at bottom, refined quiet archival journal. Universal for travel and everyday life. Upper and central area (x 15-85%, y 18-60%) intentionally calm and empty for separately rendered editable title. No text, no letters, no logos, no dates, no people, no photo slots. Not a book mockup: no perspective, spine, leather shell, shadows outside sheet, or desk. Fine tasteful print-ready detail with safe margins; illustration can extend through edges. Return just one cover artwork."
+    },
+    {
+      "name": "collage",
+      "prompt": "Use case: stylized-concept. Create a single flat full-bleed portrait journal cover background, requested final format 2185x3130 pixels, aspect ratio 18.5:26.5. Style: cream paper nostalgic scrapbook collage, torn neutral papers and translucent washi tape only around lower fifth and outer corners, tiny botanical drawings and a small blank postage stamp, muted terracotta olive and oatmeal, sophisticated analog travel memories. Universal for travel and everyday life. Upper and central area (x 15-85%, y 18-60%) intentionally calm and empty for separately rendered editable title. No text, no letters, no logos, no dates, no people, no photo slots. Not a book mockup: no perspective, spine, leather shell, shadows outside sheet, or desk. Fine tasteful print-ready detail with safe margins; illustration can extend through edges. Return just one cover artwork."
+    },
+    {
+      "name": "watercolor",
+      "prompt": "Use case: stylized-concept. Create a single flat full-bleed portrait journal cover background, requested final format 2185x3130 pixels, aspect ratio 18.5:26.5. Style: airy watercolor landscape occupying only bottom third, abstract soft sage hills with blue-gray distant mountains and pale apricot sun, ivory paper grain, poetic serene contemporary illustrated journal. Universal for travel and everyday life. Upper and central area (x 15-85%, y 18-60%) intentionally calm and empty for separately rendered editable title. No text, no letters, no logos, no dates, no people, no photo slots. Not a book mockup: no perspective, spine, leather shell, shadows outside sheet, or desk. Fine tasteful print-ready detail with safe margins; illustration can extend through edges. Return just one cover artwork."
+    }
+  ]
+}

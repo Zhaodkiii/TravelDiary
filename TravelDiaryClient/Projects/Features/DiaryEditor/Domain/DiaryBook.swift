@@ -13,6 +13,7 @@ nonisolated struct DiaryBook: Codable, Identifiable, Equatable, Sendable {
     var defaultPageSize = DiaryPagePreset.a5.size
     static let coverSize = CGSize(width: 2185, height: 3130)
     var coverPageID: UUID?
+    var automaticCoverDisabled: Bool? = nil
     var coverDraft: DiaryPageEntry? = nil
     /// 外壳独立于列表封面；旧帐本不配置外壳。
     var shellPageID: UUID? = nil
@@ -81,6 +82,7 @@ nonisolated struct DiaryPageEntry: Codable, Identifiable, Equatable, Sendable {
     var presetSpreadSide: String? = nil
     /// Optional for backward compatibility. Older documents infer their layout from size.
     var layout: DiaryCanvasLayout? = nil
+    var defaultCover: DiaryDefaultCoverDetails? = nil
     var canBeCover: Bool { canvasLayout == .single && size.width.isFinite && size.height.isFinite && size.width > 0 && size.width < size.height }
     var canvasLayout: DiaryCanvasLayout { layout ?? DiaryCanvasLayout.infer(from: size) }
 }
@@ -130,4 +132,30 @@ nonisolated struct DiaryPresetSource: Codable, Equatable, Sendable {
     let bookID: String
     let pageID: String
     let version: Int
+}
+
+nonisolated enum DiaryDefaultCoverStyle: String, CaseIterable, Identifiable, Codable, Sendable {
+    case linen = "01-linen"
+    case collage = "02-collage"
+    case watercolor = "03-watercolor"
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .linen: "素雅织纹"
+        case .collage: "复古拼贴"
+        case .watercolor: "水彩远山"
+        }
+    }
+
+    func resource(preview: Bool = false) -> URL? {
+        Bundle.main.url(forResource: rawValue + (preview ? "-preview" : ""), withExtension: "jpg",
+                        subdirectory: "DiaryDefaultCovers.bundle")
+    }
+}
+
+nonisolated struct DiaryDefaultCoverDetails: Codable, Equatable, Sendable {
+    var style: DiaryDefaultCoverStyle
+    let backgroundLayerID: UUID
+    var boundTitleLayerID: UUID?
 }

@@ -1,5 +1,7 @@
 import SwiftUI
 import Photos
+import ImageIO
+import UniformTypeIdentifiers
 
 @MainActor
 enum DiaryBookImageExporter {
@@ -34,14 +36,29 @@ enum DiaryBookImageExporter {
             await DiaryFontCatalog.shared.prewarm(fonts, documentID: loaded.document.id)
             try Task.checkCancellation()
             fallback = fallback || fonts.contains { !DiaryFontCatalog.shared.available($0) }
-            return renderPage(loaded.document, images: loaded.images, longestEdge: 3000)
+            let coverSize = page.id == book.coverPageID && page.size == DiaryBook.coverSize
+            return renderPage(loaded.document, images: loaded.images,
+                              longestEdge: coverSize ? DiaryBook.coverSize.height : 3000)
         }
 
-        func write(_ image: UIImage) throws {
+        func write(_ image: UIImage, atCoverResolution: Bool = false) throws {
             try Task.checkCancellation()
             let url = directory.appendingPathComponent(String(format: "手帐-%03d.jpg", urls.count + 1))
-            guard let data = image.jpegData(compressionQuality: 0.95) else { throw DiaryEditorError.exportFailed }
-            try data.write(to: url, options: .atomic); urls.append(url)
+            if atCoverResolution {
+                guard let raster = image.cgImage,
+                      let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)
+                else { throw DiaryEditorError.exportFailed }
+                CGImageDestinationAddImage(destination, raster, [
+                    kCGImageDestinationLossyCompressionQuality: 0.95,
+                    kCGImagePropertyDPIWidth: 300,
+                    kCGImagePropertyDPIHeight: 300
+                ] as CFDictionary)
+                guard CGImageDestinationFinalize(destination) else { throw DiaryEditorError.exportFailed }
+            } else {
+                guard let data = image.jpegData(compressionQuality: 0.95) else { throw DiaryEditorError.exportFailed }
+                try data.write(to: url, options: .atomic)
+            }
+            urls.append(url)
         }
         switch mode {
         case .pages(let selected):
@@ -49,7 +66,8 @@ enum DiaryBookImageExporter {
             guard !pages.isEmpty else { throw DiaryBookPDFExporter.ExportError.emptyBook }
             progress(0, pages.count)
             for (index, page) in pages.enumerated() {
-                try await write(render(page)); progress(index + 1, pages.count); await Task.yield()
+                try await write(render(page), atCoverResolution: page.id == book.coverPageID && page.size == DiaryBook.coverSize)
+                progress(index + 1, pages.count); await Task.yield()
             }
         case .spreads(let count):
             let spreads = spreadPages(book)

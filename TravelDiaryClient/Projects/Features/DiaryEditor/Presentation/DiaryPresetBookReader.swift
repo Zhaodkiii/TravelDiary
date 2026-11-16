@@ -280,7 +280,8 @@ private struct DiaryPresetPaper: View {
                 }.allowsHitTesting(false)
             }
             .frame(width: geometry.size.width * (1 - DiaryBookSpine.halfGapFraction), height: geometry.size.height)
-            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: DiaryBookStageLayout.boundPaperCornerRadius(
+                width: geometry.size.width * (1 - DiaryBookSpine.halfGapFraction)), style: .continuous))
             .shadow(color: .black.opacity(0.35), radius: 1.5, x: left ? 1.5 : -1.5)
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: left ? .leading : .trailing)
         }

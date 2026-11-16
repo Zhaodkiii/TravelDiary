@@ -121,9 +121,10 @@ struct DiaryPresetImportFlowTests {
         let operation = UUID()
         let book = try await library.importPreset(package, pageIDs: ["page-3", "page-1"], title: "所选两页",
             operationID: operation, replacementPhotos: [first, second], hiddenCategories: [.background])
-        #expect(book.pages.map { $0.presetSource?.pageID } == ["page-3", "page-1"])
+        #expect(book.pages.compactMap { $0.presetSource?.pageID } == ["page-1", "page-3"])
         let store = DiaryDocumentStore(ownerID: "flow-test", baseDirectory: base, bookID: book.id)
-        for (index, entry) in book.pages.enumerated() {
+        for (index, sourceID) in ["page-3", "page-1"].enumerated() {
+            let entry = try #require(book.pages.first { $0.presetSource?.pageID == sourceID })
             let loaded = try await store.load(entry.id)
             let photo = try #require(loaded.document.replaceablePhotos().first)
             let asset = try #require(photo.assetID.flatMap { loaded.document.assets[$0] })
@@ -169,7 +170,7 @@ struct DiaryPresetImportFlowTests {
         let book = try await DiaryDocumentStore(ownerID: "flow-test", baseDirectory: base).importPreset(package,
             pageIDs: ["page-2"], title: "仅保留品牌", operationID: UUID(), hiddenCategories: switches)
         let local = DiaryDocumentStore(ownerID: "flow-test", baseDirectory: base, bookID: book.id)
-        let loaded = try await local.load(book.pages[0].id)
+        let loaded = try await local.load(try #require(book.bodyPages.first).id)
         let remaining = loaded.document.objects.values.flatMap(\.layers)
         #expect(remaining.count == 1 && remaining.first?.semanticKind == .branding)
         #expect(loaded.document.replaceablePhotos().isEmpty)
@@ -178,7 +179,7 @@ struct DiaryPresetImportFlowTests {
         #expect(source.replaceablePhotos().count == 1)
         #expect(source.root.background != nil)
         try FileManager.default.removeItem(at: package.root)
-        #expect(try await local.load(book.pages[0].id).document == loaded.document)
+        #expect(try await local.load(try #require(book.bodyPages.first).id).document == loaded.document)
     }
 
     @Test func repeatedPhotoImportsReuseExistingAssetAndRetryKeepsOriginalPagesReadable() async throws {
@@ -190,7 +191,7 @@ struct DiaryPresetImportFlowTests {
         let store = DiaryDocumentStore(ownerID: "reuse-photo", baseDirectory: base, bookID: original.id)
         let photo = try imageFile(in: base, name: "same-photo", size: CGSize(width: 120, height: 90), color: .green)
         let first = try await store.importPreset(package, pageIDs: ["page-1"], title: "", operationID: UUID(), replacementPhotos: [photo])
-        let firstPage = try #require(first.pages.first)
+        let firstPage = try #require(first.bodyPages.first)
         let firstLoaded = try await store.load(firstPage.id)
         let assetID = try #require(firstLoaded.document.replaceablePhotos().first?.assetID)
         let operation = UUID()
@@ -201,16 +202,16 @@ struct DiaryPresetImportFlowTests {
             "stage": "publishing", "pageIDs": [], "assetIDs": [assetID.uuidString]])
         try data.write(to: journal)
         let second = try await store.importPreset(package, pageIDs: ["page-2"], title: "", operationID: operation, replacementPhotos: [photo])
-        #expect(second.pages.count == 2)
+        #expect(second.bodyPages.count == 2)
         let reopened = DiaryDocumentStore(ownerID: "reuse-photo", baseDirectory: base, bookID: original.id)
-        for page in second.pages {
+        for page in second.bodyPages {
             let loaded = try await reopened.load(page.id)
             let id = try #require(loaded.document.replaceablePhotos().first?.assetID)
             #expect(id == assetID)
             #expect(loaded.images[id] != nil)
         }
         let retry = try await store.importPreset(package, pageIDs: ["page-2"], title: "", operationID: operation, replacementPhotos: [photo])
-        #expect(retry.pages.count == 2)
+        #expect(retry.bodyPages.count == 2)
         #expect(!FileManager.default.fileExists(atPath: journal.path))
         // 新日志曾创建的资源，之后也可能被另一导入引用；重试不能删除已发布引用。
         let nextOperation = UUID()
@@ -219,7 +220,7 @@ struct DiaryPresetImportFlowTests {
             "stage": "publishing", "pageIDs": [], "assetIDs": [assetID.uuidString], "ownedAssetIDs": [assetID.uuidString]])
         try owned.write(to: nextJournal)
         let third = try await store.importPreset(package, pageIDs: ["page-1"], title: "", operationID: nextOperation, replacementPhotos: [photo])
-        #expect(third.pages.count == 3)
+        #expect(third.bodyPages.count == 3)
         #expect(try await reopened.load(firstPage.id).images[assetID] != nil)
     }
 
@@ -260,7 +261,8 @@ struct DiaryPresetImportFlowTests {
         let local = DiaryDocumentStore(ownerID: "new-photos", baseDirectory: base, bookID: book.id)
         var counts: [Int] = []
         var sizes: [CGSize] = []
-        for page in book.pages {
+        for sourceID in ["page-3", "page-1"] {
+            let page = try #require(book.pages.first { $0.presetSource?.pageID == sourceID })
             let loaded = try await local.load(page.id)
             try DiaryDocumentStore.validate(loaded.document)
             let photos = loaded.document.replaceablePhotos()
