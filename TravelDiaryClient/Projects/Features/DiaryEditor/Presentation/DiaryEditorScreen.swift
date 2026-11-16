@@ -56,8 +56,7 @@ struct DiaryEditorScreen: View {
     private var canvasSession: DiaryEditorSession { aiMode && !aiCompare ? aiDisplaySession ?? session : session }
     private var toolOpen: Bool { activeTool != nil || showStickers || aiMode }
 
-    var body: some View {
-        NavigationStack {
+    private var editorWithPrimaryPresentations: some View {
             editorContent
             .disabled(closingAIEditor || creatingNewPage || session.busy || (!aiMode && importingCameraPhotos) || session.aiWorkspace.saving)
             .navigationTitle("")
@@ -91,6 +90,11 @@ struct DiaryEditorScreen: View {
             .fullScreenCover(item: $childEditor) { child in
                 AnyView(DiaryEditorScreen(session: child))
             }
+    }
+
+    var body: some View {
+        NavigationStack {
+            editorWithPrimaryPresentations
             .photosPicker(isPresented: $showAIPhotos, selection: $aiPhotos, maxSelectionCount: 30, selectionBehavior: .ordered, matching: .images)
             .onChange(of: aiPhotos) { _, items in
                 guard !items.isEmpty else { return }
