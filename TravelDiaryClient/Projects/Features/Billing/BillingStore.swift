@@ -278,7 +278,7 @@ extension BillingStore {
         try await ready(owner: expected)
         let offerings = try await Purchases.shared.offerings()
         try validate(expected, stamp: stamp)
-        guard let offering = offerings.all["membership"], offering.hasPaywall else {
+        guard let offering = offerings.all["membership"], !offering.availablePackages.isEmpty else {
             throw BillingFailure("会员订阅页面暂不可用，请稍后重试")
         }
         return offering

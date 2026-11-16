@@ -127,21 +127,21 @@ struct DiaryOnboardingView: View {
                 try? await Task.sleep(for: .seconds(2))
                 navigate(to: 1)
                 try? await Task.sleep(for: .seconds(3))
-                print("ONBOARDING_CHECK early page=\(page) turning=\(isTurning)")
+                recordCheck("ONBOARDING_CHECK early page=\(page) turning=\(isTurning)")
                 navigate(to: 2)
                 try? await Task.sleep(for: .seconds(3))
-                print("ONBOARDING_CHECK next page=\(page) turning=\(isTurning)")
+                recordCheck("ONBOARDING_CHECK next page=\(page) turning=\(isTurning)")
                 navigate(to: 1)
                 try? await Task.sleep(for: .seconds(3))
-                print("ONBOARDING_CHECK back page=\(page) turning=\(isTurning)")
+                recordCheck("ONBOARDING_CHECK back page=\(page) turning=\(isTurning)")
                 navigate(to: 2)
                 try? await Task.sleep(for: .seconds(2))
                 navigate(to: 3)
                 try? await Task.sleep(for: .seconds(2))
-                print("ONBOARDING_CHECK styles page=\(page) turning=\(isTurning)")
+                recordCheck("ONBOARDING_CHECK styles page=\(page) turning=\(isTurning)")
                 navigate(to: 2)
                 try? await Task.sleep(for: .seconds(2))
-                print("ONBOARDING_CHECK return page=\(page) turning=\(isTurning)")
+                recordCheck("ONBOARDING_CHECK return page=\(page) turning=\(isTurning)")
             }
             #endif
         }
@@ -202,6 +202,11 @@ struct DiaryOnboardingView: View {
         .accessibilityIdentifier("onboarding.styles")
     }
 
+    private func recordCheck(_ message: String) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("onboarding-verification.txt")
+        let old = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        try? (old + message + "\n").write(to: url, atomically: true, encoding: .utf8)
+    }
     private func navigate(to target: Int) {
         guard !isTurning, (0...3).contains(target) else { return }
         if target == 3 || page == 3 {

@@ -11,6 +11,19 @@ struct TravelDiaryApp: App {
 
     var body: some Scene {
         WindowGroup {
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--preview-pro-subscription") {
+                ProSubscriptionPreview()
+            } else {
+                applicationContent
+            }
+            #else
+            applicationContent
+            #endif
+        }
+    }
+
+    private var applicationContent: some View {
             ContentView(dependencies: container.contentDependencies)
                 .environment(\.managedObjectContext, container.coreDataStack.viewContext)
                 .onOpenURL { url in
@@ -33,6 +46,5 @@ struct TravelDiaryApp: App {
                 .sheet(item: $paymentProbe) { PrintProbeScreen(link: $0) }
                 #endif
                 .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { WeChatPrintPayment.shared.handle($0) }
-        }
     }
 }

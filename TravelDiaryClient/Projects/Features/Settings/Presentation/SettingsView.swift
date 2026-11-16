@@ -47,8 +47,8 @@ struct SettingsView: View {
             }
             VStack(alignment: .leading, spacing: 10) {
                 sectionTitle("服务")
+                NavigationLink { MembershipPurchaseScreen(owner: String(session.accountID)).id(session.accountID) } label: { SupportNavigationRow(title: "寻寻仔 Pro", symbol: "book.pages", detail: "制作权益、年费开通礼与订阅管理") }.buttonStyle(.plain).feedbackPaperCard()
                 #if DEBUG
-                NavigationLink { MembershipPurchaseScreen(owner: String(session.accountID)).id(session.accountID) } label: { SupportNavigationRow(title: "寻寻仔会员", symbol: "crown", detail: "会员状态、订阅与恢复购买") }.buttonStyle(.plain).feedbackPaperCard()
                 NavigationLink { DiamondWalletScreen(owner: String(session.accountID)).id(session.accountID) } label: { SupportNavigationRow(title: "我的钻石", symbol: "diamond", detail: "充值、明细与已解锁内容") }.buttonStyle(.plain).feedbackPaperCard()
                 #endif
                 VStack(spacing: 0) {
