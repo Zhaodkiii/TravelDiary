@@ -97,17 +97,25 @@ struct StorageManagementScreen: View {
                 }
             } footer: { Text("作品、离线下载、未保存媒体、印制任务和其他账号私有资料不会参加安全清理。") }
             Section("内容管理") {
+                NavigationLink { FontStorageScreen() } label: { Label("字体下载管理", systemImage: "textformat") }
                 NavigationLink { CreationDraftListView(owner: model.owner) } label: { row(.creationDrafts) }
                 NavigationLink { StorageBooksScreen(owner: model.owner, service: model.service) } label: {
                     row(.diaries)
                 }
                 NavigationLink { StorageDownloadsScreen(owner: model.owner) } label: { row(.downloads) }
-                ForEach([StorageCategory.aiLogs, .previews, .exports, .camera, .printOrders, .business, .otherAccounts, .unknown]) { category in
+                ForEach([StorageCategory.previews, .exports, .camera, .printOrders]) { category in
                     NavigationLink { StorageCategoryScreen(model: model, category: category) } label: { row(category) }
                 }
                 NavigationLink {
                     StorageTrashScreen(owner: model.owner, service: model.service)
                 } label: { Label("最近删除", systemImage: "trash") }
+            }
+            Section("其他本机数据") {
+                DisclosureGroup("查看详细分类") {
+                    ForEach([StorageCategory.aiLogs, .business, .otherAccounts, .unknown]) { category in
+                        NavigationLink { StorageCategoryScreen(model: model, category: category) } label: { row(category) }
+                    }
+                }
             }
             Section {
                 NavigationLink("缓存容量与自动清理") { StoragePolicyScreen(owner: model.owner, service: model.service) }

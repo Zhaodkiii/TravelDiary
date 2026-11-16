@@ -118,6 +118,48 @@ struct DiaryOnboardingTests {
         #expect(tabBar.selectedItem?.title == "随记")
     }
 
+    @Test func assemblyWaitsForBindingAndPreservesCompletedSpreads() async throws {
+        let assembly = DiaryOnboardingAssembly()
+        assembly.reduceMotion = true
+        await assembly.load()
+        #expect(assembly.papers.count == 6)
+        for _ in 0..<20 where assembly.phase == .blank { await Task.yield() }
+        #expect(assembly.phase == .floating)
+        #expect(!assembly.showsCopy)
+        #expect(assembly.completed.isEmpty)
+        for paper in assembly.papers {
+            #expect(!paper.pieces.isEmpty)
+            #expect(paper.pieces.contains { $0.floatingIndex != nil })
+            #expect(paper.background.pngData() != paper.complete.pngData())
+        }
+        // 喜洲左页本身没有文字；每个跨页至少一叶必须在落纸后显字。
+        for spread in 0..<3 {
+            #expect(assembly.papers[(spread * 2)...(spread * 2 + 1)].contains {
+                $0.assembled.pngData() != $0.complete.pngData()
+            })
+        }
+        assembly.bind()
+        assembly.bind()
+        #expect(assembly.phase == .binding)
+        #expect(!assembly.canNavigate)
+        assembly.beginTurn()
+        #expect(assembly.phase == .binding)
+        for _ in 0..<100 where assembly.phase != .complete { await Task.yield() }
+        #expect(assembly.phase == .complete)
+        #expect(assembly.completed == [0])
+        assembly.beginTurn()
+        #expect(!assembly.showsCopy)
+        assembly.settle(on: 1)
+        #expect(assembly.phase == .blank)
+        for _ in 0..<20 where assembly.phase == .blank { await Task.yield() }
+        #expect(assembly.phase == .floating)
+        assembly.beginTurn()
+        assembly.settle(on: 0)
+        #expect(assembly.phase == .complete)
+        #expect(assembly.showsCopy)
+        assembly.suspend()
+    }
+
     private func findTabBar(in view: UIView) -> UITabBar? {
         if let tabBar = view as? UITabBar { return tabBar }
         return view.subviews.lazy.compactMap { findTabBar(in: $0) }.first

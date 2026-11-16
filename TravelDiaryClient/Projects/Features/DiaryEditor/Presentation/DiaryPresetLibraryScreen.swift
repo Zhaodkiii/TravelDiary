@@ -1044,3 +1044,25 @@ struct DiaryTemplatePagePreview: View {
         }.tint(DiaryLibraryStyle.accent)
     }
 }
+
+
+/// Personal assets live alongside browsing, not in application preferences.
+struct PersonalMaterialLibrary: View {
+    let owner: String
+    var body: some View {
+        List {
+            Section("我的素材") {
+                NavigationLink { PresetDownloadCenter(ownerID: owner) } label: {
+                    Label("已下载模板与相册", systemImage: "arrow.down.circle")
+                }
+                NavigationLink { StickerGalleryScreen(mine: true) } label: {
+                    Label("我的贴纸", systemImage: "heart")
+                }
+                NavigationLink { FontGalleryScreen(mine: true) } label: {
+                    Label("我的字体", systemImage: "textformat")
+                }
+            }.listRowBackground(DiaryLibraryStyle.surface)
+        }.listStyle(.insetGrouped).scrollContentBackground(.hidden)
+            .background(DiaryLibraryStyle.background).tint(DiaryLibraryStyle.accent)
+    }
+}

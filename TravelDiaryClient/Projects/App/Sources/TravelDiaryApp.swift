@@ -12,8 +12,14 @@ struct TravelDiaryApp: App {
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--preview-pro-subscription") {
+            if ProcessInfo.processInfo.arguments.contains("--preview-login") {
+                LoginView(viewModel: container.contentDependencies.coordinator.makeLoginViewModel())
+            } else if ProcessInfo.processInfo.arguments.contains("--preview-personal-center") {
+                PersonalCenterPreview()
+            } else if ProcessInfo.processInfo.arguments.contains("--preview-pro-subscription") {
                 ProSubscriptionPreview()
+            } else if ProcessInfo.processInfo.arguments.contains("--preview-pro-membership") {
+                ProMembershipPreview()
             } else {
                 applicationContent
             }

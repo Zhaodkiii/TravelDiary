@@ -8,7 +8,7 @@ struct DiaryOnboardingView: View {
     @State private var page = Self.initialPage
     @State private var requestedSpread = Self.initialPage
     @State private var isTurning = false
-    @State private var hasLeftIntroduction = Self.initialPage != 0
+    @State private var assembly = DiaryOnboardingAssembly(initialSpread: Self.initialPage)
 
     private static var initialPage: Int {
         #if DEBUG
@@ -44,7 +44,7 @@ struct DiaryOnboardingView: View {
                         Image(systemName: "chevron.left").frame(width: 44, height: 44)
                     }
                     .opacity(page == 0 ? 0 : 1)
-                    .disabled(page == 0 || isPreparingHome || isTurning)
+                    .disabled(page == 0 || isPreparingHome || isTurning || (page < 3 && !assembly.canNavigate))
                     .accessibilityLabel("上一步")
                     Spacer()
                     Text("旅行手帐")
@@ -65,7 +65,7 @@ struct DiaryOnboardingView: View {
                 ScrollView {
                     VStack(spacing: 24) {
                         preview
-                            .frame(height: max(230, min(geometry.size.height * 0.49, 450)))
+                            .frame(height: max(230, min(geometry.size.height * 0.72, 720)))
                             .padding(.top, 12)
                         VStack(spacing: 12) {
                             Text(titles[page])
@@ -76,8 +76,11 @@ struct DiaryOnboardingView: View {
                                 .foregroundStyle(ink.opacity(0.6))
                                 .lineSpacing(5)
                         }
-                        .opacity(isTurning ? 0 : 1)
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isTurning)
+                        .opacity(isTurning || !assembly.showsCopy ? 0 : 1)
+                        .accessibilityHidden(isTurning || !assembly.showsCopy)
+                        .frame(height: assembly.showsCopy ? nil : 0)
+                        .clipped()
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: assembly.showsCopy)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
                     }.padding(.bottom, 20)
@@ -94,14 +97,14 @@ struct DiaryOnboardingView: View {
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("第 \(page + 1) 页，共四页")
                     Button {
-                        if page == 3 { onFinish() }
+                        if assembly.phase == .floating { assembly.bind() }
                         else {
                             navigate(to: page + 1)
                         }
                     } label: {
                         HStack(spacing: 10) {
                             if isPreparingHome { ProgressView().tint(buttonInk) }
-                            Text(isPreparingHome ? "正在准备首页…" : "下一步")
+                            Text(isPreparingHome ? "正在准备首页…" : assembly.buttonTitle)
                         }
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(buttonInk)
@@ -110,7 +113,7 @@ struct DiaryOnboardingView: View {
                     .buttonStyle(.borderedProminent)
                     .buttonBorderShape(.capsule)
                     .tint(buttonFill)
-                    .disabled(isPreparingHome || isTurning)
+                    .disabled(isPreparingHome || isTurning || !assembly.canAct)
                     .accessibilityIdentifier("onboarding.next")
                 }
                 .padding(.horizontal, 30).padding(.top, 12).padding(.bottom, 20)
@@ -121,27 +124,27 @@ struct DiaryOnboardingView: View {
         .foregroundStyle(ink)
         .background(Color(red: 0.98, green: 0.97, blue: 0.94).ignoresSafeArea())
         .preferredColorScheme(.light)
+        .onDisappear { assembly.suspend() }
         .task {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-onboarding-verify") {
-                try? await Task.sleep(for: .seconds(2))
-                navigate(to: 1)
-                try? await Task.sleep(for: .seconds(3))
-                recordCheck("ONBOARDING_CHECK early page=\(page) turning=\(isTurning)")
+                for target in 0..<3 {
+                    while !assembly.canAct { try? await Task.sleep(for: .milliseconds(100)); if Task.isCancelled { return } }
+                    recordCheck("ONBOARDING_CHECK floating page=\(page) phase=\(assembly.phase)")
+                    try? await Task.sleep(for: .seconds(2))
+                    assembly.bind()
+                    // Repeated taps must not start another assembly or advance the page.
+                    assembly.bind()
+                    while !assembly.showsCopy { try? await Task.sleep(for: .milliseconds(100)); if Task.isCancelled { return } }
+                    recordCheck("ONBOARDING_CHECK bound page=\(page) phase=\(assembly.phase)")
+                    try? await Task.sleep(for: .seconds(2))
+                    navigate(to: target + 1)
+                }
+                recordCheck("ONBOARDING_CHECK styles page=\(page)")
+                try? await Task.sleep(for: .seconds(1))
                 navigate(to: 2)
-                try? await Task.sleep(for: .seconds(3))
-                recordCheck("ONBOARDING_CHECK next page=\(page) turning=\(isTurning)")
-                navigate(to: 1)
-                try? await Task.sleep(for: .seconds(3))
-                recordCheck("ONBOARDING_CHECK back page=\(page) turning=\(isTurning)")
-                navigate(to: 2)
-                try? await Task.sleep(for: .seconds(2))
-                navigate(to: 3)
-                try? await Task.sleep(for: .seconds(2))
-                recordCheck("ONBOARDING_CHECK styles page=\(page) turning=\(isTurning)")
-                navigate(to: 2)
-                try? await Task.sleep(for: .seconds(2))
-                recordCheck("ONBOARDING_CHECK return page=\(page) turning=\(isTurning)")
+                try? await Task.sleep(for: .seconds(1))
+                recordCheck("ONBOARDING_CHECK return page=\(page) phase=\(assembly.phase)")
             }
             #endif
         }
@@ -208,25 +211,30 @@ struct DiaryOnboardingView: View {
         try? (old + message + "\n").write(to: url, atomically: true, encoding: .utf8)
     }
     private func navigate(to target: Int) {
-        guard !isTurning, (0...3).contains(target) else { return }
+        guard !isTurning, (0...3).contains(target), target != page,
+              page == 3 || assembly.canNavigate else { return }
         if target == 3 || page == 3 {
-            hasLeftIntroduction = true
             requestedSpread = min(target, 2)
+            if target < 3 { assembly.settle(on: target) }
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { page = target }
+        } else if assembly.phase == .failed {
+            page = target
+            requestedSpread = target
         } else {
+            assembly.beginTurn()
             isTurning = true
             requestedSpread = target
         }
     }
 
     private var preview: some View {
-        DiaryOnboardingBook(requestedSpread: requestedSpread, playsIntroduction: !hasLeftIntroduction,
-            onTurning: { isTurning = $0 }, onSettled: { displayed in
+        DiaryOnboardingBook(requestedSpread: requestedSpread, assembly: assembly,
+            onSettled: { displayed in
                 guard (0...2).contains(displayed) else { return }
                 page = displayed
                 requestedSpread = displayed
-                if displayed > 0 { hasLeftIntroduction = true }
+                isTurning = false
             })
-            .padding(18)
+            .padding(.horizontal, 18)
     }
 }

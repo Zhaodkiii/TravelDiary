@@ -4,6 +4,27 @@ import Testing
 
 @MainActor
 struct ProSubscriptionTests {
+    @Test func membershipDatesFollowRenewalAndGracePeriod() {
+        func member(renewal: String, status: String = "active", sync: String = "fresh",
+                    period: String? = "2026-11-17T05:27:26Z") -> MembershipStatus {
+            MembershipStatus(active: true, expires_at: "2026-11-19T05:27:26Z", period_ends_at: period,
+                verified_at: nil, sync_state: sync, status: status, auto_renewal_status: renewal,
+                product_id: "cn.zhaodk.TravelDiary.member.monthly", wallet_domain: "sandbox",
+                sales_enabled: true, member_content_count: 0, ai_production_included: false)
+        }
+
+        let renewing = member(renewal: "will_renew").subscriptionDate
+        let stopped = member(renewal: "will_not_renew").subscriptionDate
+        let grace = member(renewal: "will_renew", status: "in_grace_period").subscriptionDate
+        #expect(renewing?.label == "预计续费时间")
+        #expect(stopped?.label == "本期权益可用至")
+        #expect(grace?.label == "当前权益可用至")
+        #expect(renewing?.date.addingTimeInterval(2 * 86400) == stopped?.date)
+        #expect(grace?.date == stopped?.date)
+        #expect(member(renewal: "will_renew", sync: "stale").subscriptionDate == nil)
+        #expect(member(renewal: "will_renew", period: nil).subscriptionDate?.label == "本期权益可用至")
+    }
+
     @Test func savingsUseActualAnnualChargeAndRoundDown() {
         #expect(ProSubscriptionPlan.savingPercent(annual: Decimal(string: "69.99")!, monthly: Decimal(string: "9.99")!, sameCurrency: true) == 41)
         #expect(ProSubscriptionPlan.savingPercent(annual: 198, monthly: 30, sameCurrency: true) == 45)

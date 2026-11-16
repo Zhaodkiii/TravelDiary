@@ -54,7 +54,7 @@
 "auth.login.legal.toggle_accessibility" = "Agree to the Terms of Service and Privacy Policy";
 "auth.login.legal.must_agree_hint" = "Please read and agree to the Terms of Service and Privacy Policy";
 "auth.login.initial_prompt.title" = "Before your story begins";
-"auth.login.initial_prompt.intro" = "Welcome to TravelDiary. Please read the Terms of Service and Privacy Policy to understand how account and personal information is handled.";
+"auth.login.initial_prompt.intro" = "Welcome to 寻寻仔. Please read the Terms of Service and Privacy Policy to understand how account and personal information is handled.";
 "auth.login.initial_prompt.terms_link" = "Terms of Service";
 "auth.login.initial_prompt.privacy_link" = "Privacy Notice";
 "auth.login.initial_prompt.link_separator" = " and ";

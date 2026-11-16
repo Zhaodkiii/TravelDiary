@@ -4,17 +4,18 @@ import SwiftUI
 struct LoginLegalAgreementNote: View {
     @Binding var hasAgreed: Bool
     let showsValidationHighlight: Bool
-    let onRequestAgreement: () -> Void
     let onOpenTerms: () -> Void
     let onOpenPrivacy: () -> Void
     var body: some View {
         HStack(alignment: .top, spacing: 4) {
             Button {
-                if hasAgreed { hasAgreed = false } else { onRequestAgreement() }
+                hasAgreed.toggle()
             } label: {
                 Image(systemName: hasAgreed ? "checkmark.square.fill" : "square")
                     .font(.title3).frame(width: 44, height: 44)
-            }.accessibilityLabel(L10n.text("auth.login.legal.toggle_accessibility"))
+            }.foregroundStyle(hasAgreed ? DiaryLibraryStyle.accent : DiaryLibraryStyle.secondary)
+                .accessibilityIdentifier("login.agreement.toggle")
+                .accessibilityLabel(L10n.text("auth.login.legal.toggle_accessibility"))
                 .accessibilityValue(L10n.text(hasAgreed ? "auth.login.agreed" : "auth.login.not_agreed"))
             VStack(alignment: .leading, spacing: 0) {
                 Text(L10n.text("auth.login.legal.checkbox_lead")).font(.footnote).foregroundStyle(DiaryLibraryStyle.secondary)

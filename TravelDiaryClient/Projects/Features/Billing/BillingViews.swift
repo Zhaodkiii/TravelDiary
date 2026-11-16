@@ -231,13 +231,16 @@ struct BillingContentAction: View {
         .sheet(isPresented: $purchase, onDismiss: { revision += 1 }) {
             if let offerID = access?.commerce?.offer_id { DiamondPurchaseSheet(owner: owner, offerID: offerID) { revision += 1 } }
         }
-        .sheet(isPresented: $membership, onDismiss: { revision += 1 }) { NavigationStack { MembershipPurchaseScreen(owner: owner) } }
+        .sheet(isPresented: $membership, onDismiss: { revision += 1 }) {
+            NavigationStack { MembershipPurchaseScreen(owner: owner, showsCloseButton: true) }
+        }
     }
 }
 
 struct MembershipPurchaseScreen: View {
     private struct Reservation: Decodable { let message: String }
     let owner: String
+    var showsCloseButton = false
     @ObservedObject private var store = BillingStore.shared
     @State private var packages: [RevenueCat.Package] = []
     @State private var selectedID: String?
@@ -258,44 +261,47 @@ struct MembershipPurchaseScreen: View {
     private var status: String? {
         if store.membershipPending { return "购买已记录，权益同步中。请同步状态，勿重复付款。" }
         if appStoreVerificationFailed { return "暂时无法验证 App Store，请重新验证后继续。" }
-        if loading { return "正在获取会员权益与 App Store 价格…" }
+        if loading { return "正在同步会员状态…" }
         if let error { return error }
-        if store.membership?.wallet_domain == "sandbox" { return "沙盒测试订阅" }
         if store.membership?.sales_enabled == false { return "会员购买暂未开放" }
+        if store.membership?.hasExpired == true { return "会员已到期，可选择套餐重新开通。" }
+        if store.membership?.wallet_domain == "sandbox" { return "沙盒测试订阅" }
         return nil
+    }
+    private var showsMembership: Bool {
+        guard let member = store.membership else { return false }
+        return member.active || member.sync_state != "fresh" || store.membershipPending
+    }
+    private var retryTitle: String {
+        appStoreVerificationFailed ? "重新验证 App Store" : "同步会员状态"
     }
 
     var body: some View {
         Group {
-            if let member = store.membership, member.active {
-                SupportCanvas {
-                    Label("寻寻仔 Pro", systemImage: "book.pages").font(.title.bold())
-                    Text(member.title).font(.headline)
-                    if let expiry = member.expiryText { Text("权益有效期至 \(expiry)") }
-                    if member.ai_production_included == true {
-                        Text("享有更多 AI 制作额度，5 小时与 7 天额度按周期恢复。")
-                    }
-                    if member.status == "in_grace_period" { Text("请检查 Apple 付款信息，宽限期内仍可使用会员内容。") }
-                    if let status { Text(status).foregroundStyle(.secondary) }
-                    Link("管理或取消 Apple 订阅", destination: URL(string: "https://apps.apple.com/account/subscriptions")!)
-                    Button("同步会员状态") { Task { await load() } }.disabled(busy)
-                    Button("恢复购买") { Task { await restore() } }.disabled(busy)
-                }
+            if let member = store.membership, showsMembership {
+                ProMembershipView(owner: owner, member: member, busy: busy,
+                    confirming: appStoreVerificationFailed || store.membershipPending || member.sync_state != "fresh",
+                    notice: appStoreVerificationFailed || store.membershipPending || loading || error != nil ? status : nil,
+                    retryTitle: retryTitle,
+                    refresh: { await load(reverifyAppStore: appStoreVerificationFailed) },
+                    restore: { await restore() })
             } else {
                 ProSubscriptionView(plans: ProSubscriptionPlan.make(packages: packages), selectedID: $selectedID,
                     aiIncluded: store.membership?.ai_production_included == true,
                     contentIncluded: (store.membership?.member_content_count ?? 0) > 0,
                     gift: gift, busy: busy, canPurchase: canPurchase, status: status,
-                    retryTitle: appStoreVerificationFailed ? "重新验证 App Store" : "同步会员状态",
+                    retryTitle: retryTitle,
                     purchase: { Task { await purchase() } }, restore: { Task { await restore() } },
                     retry: { Task { await load(reverifyAppStore: appStoreVerificationFailed) } })
             }
         }
-        .navigationTitle("寻寻仔 Pro").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(showsMembership ? "我的 Pro" : "寻寻仔 Pro").navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("关闭", systemImage: "xmark") { dismiss() }
-                    .labelStyle(.iconOnly).disabled(processing || store.busy)
+            if showsCloseButton {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭", systemImage: "xmark") { dismiss() }
+                        .labelStyle(.iconOnly).disabled(processing || store.busy)
+                }
             }
         }
         .interactiveDismissDisabled(processing || store.busy)
@@ -348,7 +354,7 @@ struct MembershipPurchaseScreen: View {
             appStoreVerificationFailed = false
             error = nil
             gift = nil
-            if store.membership?.active != true {
+            if !showsMembership {
                 packages = try await store.membershipPackages(owner: owner)
                 if !packages.contains(where: { $0.identifier == selectedID }) {
                     selectedID = packages.first(where: { $0.packageType == .annual })?.identifier ?? packages.first?.identifier

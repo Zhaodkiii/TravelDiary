@@ -3,6 +3,7 @@ import SwiftUI
 struct HelpCenterScreen: View {
     let owner: String
     @ObservedObject private var service = HelpFeedbackService.shared
+    @State private var showsMakingGuide = false
     @State private var categories: [HelpCategory] = []
     @State private var articles: [HelpArticle] = []
     @State private var config: HelpServiceConfig?
@@ -18,6 +19,10 @@ struct HelpCenterScreen: View {
         SupportCanvas {
             SupportHeading(title: "我们在这里，听你说", subtitle: "查找使用方法，或把遇到的问题告诉我们。")
             VStack(spacing: 0) {
+                Button { showsMakingGuide = true } label: {
+                    SupportNavigationRow(title: "制作入门", symbol: "book.pages", detail: "重看引导，了解如何制作旅行手帐")
+                }
+                Divider().overlay(DiaryLibraryStyle.line).padding(.leading, 69)
                 NavigationLink { FeedbackFormScreen(owner: owner) } label: {
                     SupportNavigationRow(title: "提交反馈", symbol: "square.and.pencil", detail: "问题、建议与印制咨询")
                 }
@@ -65,6 +70,9 @@ struct HelpCenterScreen: View {
             }
         }
         .navigationTitle("帮助与反馈")
+        .fullScreenCover(isPresented: $showsMakingGuide) {
+            DiaryOnboardingView { showsMakingGuide = false }
+        }
         .task(id:query+"|"+category) { if !query.isEmpty { try? await Task.sleep(for:.milliseconds(300)) }; guard !Task.isCancelled else { return };await load() }
         .task { config = try? await service.config(); await service.refreshUnread(owner:owner) }
         .refreshable { await load(forceRefresh: true); await service.refreshUnread(owner:owner) }

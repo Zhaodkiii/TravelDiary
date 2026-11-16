@@ -54,7 +54,7 @@
 "auth.login.legal.toggle_accessibility" = "同意服务条款与隐私政策";
 "auth.login.legal.must_agree_hint" = "请先阅读并同意服务条款与隐私政策";
 "auth.login.initial_prompt.title" = "开始记录前，请先了解";
-"auth.login.initial_prompt.intro" = "欢迎使用 TravelDiary。请阅读服务条款与隐私政策，了解账号及个人信息的处理方式。";
+"auth.login.initial_prompt.intro" = "欢迎使用寻寻仔。请阅读服务条款与隐私政策，了解账号及个人信息的处理方式。";
 "auth.login.initial_prompt.terms_link" = "服务条款";
 "auth.login.initial_prompt.privacy_link" = "隐私协议";
 "auth.login.initial_prompt.link_separator" = "、";
@@ -356,7 +356,7 @@
 
 "auth.login.apple_button" = "通过 Apple 登录";
 
-"auth.login.guest_note" = "将使用设备游客账号，之后可绑定登录方式";
+"auth.login.guest_note" = "无需注册，之后可绑定账号";
 
 "auth.login.agreed" = "已同意";
 

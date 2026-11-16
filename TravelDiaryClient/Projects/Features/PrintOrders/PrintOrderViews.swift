@@ -1128,7 +1128,7 @@ private struct PrintRevisionContext: Identifiable { var id: String { order.id };
 
 struct PrintCouponWallet: View {
     let owner: String
-    private struct Item: Decodable, Identifiable {
+    struct Item: Decodable, Identifiable {
         let id: String
         let name: String
         let product: String
@@ -1144,7 +1144,16 @@ struct PrintCouponWallet: View {
                 Text(error)
                 Button("重试") { Task { await load() } }
             } else if let items {
-                if items.isEmpty { Text("暂无印制优惠券") }
+                if items.isEmpty {
+                    ContentUnavailableView("暂无印制优惠券", systemImage: "ticket",
+                        description: Text("已领取的装订抵扣券会出现在这里。"))
+                }
+                if items.contains(where: { $0.state == "可用" }) {
+                    Section {
+                        Text("选择一张优惠券，再选择要装订的手帐。抵扣范围、金额与运费以结算页为准。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
                 ForEach(items) { item in
                     VStack(alignment: .leading, spacing: 6) {
                         LabeledContent(item.name, value: item.state)
@@ -1152,14 +1161,58 @@ struct PrintCouponWallet: View {
                         if let expiry = PrintText.date(item.expires_at) {
                             Text("有效期至 \(expiry.formatted())").font(.caption)
                         }
+                        if item.state == "可用" {
+                            NavigationLink("选择手帐使用") { CouponBookSelection(owner: owner, couponID: item.id) }
+                                .padding(.top, 4)
+                        }
                     }
                 }
             } else { ProgressView() }
-        }.navigationTitle("我的印制优惠券").task(id: owner) { await load() }.refreshable { await load() }
+        }.navigationTitle("我的优惠券").navigationBarTitleDisplayMode(.inline)
+            .tint(DiaryLibraryStyle.accent).task(id: owner) { await load() }.refreshable { await load() }
     }
     private func load() async {
         error = nil
         do { items = try await PrintOrderService.shared.request("coupons/mine/", owner: owner) }
+        catch { self.error = error.localizedDescription }
+    }
+}
+
+
+private struct CouponBookSelection: View {
+    let owner: String
+    let couponID: String
+    @State private var books: [DiaryBook]?
+    @State private var error: String?
+    @State private var selectedBook: DiaryBook?
+    var body: some View {
+        List {
+            if let error {
+                Text(error).foregroundStyle(.secondary)
+                Button("重新加载") { Task { await load() } }
+            } else if let books {
+                if books.isEmpty {
+                    ContentUnavailableView("还没有可装订的手帐", systemImage: "book.closed",
+                        description: Text("先在「手帐」中制作一本作品，再回来使用优惠券。"))
+                }
+                ForEach(books) { book in
+                    Button { selectedBook = book } label: {
+                        Label(book.title.isEmpty ? "未命名手帐" : book.title, systemImage: "book.closed")
+                    }
+                }
+            } else { ProgressView("正在读取手帐…") }
+        }.navigationTitle("选择要装订的手帐").navigationBarTitleDisplayMode(.inline)
+            .task(id: owner) { await load() }
+            .sheet(item: $selectedBook) { book in
+                PrintCheckoutScreen(book: book,
+                    store: DiaryDocumentStore(ownerID: owner, bookID: book.id),
+                    preferredCouponID: couponID)
+            }
+    }
+    private func load() async {
+        error = nil
+        do { books = try await DiaryDocumentStore(ownerID: owner).listBooks() }
+        catch is CancellationError { }
         catch { self.error = error.localizedDescription }
     }
 }

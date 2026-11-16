@@ -94,7 +94,7 @@ struct LoginPresentationTests {
             ("legal-light", CGSize(width: 375, height: 667), ColorScheme.light, DynamicTypeSize.large),
             ("legal-dark-large", CGSize(width: 375, height: 812), ColorScheme.dark, DynamicTypeSize.accessibility3)
         ] {
-            let content = LoginAgreementSheet(onDecline: {}, onAgree: {})
+            let content = LoginLegalAgreementNote(hasAgreed: .constant(false), showsValidationHighlight: false, onOpenTerms: {}, onOpenPrivacy: {})
                 .environment(\.colorScheme, scheme).environment(\.dynamicTypeSize, type)
             let renderer = ImageRenderer(content: content.frame(width: size.width, height: size.height))
             renderer.scale = 2

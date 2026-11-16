@@ -103,7 +103,7 @@ private struct SignedOutAuthCoordinatorView: View {
     var body: some View {
         Group {
             if showsLogin {
-                LoginView(viewModel: viewModel, presentsInitialLegalPromptOnAppear: false)
+                LoginView(viewModel: viewModel)
             } else {
                 AppLaunchScreenView()
             }
@@ -132,6 +132,7 @@ struct SupportMainCoordinatorView: View {
     @State private var showsCustomizationSettings = false
     @State private var materialToolbar = DiaryMaterialToolbarState()
     @State private var materialSearchQuery = ""
+    @State private var showsPersonalMaterials = false
     @ObservedObject private var helpFeedback = HelpFeedbackService.shared
     @ObservedObject private var customizations = CustomizationService.shared
     @Environment(\.scenePhase) private var scenePhase
@@ -250,20 +251,30 @@ struct SupportMainCoordinatorView: View {
             }
 
             Tab("素材", systemImage: "books.vertical", value: SupportRootTab.diaryPresets) {
-                DiaryPresetLibraryScreen(ownerID: String(session.accountID), toolbarState: materialToolbar)
-                    .id(session.accountID)
+                VStack(spacing: 0) {
+                    Picker("素材范围", selection: $showsPersonalMaterials) {
+                        Text("浏览").tag(false)
+                        Text("我的").tag(true)
+                    }.pickerStyle(.segmented).padding(.horizontal, 20).padding(.vertical, 8)
+                    if showsPersonalMaterials {
+                        PersonalMaterialLibrary(owner: String(session.accountID))
+                    } else {
+                        DiaryPresetLibraryScreen(ownerID: String(session.accountID), toolbarState: materialToolbar)
+                            .id(session.accountID)
+                    }
+                }.background(DiaryLibraryStyle.background)
             }
 //            Tab("定制", systemImage: "sparkles", value: SupportRootTab.customization) {
 //                CustomizationHomeView(owner: String(session.accountID))
 //                    .id(session.accountID)
 //            }.badge(customizations.unread)
-            Tab(L10n.tr("tab.settings", fallback: "设置"), systemImage: "gearshape", value: SupportRootTab.settings) {
-                SettingsView(accountManagementViewModel: accountViewModel,
-                    session: session,
+            Tab("我的", systemImage: "person.crop.circle", value: SupportRootTab.settings) {
+                SettingsView(session: session,
                     storageService: dependencies.storageService, onAccountEntryTap: handleAccountEntryTap)
                     .id(session.accountID)
             }
         }
+        .tint(DiaryLibraryStyle.accent)
     }
 
     private func reportHomeReady() {
@@ -293,7 +304,7 @@ struct SupportMainCoordinatorView: View {
                 .navigationDestination(for: AccountRoute.self) { _ in
                     AccountManagementView(viewModel: accountViewModel, session: session)
                 }
-        }
+        }.tint(DiaryLibraryStyle.accent)
     }
 
     private var currentTabTitle: String {
@@ -306,7 +317,7 @@ struct SupportMainCoordinatorView: View {
         case .templateSearch: return "搜索模板"
         case .customization: return "免费定制"
         case .secondCamera: return ""
-        case .settings: return L10n.text("settings.title", fallback: "设置")
+        case .settings: return "我的"
         }
     }
     @ToolbarContentBuilder
@@ -319,28 +330,19 @@ struct SupportMainCoordinatorView: View {
             }
         case .diaryPresets:
             ToolbarItem(placement: .topBarLeading) {
-                NavigationLink {
-                    materialSearchDestination
-                } label: { Image(systemName: "magnifyingglass") }
-                .accessibilityLabel("搜索\(materialToolbar.category.rawValue)")
+                if !showsPersonalMaterials {
+                    NavigationLink {
+                        materialSearchDestination
+                    } label: { Image(systemName: "magnifyingglass") }
+                    .accessibilityLabel("搜索\(materialToolbar.category.rawValue)")
+                }
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if materialToolbar.category.contentKind != nil {
+                if !showsPersonalMaterials && materialToolbar.category.contentKind != nil {
                     Button { materialToolbar.requestFilters() } label: {
                         Image(systemName: materialToolbar.hasActiveFilters
                             ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
                     }.accessibilityLabel("筛选\(materialToolbar.category.rawValue)")
-                }
-                Menu("我的素材", systemImage: "tray") {
-                    NavigationLink { PresetDownloadCenter(ownerID: String(session.accountID)) } label: {
-                        Label("模板下载", systemImage: "arrow.down.circle")
-                    }
-                    NavigationLink { StickerGalleryScreen(mine: true) } label: {
-                        Label("贴纸收藏", systemImage: "heart")
-                    }
-                    NavigationLink { FontGalleryScreen(mine: true) } label: {
-                        Label("我的字体", systemImage: "textformat")
-                    }
                 }
             }
         case .customization:

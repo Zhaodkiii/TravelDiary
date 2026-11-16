@@ -28,6 +28,7 @@ enum DiaryMakingFilm: String, CaseIterable, Identifiable {
     }
 }
 
+#if DEBUG
 struct DiaryMakingAnimationSettings: View {
     @AppStorage("DiaryMaking.animationEnabled") private var enabled = true
     @AppStorage("DiaryMaking.film") private var film = DiaryMakingFilm.factory
@@ -83,6 +84,8 @@ struct DiaryMakingAnimationSettings: View {
         }
     }
 }
+
+#endif
 
 nonisolated struct DiaryMakingCanvasFrameKey: PreferenceKey {
     static var defaultValue: CGRect { .zero }

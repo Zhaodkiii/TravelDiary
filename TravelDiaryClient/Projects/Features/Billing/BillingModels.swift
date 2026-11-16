@@ -154,10 +154,30 @@ struct MembershipStatus: Decodable {
         }
         return status == "expired" || expires_at != nil ? "会员已到期" : "尚未开通会员"
     }
-    var expiryText: String? {
-        guard let raw = expires_at else { return nil }
+    var planName: String {
+        switch product_id {
+        case "cn.zhaodk.TravelDiary.member.monthly": "月度会员"
+        case "cn.zhaodk.TravelDiary.member.yearly": "年度会员"
+        default: "Pro 会员"
+        }
+    }
+
+    var hasExpired: Bool { !active && sync_state == "fresh" && (status == "expired" || expires_at != nil) }
+
+    var subscriptionDate: (label: String, date: Date)? {
+        guard active, sync_state == "fresh" else { return nil }
+        if status == "in_grace_period" {
+            return Self.parseDate(expires_at).map { ("当前权益可用至", $0) }
+        }
+        if auto_renewal_status == "will_renew", let periodEnd = Self.parseDate(period_ends_at) {
+            return ("预计续费时间", periodEnd)
+        }
+        return Self.parseDate(expires_at).map { ("本期权益可用至", $0) }
+    }
+
+    private static func parseDate(_ raw: String?) -> Date? {
+        guard let raw else { return nil }
         let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = f.date(from: raw) ?? ISO8601DateFormatter().date(from: raw) else { return nil }
-        return date.formatted(date: .abbreviated, time: .shortened)
+        return f.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
     }
 }
