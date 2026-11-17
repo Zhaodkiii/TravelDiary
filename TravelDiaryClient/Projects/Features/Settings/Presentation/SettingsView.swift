@@ -7,15 +7,15 @@ struct SettingsView: View {
     let onAccountEntryTap: () -> Void
 
     @ObservedObject private var help = HelpFeedbackService.shared
-    @ObservedObject private var billing = BillingStore.shared
+    @ObservedObject private var billing = SubscriptionService.shared
     @ObservedObject private var production = DiaryProductionService.shared
     @State private var membershipError = false
     @State private var refreshing = false
     @Environment(\.scenePhase) private var scenePhase
 
     private var owner: String { String(session.accountID) }
-    private var member: MembershipStatus? { billing.owner == owner ? billing.membership : nil }
-    private var pending: Bool { billing.owner == owner && billing.membershipPending }
+    private var member: MembershipStatus? { billing.owner == owner ? billing.member : nil }
+    private var pending: Bool { billing.owner == owner && billing.operation == .awaitingApproval }
 
     var body: some View {
         List {
@@ -52,6 +52,11 @@ struct SettingsView: View {
                         Label("会员状态暂未更新，点此重试", systemImage: "arrow.clockwise")
                             .font(.footnote)
                     }.disabled(refreshing)
+                    #if DEBUG
+                    if let detail = BillingStore.shared.diagnostic {
+                        Text(detail).font(.caption.monospaced()).textSelection(.enabled)
+                    }
+                    #endif
                 }
             }.listRowBackground(DiaryLibraryStyle.surface)
                 .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
@@ -157,11 +162,8 @@ struct SettingsView: View {
         defer { refreshing = false }
         await help.refreshUnread(owner: owner)
         if production.owner == owner { await production.refresh() }
-        do {
-            try await billing.refreshMembership(owner: owner)
-            membershipError = false
-        } catch is CancellationError { }
-        catch { membershipError = true }
+        await billing.refresh(owner: owner)
+        membershipError = billing.error != nil
     }
     private var accountTrailingText: String {
         if session.isDeviceAccount { return "登录或注册" }

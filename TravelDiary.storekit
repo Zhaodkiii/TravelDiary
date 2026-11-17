@@ -1,0 +1,142 @@
+{
+  "appPolicies" : {
+    "eula" : "",
+    "policies" : [
+      {
+        "locale" : "en_US",
+        "policyText" : "",
+        "policyURL" : ""
+      }
+    ]
+  },
+  "identifier" : "A71D1A10",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_applicationInternalID" : "6824512234",
+    "_askToBuyEnabled" : false,
+    "_billingGracePeriodEnabled" : false,
+    "_billingIssuesEnabled" : false,
+    "_compatibilityTimeRate" : {
+      "3" : 6,
+      "5" : 1004
+    },
+    "_developerTeamID" : "4AN6PV98G7",
+    "_disableDialogs" : false,
+    "_failTransactionsEnabled" : false,
+    "_locale" : "zh_Hans",
+    "_renewalBillingIssuesEnabled" : false,
+    "_storefront" : "CHN",
+    "_storeKitErrors" : [
+
+    ],
+    "_timeRate" : 1005
+  },
+  "subscriptionBundleGroups" : [
+
+  ],
+  "subscriptionGroups" : [
+    {
+      "id" : "22519882",
+      "localizations" : [
+        {
+          "description" : "",
+          "displayName" : "寻寻仔 Pro",
+          "locale" : "zh_Hans"
+        }
+      ],
+      "name" : "旅行手帐会员",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "billingPlans" : [
+            {
+              "billingPlanType" : "BILLED_UPFRONT",
+              "commitmentDisplayPrice" : "128.00",
+              "displayPrice" : "128.00",
+              "internalID" : "6827651622_BILLED_UPFRONT",
+              "isEnabled" : true
+            }
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "128.00",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "6827651622",
+          "introductoryOffers" : [
+
+          ],
+          "localizations" : [
+            {
+              "description" : "本地订阅测试，不授予线上会员权益",
+              "displayName" : "寻寻仔 Pro（年度）",
+              "locale" : "zh_Hans"
+            }
+          ],
+          "productID" : "cn.zhaodk.TravelDiary.member.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "寻寻仔 Pro（年度）",
+          "subscriptionGroupID" : "22519882",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "billingPlans" : [
+            {
+              "billingPlanType" : "BILLED_UPFRONT",
+              "commitmentDisplayPrice" : "18.00",
+              "displayPrice" : "18.00",
+              "internalID" : "6827651285_BILLED_UPFRONT",
+              "isEnabled" : true
+            }
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "18.00",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "6827651285",
+          "introductoryOffers" : [
+
+          ],
+          "localizations" : [
+            {
+              "description" : "本地订阅测试，不授予线上会员权益",
+              "displayName" : "寻寻仔 Pro（月度）",
+              "locale" : "zh_Hans"
+            }
+          ],
+          "productID" : "cn.zhaodk.TravelDiary.member.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "寻寻仔 Pro（月度）",
+          "subscriptionGroupID" : "22519882",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        }
+      ]
+    }
+  ],
+  "subscriptionSuiteGroups" : [
+
+  ],
+  "version" : {
+    "major" : 6,
+    "minor" : 3
+  }
+}

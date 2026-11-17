@@ -238,161 +238,42 @@ struct BillingContentAction: View {
 }
 
 struct MembershipPurchaseScreen: View {
-    private struct Reservation: Decodable { let message: String }
     let owner: String
     var showsCloseButton = false
-    @ObservedObject private var store = BillingStore.shared
-    @State private var packages: [RevenueCat.Package] = []
+    @ObservedObject private var service = SubscriptionService.shared
     @State private var selectedID: String?
-    @State private var gift: ProAnnualGift?
-    @State private var error: String?
-    @State private var appStoreVerificationFailed = false
-    @State private var loading = false
-    @State private var processing = false
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
 
-    private var busy: Bool { loading || processing || store.busy }
-    private var canPurchase: Bool {
-        !busy && !appStoreVerificationFailed && !store.membershipPending &&
-        store.membership?.sync_state == "fresh" && store.membership?.sales_enabled == true &&
-        store.membership?.hasPurchasableBenefits == true
-    }
-    private var status: String? {
-        if store.membershipPending { return "购买已记录，权益同步中。请同步状态，勿重复付款。" }
-        if appStoreVerificationFailed { return "暂时无法验证 App Store，请重新验证后继续。" }
-        if loading { return "正在同步会员状态…" }
-        if let error { return error }
-        if store.membership?.sales_enabled == false { return "会员购买暂未开放" }
-        if store.membership?.hasExpired == true { return "会员已到期，可选择套餐重新开通。" }
-        if store.membership?.wallet_domain == "sandbox" { return "沙盒测试订阅" }
-        return nil
-    }
-    private var showsMembership: Bool {
-        guard let member = store.membership else { return false }
-        return member.active || member.sync_state != "fresh" || store.membershipPending
-    }
-    private var retryTitle: String {
-        appStoreVerificationFailed ? "重新验证 App Store" : "同步会员状态"
-    }
-
     var body: some View {
         Group {
-            if let member = store.membership, showsMembership {
-                ProMembershipView(owner: owner, member: member, busy: busy,
-                    confirming: appStoreVerificationFailed || store.membershipPending || member.sync_state != "fresh",
-                    notice: appStoreVerificationFailed || store.membershipPending || loading || error != nil ? status : nil,
-                    retryTitle: retryTitle,
-                    refresh: { await load(reverifyAppStore: appStoreVerificationFailed) },
-                    restore: { await restore() })
+            if let member = service.member, member.active {
+                ProMembershipView(owner: owner, member: member, busy: service.busy,
+                    confirming: false, notice: service.notice, retryTitle: "同步会员状态",
+                    refresh: { await service.refresh(owner: owner) }, restore: { await service.restore(owner: owner) })
             } else {
-                ProSubscriptionView(plans: ProSubscriptionPlan.make(packages: packages), selectedID: $selectedID,
-                    aiIncluded: store.membership?.ai_production_included == true,
-                    contentIncluded: (store.membership?.member_content_count ?? 0) > 0,
-                    gift: gift, busy: busy, canPurchase: canPurchase, status: status,
-                    retryTitle: retryTitle,
-                    purchase: { Task { await purchase() } }, restore: { Task { await restore() } },
-                    retry: { Task { await load(reverifyAppStore: appStoreVerificationFailed) } })
+                ProSubscriptionView(plans: service.plans, selectedID: $selectedID,
+                    aiIncluded: (service.serverMember ?? service.member)?.ai_production_included == true,
+                    contentIncluded: ((service.serverMember ?? service.member)?.member_content_count ?? 0) > 0,
+                    gift: service.gift, busy: service.busy,
+                    canPurchase: !service.busy && service.operation != .awaitingApproval && service.member?.sales_enabled == true,
+                    status: service.notice, retryTitle: "重新加载",
+                    purchase: { if let id = selectedID { Task { await service.purchase(id, owner: owner) } } },
+                    restore: { Task { await service.restore(owner: owner) } },
+                    retry: { Task { await service.refresh(owner: owner) } })
             }
         }
-        .navigationTitle(showsMembership ? "我的 Pro" : "寻寻仔 Pro").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(service.member?.active == true ? "我的 Pro" : "寻寻仔 Pro")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if showsCloseButton {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭", systemImage: "xmark") { dismiss() }
-                        .labelStyle(.iconOnly).disabled(processing || store.busy)
-                }
+                ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() }.disabled(service.busy) }
             }
         }
-        .interactiveDismissDisabled(processing || store.busy)
-        .task(id: owner) { await load() }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active && !busy { Task { await load() } }
-        }
-    }
-
-    private func purchase() async {
-        guard canPurchase, let package = packages.first(where: { $0.identifier == selectedID }) else { return }
-        processing = true
-        error = nil
-        defer { processing = false }
-        // Reserve the displayed gift before payment, and keep all SDK mutations in BillingStore.
-        let reservedGift = gift.flatMap { $0.sku == package.storeProduct.productIdentifier ? $0 : nil }
-        do {
-            if let id = reservedGift?.id {
-                let service = PrintOrderService.shared
-                let body = try service.json(["plan_id": id, "sku": package.storeProduct.productIdentifier])
-                do {
-                    let _: Reservation = try await service.request("campaign/annual/", owner: owner, body: body)
-                } catch {
-                    self.error = "暂未能确认年费赠礼名额，本次未发起 Apple 付款。请刷新活动后重试。"
-                    return
-                }
-            }
-            let purchased = try await store.purchaseMembership(package, owner: owner)
-            if !purchased { await releaseGift(reservedGift, package: package) }
-            else if store.membership?.active != true { error = "购买已记录，请同步会员状态，勿重复付款。" }
-            else { await DiaryProductionService.shared.refresh() }
-        } catch {
-            let nsError = error as NSError
-            if nsError.code == RevenueCat.ErrorCode.purchaseCancelledError.rawValue {
-                await releaseGift(reservedGift, package: package)
-            } else {
-                self.error = nsError.code == RevenueCat.ErrorCode.paymentPendingError.rawValue
-                    ? "购买等待批准，批准后请同步会员状态。" : error.localizedDescription
-            }
-        }
-    }
-    private func releaseGift(_ gift: ProAnnualGift?, package: RevenueCat.Package) async {
-        guard let id = gift?.id else { return }
-        let service = PrintOrderService.shared
-        if let body = try? service.json(["plan_id": id, "sku": package.storeProduct.productIdentifier, "cancelled": true]) {
-            let _: Reservation? = try? await service.request("campaign/annual/", owner: owner, body: body)
-        }
-    }
-    private func load(reverifyAppStore: Bool = false) async {
-        guard !busy else { return }
-        loading = true
-        defer { loading = false }
-        do {
-            try await store.refreshMembership(owner: owner, reverifyAppStore: reverifyAppStore)
-            appStoreVerificationFailed = false
-            error = nil
-            gift = nil
-            if !showsMembership {
-                packages = try await store.membershipPackages(owner: owner)
-                if !packages.contains(where: { $0.identifier == selectedID }) {
-                    selectedID = packages.first(where: { $0.packageType == .annual })?.identifier ?? packages.first?.identifier
-                }
-                if packages.isEmpty { error = "暂未获取到可售套餐，请稍后重试。" }
-                let offer: ProAnnualGift? = try? await PrintOrderService.shared.request("campaign/annual/", owner: owner)
-                gift = packages.contains(where: { $0.storeProduct.productIdentifier == offer?.sku && $0.packageType == .annual })
-                    && store.membership?.wallet_domain == "production" && offer?.id != nil && offer?.validityText != nil ? offer : nil
-            }
-        } catch is AppStoreVerificationFailure {
-            appStoreVerificationFailed = true
-            packages = []; gift = nil
-        } catch is CancellationError {
-        } catch {
-            packages = []; gift = nil
-            self.error = error.localizedDescription
-        }
-    }
-    private func restore() async {
-        guard !busy else { return }
-        processing = true
-        defer { processing = false }
-        do {
-            try await store.restoreMembership(owner: owner)
-            error = store.membership?.active == true ? nil : "未发现有效会员，请确认设备使用原购买时的 Apple 账户，再恢复购买。"
-            if store.membership?.active == true { await DiaryProductionService.shared.refresh() }
-        } catch is AppStoreVerificationFailure {
-            appStoreVerificationFailed = true
-            packages = []; gift = nil
-        } catch is CancellationError {
-        } catch {
-            self.error = error.localizedDescription
-        }
+        .interactiveDismissDisabled(service.busy)
+        .task(id: owner) { await service.refresh(owner: owner); selectedID = service.plans.first?.id }
+        .onChange(of: service.plans.map(\.id)) { _, ids in if !ids.contains(selectedID ?? "") { selectedID = ids.first } }
+        .onChange(of: scenePhase) { _, value in if value == .active { Task { await service.refresh(owner: owner) } } }
     }
 }
 

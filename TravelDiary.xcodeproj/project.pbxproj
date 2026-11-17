@@ -36,6 +36,7 @@
 		A1OSS0132FFB252D00137E68 /* libresolv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libresolv.tbd; path = usr/lib/libresolv.tbd; sourceTree = SDKROOT; };
 		A1TEST012FFB401000137E68 /* TravelDiaryTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TravelDiaryTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1TEST0C2FFB401000137E68 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/iPhoneOS.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
+		A71D1A100000000000000001 /* TravelDiary.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = TravelDiary.storekit; sourceTree = "<group>"; };
 		C0DE00100000000000000002 /* Vendor/WeChat/WechatOpenSDK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Vendor/WeChat/WechatOpenSDK.xcframework; sourceTree = SOURCE_ROOT; };
 		C0DE00200000000000000002 /* Vendor/Alipay/AlipaySDK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Vendor/Alipay/AlipaySDK.xcframework; sourceTree = SOURCE_ROOT; };
 		C0DE00200000000000000004 /* Vendor/Alipay/AlipaySDK.bundle */ = {isa = PBXFileReference; lastKnownFileType = wrapper.cfbundle; path = Vendor/Alipay/AlipaySDK.bundle; sourceTree = SOURCE_ROOT; };
@@ -249,6 +250,7 @@
 		85EA7EE92FFB252D00137E68 = {
 			isa = PBXGroup;
 			children = (
+				A71D1A100000000000000001 /* TravelDiary.storekit */,
 				85EA7EF42FFB252D00137E68 /* TravelDiaryClient */,
 				A1TEST062FFB401000137E68 /* TravelDiaryTests */,
 				85EA7EF32FFB252D00137E68 /* Products */,
@@ -581,12 +583,16 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.6;
+				MARKETING_VERSION = 1.6.1;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
 					"-lc++",
 					"-lz",
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					CoreTelephony,
 				);
 				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/PureLayout/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/AliyunOSSSDK/module.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = cn.zhaodk.TravelDiary;
@@ -648,12 +654,16 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.6;
+				MARKETING_VERSION = 1.6.1;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
 					"-lc++",
 					"-lz",
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					CoreTelephony,
 				);
 				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/PureLayout/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/AliyunOSSSDK/module.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = cn.zhaodk.TravelDiary;
@@ -689,6 +699,10 @@
 					"-ObjC",
 					"-lc++",
 					"-lz",
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					CoreTelephony,
 				);
 				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/PureLayout/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/AliyunOSSSDK/module.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = cn.zhaodk.TravelDiaryTests;
@@ -717,6 +731,10 @@
 					"-ObjC",
 					"-lc++",
 					"-lz",
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					CoreTelephony,
 				);
 				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/PureLayout/module.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/TravelDiaryClient/Core/Utilities/Objective-C/Modules/AliyunOSSSDK/module.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = cn.zhaodk.TravelDiaryTests;

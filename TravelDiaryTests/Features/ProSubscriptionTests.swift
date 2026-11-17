@@ -46,3 +46,65 @@ struct ProSubscriptionTests {
         #expect(gift.included_pages == nil)
     }
 }
+
+@MainActor
+private final class SubscriptionStub: SubscriptionProvider {
+    enum Result { case purchased, cancelled, pending, failed }
+    var result: Result = .purchased
+    var active = false
+    func products() async throws -> [ProSubscriptionPlan] { [] }
+    func status() async throws -> MembershipStatus {
+        MembershipStatus(active: active, expires_at: nil, period_ends_at: nil, verified_at: nil,
+            sync_state: "fresh", status: active ? "active" : "inactive", auto_renewal_status: "unknown",
+            product_id: SubscriptionCatalog.ids[0], wallet_domain: "xcode", sales_enabled: true,
+            member_content_count: 0, ai_production_included: true)
+    }
+    func purchase(_ id: String) async throws -> MembershipStatus? {
+        switch result {
+        case .purchased: active = true; return try await status()
+        case .cancelled: return nil
+        case .pending: throw SubscriptionAwaitingApproval()
+        case .failed: throw BillingFailure("network failed")
+        }
+    }
+    func restore() async throws -> MembershipStatus { try await status() }
+}
+
+@MainActor
+struct SubscriptionStateTests {
+    @Test func cancellationAndFailureNeverBecomePending() async {
+        let provider = SubscriptionStub()
+        let service = SubscriptionService(owner: "test", provider: provider)
+        provider.result = .cancelled
+        await service.purchase(SubscriptionCatalog.ids[0], owner: "test")
+        #expect(service.operation == .idle)
+        #expect(service.error == nil)
+        provider.result = .failed
+        await service.purchase(SubscriptionCatalog.ids[0], owner: "test")
+        #expect(service.operation == .idle)
+        #expect(service.error != nil)
+        provider.result = .purchased
+        await service.purchase(SubscriptionCatalog.ids[0], owner: "test")
+        #expect(service.member?.active == true)
+        #expect(service.error == nil)
+    }
+    @Test func approvedPurchaseCanBeRecoveredAfterPending() async {
+        let provider = SubscriptionStub()
+        let service = SubscriptionService(owner: "test", provider: provider)
+        provider.result = .pending
+        await service.purchase(SubscriptionCatalog.ids[0], owner: "test")
+        #expect(service.operation == .awaitingApproval)
+        #expect(!service.busy)
+        provider.active = true
+        await service.restore(owner: "test")
+        #expect(service.operation == .idle)
+        #expect(service.member?.active == true)
+    }
+    @Test func wrongAccountCannotPurchase() async {
+        let provider = SubscriptionStub()
+        let service = SubscriptionService(owner: "original", provider: provider)
+        await service.purchase(SubscriptionCatalog.ids[0], owner: "different")
+        #expect(!provider.active)
+        #expect(service.operation == .idle)
+    }
+}

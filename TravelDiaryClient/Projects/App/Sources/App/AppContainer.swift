@@ -58,6 +58,7 @@ final class AppContainer {
         CustomizationService.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
         CloudFontRepository.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
         BillingStore.shared.configure(engine: backend.engine, sessions: contentDependencies.coordinator.sessionStore)
+        SubscriptionService.shared.configure(sessions: contentDependencies.coordinator.sessionStore)
         self.coreDataStack = coreDataStack
         self.contentDependencies = contentDependencies
         self.ossConfigurationStore = ossConfigurationStore

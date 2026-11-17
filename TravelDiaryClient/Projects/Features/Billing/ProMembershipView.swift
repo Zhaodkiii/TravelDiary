@@ -97,6 +97,9 @@ struct ProMembershipView: View {
 
     @ViewBuilder private var subscriptionManagement: some View {
         switch member.wallet_domain {
+        case "xcode":
+            Text("本地测试订阅。制作额度与赠券仍由服务器管理。可在 Xcode 的 StoreKit 交易管理器中测试到期、退款与续订。")
+                .font(.footnote).foregroundStyle(DiaryLibraryStyle.secondary)
         case "sandbox":
             Button {
                 Task { await openSandboxManagement() }

@@ -12,19 +12,18 @@ struct AppStoreVerificationFailure: LocalizedError {
 @MainActor
 final class BillingStore: ObservableObject {
     static let shared = BillingStore()
-    @Published private(set) var membershipPending = false
-    @Published private(set) var membership: MembershipStatus?
     @Published private(set) var wallet: DiamondWallet?
     @Published private(set) var catalog: RechargeCatalog?
     @Published private(set) var packages: [String: RevenueCat.Package] = [:]
     @Published private(set) var pending: [DiamondOrder] = []
     @Published private(set) var bootstrapInfo: BillingBootstrap?
     @Published private(set) var busy = false
+    @Published private(set) var diagnostic: String?
     @Published var message: String?
     private(set) var owner: String?
     private var engine: SupportNetworkEngine?
     private var subscription: AnyCancellable?
-    private var generation = UUID()
+    private(set) var generation = UUID()
     private var identityTask: Task<Void, Error>?
     private var sdkTail: Task<Void, Never>?
     private let clock = ContinuousClock()
@@ -41,7 +40,7 @@ final class BillingStore: ObservableObject {
             guard owner != next else { return }
             generation = UUID(); identityTask?.cancel(); identityTask = nil
             owner = next
-            membershipPending = false; membership = nil; wallet = nil; catalog = nil; packages = [:]; pending = []; bootstrapInfo = nil; message = nil; busy = false
+            diagnostic = nil; wallet = nil; catalog = nil; packages = [:]; pending = []; bootstrapInfo = nil; message = nil; busy = false
         }
     }
     private func validate(_ expected: String, stamp: UUID) throws {
@@ -51,14 +50,25 @@ final class BillingStore: ObservableObject {
         let stamp = generation
         try validate(expected, stamp: stamp)
         guard let engine else { throw BillingFailure("服务正在初始化") }
-        var headers: [String: String] = [:]
-        if let session = bootstrapInfo?.session_id { headers["X-Billing-Session"] = session }
-        if let key { headers["Idempotency-Key"] = key }
-        let components = URLComponents(string: path)
-        let data = try body.map { try JSONSerialization.data(withJSONObject: $0, options: .sortedKeys) }
-        let response = try await engine.sendRaw(SupportNetworkRequest(method: method, path: "/api/v1/billing/" + (components?.path ?? path), queryItems: components?.queryItems, headers: headers, body: data.map { .raw($0, contentType: "application/json") } ?? .none, strategy: NetworkStrategy(requiresAuth: true, allowETag: false)))
-        try validate(expected, stamp: stamp)
-        return try JSONDecoder().decode(T.self, from: response.data)
+        let requestID = UUID().uuidString
+        var headers: [String: String] = ["X-Request-ID": requestID]
+        var httpStatus: Int?
+        do {
+            if let session = bootstrapInfo?.session_id { headers["X-Billing-Session"] = session }
+            if let key { headers["Idempotency-Key"] = key }
+            let components = URLComponents(string: path)
+            let data = try body.map { try JSONSerialization.data(withJSONObject: $0, options: .sortedKeys) }
+            let response = try await engine.sendRaw(SupportNetworkRequest(method: method, path: "/api/v1/billing/" + (components?.path ?? path), queryItems: components?.queryItems, headers: headers, body: data.map { .raw($0, contentType: "application/json") } ?? .none, strategy: NetworkStrategy(requiresAuth: true, allowETag: false)))
+            httpStatus = response.httpResponse.statusCode
+            try validate(expected, stamp: stamp)
+            return try JSONDecoder().decode(T.self, from: response.data)
+        } catch {
+            if generation == stamp {
+                recordDiagnostic(error, stage: "HTTP " + (URLComponents(string: path)?.path ?? "billing"),
+                                 requestID: requestID, status: httpStatus)
+            }
+            throw error
+        }
     }
     func ready(owner expected: String, reverifyAppStore: Bool = false) async throws {
         guard owner == expected else { throw BillingFailure("使用身份已变化，请重新打开购买页面") }
@@ -78,17 +88,13 @@ final class BillingStore: ObservableObject {
             let proof = try await appStoreProof(owner: expected, stamp: stamp, reverify: reverifyAppStore)
             let info: BillingBootstrap
             do {
-                info = try await request("bootstrap/", owner: expected, method: .post, body: ["signed_app_transaction": proof])
+                info = try await request("subscription-bootstrap/", owner: expected, method: .post, body: ["signed_app_transaction": proof])
             } catch {
                 logBillingError(error, stage: "billing.bootstrap")
                 throw error
             }
             try validate(expected, stamp: stamp)
-            #if DEBUG
-            let expectedDeployment = "development"
-            #else
-            let expectedDeployment = "production"
-            #endif
+            let expectedDeployment = AppEnvironment.current.billingDeployment
             guard info.deployment == expectedDeployment else {
                 throw BillingFailure("订阅服务环境不匹配，请更新服务端配置后重试")
             }
@@ -105,10 +111,13 @@ final class BillingStore: ObservableObject {
                 }
                 try validate(expected, stamp: stamp)
                 bootstrapInfo = info
-                membershipPending = UserDefaults.standard.bool(forKey: "billing.membership.pending.\(info.rc_app_user_id)")
             }
             sdkTail = Task { _ = try? await login.value }
-            try await login.value
+            do { try await login.value }
+            catch {
+                if generation == stamp { recordDiagnostic(error, stage: "RevenueCat.logIn") }
+                throw error
+            }
         }
         identityTask = task
         do { try await task.value; if generation == stamp { identityTask = nil } }
@@ -144,7 +153,20 @@ final class BillingStore: ObservableObject {
         }
     }
 
+    func recordDiagnostic(_ error: Error, stage: String, requestID: String? = nil, status: Int? = nil) {
+        var code = status
+        if case let SupportNetworkError.http(value, _, _) = error { code = value }
+        let ns = error as NSError
+        // Never include localizedDescription, userInfo, request bodies, receipts or credentials.
+        let detail = "stage=\(stage) backend=\(AppEnvironment.current.billingDeployment) "
+            + "http=\(code.map(String.init) ?? "-") requestID=\(requestID ?? "-") "
+            + "type=\(String(reflecting: type(of: error))) domain=\(ns.domain) code=\(ns.code)"
+        diagnostic = detail
+        os_log("%{public}@", log: billingLog, type: .error, detail)
+    }
+
     private func logBillingError(_ error: Error, stage: String) {
+        if diagnostic == nil { recordDiagnostic(error, stage: stage) }
         let failure = error as NSError
         let underlying = (error as? StoreKitError).flatMap { storeKitError -> NSError? in
             if case .systemError(let error) = storeKitError { return error as NSError }
@@ -157,7 +179,7 @@ final class BillingStore: ObservableObject {
         os_log("%{public}@", log: billingLog, type: .error, diagnostic)
     }
     /// Keep the RevenueCat identity fixed until StoreKit finishes the operation.
-    private func serializedSDK<T: Sendable>(_ expected: String, stamp: UUID, operation: @escaping @MainActor () async throws -> T) async throws -> T {
+    func serializedSDK<T: Sendable>(_ expected: String, stamp: UUID, operation: @escaping @MainActor () async throws -> T) async throws -> T {
         let previous = sdkTail
         let task = Task { @MainActor in
             await previous?.value
@@ -267,78 +289,5 @@ extension BillingStore {
     func requireContent(kind: String, targetID: String, owner: String) async throws {
         let access = try await contentAccess(kind: kind, targetID: targetID, owner: owner)
         guard access.access.can_use else { throw BillingFailure("请先在内容详情开通会员或永久解锁") }
-    }
-}
-
-extension BillingStore {
-    func membershipOffering(owner expected: String) async throws -> RevenueCat.Offering {
-        let stamp = generation
-        try await ready(owner: expected)
-        let offerings = try await Purchases.shared.offerings()
-        try validate(expected, stamp: stamp)
-        guard let offering = offerings.all["membership"], !offering.availablePackages.isEmpty else {
-            throw BillingFailure("会员订阅页面暂不可用，请稍后重试")
-        }
-        return offering
-    }
-    func membershipPackages(owner expected: String) async throws -> [RevenueCat.Package] {
-        let stamp = generation
-        try await ready(owner: expected)
-        let offerings = try await Purchases.shared.offerings()
-        try validate(expected, stamp: stamp)
-        let allowed = ["cn.zhaodk.TravelDiary.member.monthly", "cn.zhaodk.TravelDiary.member.yearly"]
-        return (offerings.all["membership"]?.availablePackages ?? []).filter {
-            allowed.contains($0.storeProduct.productIdentifier) && $0.storeProduct.subscriptionPeriod != nil
-        }
-    }
-    func refreshMembership(owner expected: String, reverifyAppStore: Bool = false) async throws {
-        try await ready(owner: expected, reverifyAppStore: reverifyAppStore)
-        let value: MembershipStatus = try await request("membership/", owner: expected, method: .post, body: [:])
-        if membership?.active != value.active { invalidateContentCatalogs(owner: expected) }
-        membership = value
-        if value.active && value.sync_state == "fresh" { setMembershipPending(false) }
-        if DiaryProductionService.shared.owner == expected {
-            await DiaryProductionService.shared.refreshQuota()
-        }
-    }
-    private func setMembershipPending(_ value: Bool) {
-        membershipPending = value
-        if let identity = bootstrapInfo?.rc_app_user_id {
-            UserDefaults.standard.set(value, forKey: "billing.membership.pending.\(identity)")
-        }
-    }
-    func purchaseMembership(_ package: RevenueCat.Package, owner expected: String) async throws -> Bool {
-        let stamp = generation
-        try await ready(owner: expected)
-        guard bootstrapInfo?.flags.membership_sales_enabled == true, !busy else { throw BillingFailure("会员购买暂未开放") }
-        busy = true; defer { if generation == stamp { busy = false } }
-        try await refreshMembership(owner: expected)
-        guard ["cn.zhaodk.TravelDiary.member.monthly", "cn.zhaodk.TravelDiary.member.yearly"].contains(package.storeProduct.productIdentifier), package.storeProduct.subscriptionPeriod != nil else {
-            throw BillingFailure("此套餐不属于当前会员订阅")
-        }
-        guard membership?.sales_enabled == true, membership?.hasPurchasableBenefits == true else { throw BillingFailure("会员服务暂未开放") }
-        guard membership?.active != true else { throw BillingFailure("已有有效会员，请通过管理订阅调整套餐") }
-        guard !membershipPending, membership?.sync_state == "fresh" else { throw BillingFailure("请先同步或恢复上次购买记录") }
-        setMembershipPending(true)
-        do {
-            let result = try await serializedSDK(expected, stamp: stamp) { try await Purchases.shared.purchase(package: package) }
-            try validate(expected, stamp: stamp)
-            if result.userCancelled { setMembershipPending(false); return false }
-            try await refreshMembership(owner: expected)
-            return true
-        } catch {
-            if generation == stamp && (error as NSError).code == RevenueCat.ErrorCode.purchaseCancelledError.rawValue { setMembershipPending(false) }
-            throw error
-        }
-    }
-    func restoreMembership(owner expected: String) async throws {
-        let stamp = generation
-        try await ready(owner: expected)
-        guard !busy else { throw BillingFailure("购买正在处理中，请稍后") }
-        busy = true; defer { if generation == stamp { busy = false } }
-        _ = try await serializedSDK(expected, stamp: stamp) { try await Purchases.shared.restorePurchases() }
-        try validate(expected, stamp: stamp)
-        try await refreshMembership(owner: expected)
-        if membership?.sync_state == "fresh" { setMembershipPending(false) }
     }
 }

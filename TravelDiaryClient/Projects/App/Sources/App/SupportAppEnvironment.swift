@@ -26,6 +26,8 @@ enum SupportAppEnvironment: String, CaseIterable, Sendable {
         }
     }
 
+    var billingDeployment: String { self == .debug ? "development" : "production" }
+
     var siteBaseURL: URL {
         switch self {
         case .debug:
