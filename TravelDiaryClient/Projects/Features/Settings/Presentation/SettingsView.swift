@@ -28,7 +28,7 @@ struct SettingsView: View {
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 5) {
                             Text(accountTrailingText).font(.title3.weight(.semibold))
-                            Text(session.isDeviceAccount ? "登录，管理你的账户与会员" : "账户与安全")
+                            Text(session.isDeviceAccount ? "可选登录，同步你的手帐" : "账户与安全")
                                 .font(.subheadline).foregroundStyle(DiaryLibraryStyle.secondary)
                         }
                         Spacer(minLength: 4)
@@ -40,13 +40,8 @@ struct SettingsView: View {
                 .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
 
             Section {
-                if session.isDeviceAccount {
-                    Button(action: onAccountEntryTap) { membershipCard }
-                        .buttonStyle(.plain).accessibilityHint("登录后查看会员权益")
-                } else {
-                    NavigationLink { MembershipPurchaseScreen(owner: owner).id(owner) } label: { membershipCard }
-                        .accessibilityIdentifier("profile.membership")
-                }
+                NavigationLink { MembershipPurchaseScreen(owner: owner).id(owner) } label: { membershipCard }
+                    .accessibilityIdentifier("profile.membership")
                 NavigationLink {
                     Form { DiaryProductionQuotaSection() }
                         .navigationTitle("制作额度").navigationBarTitleDisplayMode(.inline)
@@ -130,7 +125,6 @@ struct SettingsView: View {
     }
 
     private var membershipTitle: String {
-        if session.isDeviceAccount { return "把旅途，认真收藏" }
         if pending { return "正在确认订阅状态" }
         if let member { return member.title }
         return "把旅途，认真收藏"
@@ -163,7 +157,6 @@ struct SettingsView: View {
         defer { refreshing = false }
         await help.refreshUnread(owner: owner)
         if production.owner == owner { await production.refresh() }
-        guard !session.isDeviceAccount else { return }
         do {
             try await billing.refreshMembership(owner: owner)
             membershipError = false

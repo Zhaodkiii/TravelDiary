@@ -118,11 +118,29 @@ struct DiaryOnboardingTests {
         #expect(tabBar.selectedItem?.title == "随记")
     }
 
+    @Test func bundledPlaybackIsReadyBeforeAnyAsyncLoading() throws {
+        let root = try #require(Bundle.main.url(forResource: "OnboardingThemes", withExtension: "bundle"))
+        let start = ContinuousClock.now
+        let papers = try DiaryOnboardingAssembly.readPlayback(from: root.appendingPathComponent("Playback"))
+        print("ONBOARDING prepared playback read: \(start.duration(to: .now))")
+        #expect(papers.count == 8)
+        for spread in 0..<4 {
+            let assembly = DiaryOnboardingAssembly(initialSpread: spread)
+            #expect(assembly.phase == .floating)
+            #expect(assembly.canAct)
+            #expect(assembly.displayed == spread)
+        }
+        // Incomplete packages must fail cleanly, not create partially indexed pages.
+        #expect(throws: (any Error).self) {
+            try DiaryOnboardingAssembly.readPlayback(from: root.appendingPathComponent("missing"))
+        }
+    }
+
     @Test func assemblyWaitsForBindingAndPreservesCompletedSpreads() async throws {
         let assembly = DiaryOnboardingAssembly()
         assembly.reduceMotion = true
         await assembly.load()
-        #expect(assembly.papers.count == 6)
+        #expect(assembly.papers.count == 8)
         for _ in 0..<20 where assembly.phase == .blank { await Task.yield() }
         #expect(assembly.phase == .floating)
         #expect(!assembly.showsCopy)
@@ -132,8 +150,11 @@ struct DiaryOnboardingTests {
             #expect(paper.pieces.contains { $0.floatingIndex != nil })
             #expect(paper.background.pngData() != paper.complete.pngData())
         }
-        // 喜洲左页本身没有文字；每个跨页至少一叶必须在落纸后显字。
-        for spread in 0..<3 {
+        // Group metadata can call a parent “text” while it contains a real photo.
+        #expect(assembly.papers[6].pieces.contains { $0.photo && !$0.text })
+        #expect(assembly.papers[7].pieces.contains { $0.photo && !$0.text })
+        // Each spread must reveal its original typography after binding.
+        for spread in 0..<4 {
             #expect(assembly.papers[(spread * 2)...(spread * 2 + 1)].contains {
                 $0.assembled.pngData() != $0.complete.pngData()
             })

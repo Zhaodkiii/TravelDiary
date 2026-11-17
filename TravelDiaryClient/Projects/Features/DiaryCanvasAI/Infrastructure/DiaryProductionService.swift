@@ -50,7 +50,7 @@ final class DiaryProductionService: ObservableObject {
             // Device and registered accounts share production ownership and quota.
             if case let .signedIn(session) = state {
                 account = String(session.accountID)
-                canPurchaseMembership = !session.isDeviceAccount
+                canPurchaseMembership = true
             } else {
                 account = nil
                 canPurchaseMembership = false

@@ -33,7 +33,7 @@ struct DiaryProductionQuotaSection: View {
                     if service.canPurchaseMembership {
                         NavigationLink("查看 Pro 权益") { MembershipPurchaseScreen(owner: owner) }
                     } else {
-                        Text("绑定正式账号后可开通 Pro，获得更多制作额度。")
+                        Text("使用身份正在准备，请稍后重试。")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                 }

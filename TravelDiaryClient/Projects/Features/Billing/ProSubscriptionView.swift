@@ -9,7 +9,7 @@ struct ProSubscriptionPlan: Identifiable {
     let monthlyEquivalent: String?
     let savings: Int?
     var title: String { annual ? "年度会员" : "月度会员" }
-    var renewal: String { "\(price)/\(annual ? "年" : "月")，自动续订，可在 Apple 账户中取消。" }
+    var renewal: String { "\(price)/\(annual ? "年" : "月")，确认购买后由 Apple 账户扣款；自动续订，可在 Apple 账户中取消。" }
 
     static func savingPercent(annual: Decimal, monthly: Decimal, sameCurrency: Bool) -> Int? {
         guard sameCurrency, annual > 0, monthly > 0, annual < monthly * 12 else { return nil }
@@ -44,6 +44,17 @@ struct ProAnnualGift: Decodable {
     let included_pages: Int?
     let valid_days: Int?
     let ends_at: String?
+    var validityText: String? {
+        guard let valid_days, valid_days > 0, let ends_at else { return nil }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let end = iso.date(from: ends_at) ?? ISO8601DateFormatter().date(from: ends_at) else { return nil }
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "zh_CN")
+        format.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        format.dateFormat = "yyyy年M月d日 HH:mm"
+        return "活动截至 \(format.string(from: end))（北京时间）。抵扣券有效期取到账后 \(valid_days) 天与活动截止时间中的较晚时间；名额用完即止。"
+    }
     var reward: String { percent == 50 ? "标准装订半价抵扣券" : "标准装订抵扣券" }
     var detail: String {
         var text = "指定年费首次付费赠\(reward)，适用\(product ?? "活动指定规格")"
@@ -93,7 +104,7 @@ struct ProSubscriptionView: View {
                         }
                         if contentIncluded { Text("会员内容在订阅有效期内可用，具体范围以内容页的会员标记为准。") }
                         Text("月付与年付享有相同的 Pro 数字权益。实体印制单独下单，年费赠礼以当前展示的活动规则为准。")
-                        Text("购买由 Apple 安全处理。换设备或重新安装后，可使用原购买账户恢复购买。")
+                        Text("无需注册即可订阅，购买由 Apple 安全处理。恢复购买请使用原购买时的 Apple 账户。")
                     }.font(.footnote).foregroundStyle(DiaryLibraryStyle.secondary)
                         .padding(.top, 12).fixedSize(horizontal: false, vertical: true)
                 }.font(.subheadline).tint(ink).padding(.horizontal, 24)
@@ -137,7 +148,7 @@ struct ProSubscriptionView: View {
             Text("给每段旅途，多一点创作空间")
                 .font(.headline)
             if aiIncluded {
-                benefit("sparkles", "更多 AI 制作额度", "把灵感接着做下去，5 小时与 7 天额度按周期恢复。")
+                benefit("sparkles", "更多 AI 制作额度", "免费版使用 7 天基础额度；Pro 使用会员额度，同时受 5 小时和 7 天周期限制。按实际 AI 用量扣减，不是无限制作。")
             }
             if contentIncluded {
                 benefit("square.stack.3d.up", "精选会员模板与素材", "使用已开放的会员内容，找到适合这段旅途的表达。")
@@ -178,7 +189,7 @@ struct ProSubscriptionView: View {
             Text("赠\(gift.reward)").font(.subheadline.weight(.semibold))
             Text(gift.detail).font(.footnote).foregroundStyle(DiaryLibraryStyle.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("具体有效期以到账券面为准；活动名额用完即止。")
+            Text(gift.validityText ?? "赠礼规则正在更新，请刷新后查看完整有效期。")
                 .font(.caption).foregroundStyle(DiaryLibraryStyle.secondary)
         }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
             .background(DiaryLibraryStyle.surface, in: RoundedRectangle(cornerRadius: 20))

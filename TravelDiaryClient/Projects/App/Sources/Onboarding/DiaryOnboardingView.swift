@@ -6,16 +6,16 @@ struct DiaryOnboardingView: View {
     let onFinish: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var page = Self.initialPage
-    @State private var requestedSpread = Self.initialPage
+    @State private var requestedSpread = min(Self.initialPage, 3)
     @State private var isTurning = false
-    @State private var assembly = DiaryOnboardingAssembly(initialSpread: Self.initialPage)
+    @State private var assembly = DiaryOnboardingAssembly(initialSpread: min(Self.initialPage, 3))
 
     private static var initialPage: Int {
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         if let flag = arguments.firstIndex(of: "-diary-onboarding-page"),
            let value = arguments.dropFirst(flag + 1).first.flatMap(Int.init),
-           (1...3).contains(value) {
+           (1...5).contains(value) {
             return value - 1
         }
         #endif
@@ -26,12 +26,12 @@ struct DiaryOnboardingView: View {
     private let yellow = Color(red: 1, green: 0.79, blue: 0.28)
     private let buttonFill = Color(red: 0.15, green: 0.145, blue: 0.135)
     private let buttonInk = Color(red: 0.99, green: 0.98, blue: 0.96)
-    private let titles = ["把旅行，留在纸上", "看看一页旅行的模样", "把手艺与风景一起收藏", "选一个喜欢的风格"]
+    private let titles = ["把旅行，留在纸上", "把相爱，写成我们的故事", "把这一岁，好好珍藏", "陪你长大，记住每一步"]
     private let captions = [
-        "照片、票根和一句心情，\n拼成值得翻看的旅行手帐。",
-        "喜洲古镇\n让照片和旅途里的小细节待在一起。",
-        "周城扎染\n把蓝白纹样与旅行记忆留在同一页。",
-        "点击风格，开始制作你的旅行手帐。"
+        "收藏大理的风景，也收藏当时的心情。",
+        "从很高兴认识你，到一起走过的每一天。",
+        "照片里的笑容，是送给新一岁的礼物。",
+        "把成长的小小瞬间，装订成家的回忆。"
     ]
 
     var body: some View {
@@ -44,80 +44,81 @@ struct DiaryOnboardingView: View {
                         Image(systemName: "chevron.left").frame(width: 44, height: 44)
                     }
                     .opacity(page == 0 ? 0 : 1)
-                    .disabled(page == 0 || isPreparingHome || isTurning || (page < 3 && !assembly.canNavigate))
+                    .disabled(page == 0 || isPreparingHome || isTurning || (page < 4 && !assembly.canNavigate))
                     .accessibilityLabel("上一步")
                     Spacer()
-                    Text("旅行手帐")
+                    Text(["大理", "爱情", "生日", "亲子", "手帐风格"][page])
                         .font(.system(size: 12, weight: .semibold))
                         .padding(.horizontal, 14).padding(.vertical, 7)
                         .background(yellow, in: Capsule())
                     Spacer()
-                    Button(page == 3 ? "先逛逛" : "跳过", action: onFinish)
+                    Button("跳过", action: onFinish)
                         .font(.system(size: 14))
                         .frame(minWidth: 44, minHeight: 44)
                         .disabled(isPreparingHome)
                 }
                 .padding(.horizontal, 18)
 
-                if page == 3 {
+
+                if page == 4 {
                     stylePicker
                 } else {
-                ScrollView {
-                    VStack(spacing: 24) {
-                        preview
-                            .frame(height: max(230, min(geometry.size.height * 0.72, 720)))
-                            .padding(.top, 12)
-                        VStack(spacing: 12) {
-                            Text(titles[page])
-                                .font(.system(size: 28, weight: .bold, design: .rounded))
-                                .fixedSize(horizontal: false, vertical: true)
-                            Text(captions[page])
-                                .font(.system(size: 16))
-                                .foregroundStyle(ink.opacity(0.6))
-                                .lineSpacing(5)
+                    GeometryReader { stage in
+                        ZStack(alignment: .bottom) {
+                            preview
+                            VStack(spacing: 12) {
+                                Text(titles[page])
+                                    .font(.system(size: stage.size.height < 450 ? 23 : 28, weight: .bold, design: .rounded))
+                                Text(captions[page])
+                                    .font(.system(size: stage.size.height < 450 ? 14 : 16))
+                                    .foregroundStyle(ink.opacity(0.6))
+                                    .lineSpacing(5)
+                            }
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, stage.size.height * 0.17)
+                            .opacity(isTurning || !assembly.showsCopy ? 0 : 1)
+                            .accessibilityHidden(isTurning || !assembly.showsCopy)
+                            .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: assembly.showsCopy)
                         }
-                        .opacity(isTurning || !assembly.showsCopy ? 0 : 1)
-                        .accessibilityHidden(isTurning || !assembly.showsCopy)
-                        .frame(height: assembly.showsCopy ? nil : 0)
+                        .frame(width: stage.size.width, height: stage.size.height)
                         .clipped()
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: assembly.showsCopy)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                    }.padding(.bottom, 20)
+                    }
+
                 }
-                .scrollIndicators(.hidden)
 
                 VStack(spacing: 22) {
                     HStack(spacing: 8) {
-                        ForEach(0..<4) { index in
+                        ForEach(0..<5) { index in
                             Circle().fill(index == page ? ink : ink.opacity(0.16))
                                 .frame(width: 6, height: 6)
                         }
                     }
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("第 \(page + 1) 页，共四页")
-                    Button {
-                        if assembly.phase == .floating { assembly.bind() }
-                        else {
-                            navigate(to: page + 1)
+                    .accessibilityLabel("第 \(page + 1) 页，共五页")
+                    if page < 4 {
+                        Button {
+                            if assembly.phase == .floating { assembly.bind() }
+                            else {
+                                navigate(to: page + 1)
+                            }
+                        } label: {
+                            HStack(spacing: 10) {
+                                if isPreparingHome { ProgressView().tint(buttonInk) }
+                                Text(isPreparingHome ? "正在准备首页…" : assembly.buttonTitle)
+                            }
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(buttonInk)
+                            .frame(maxWidth: .infinity, minHeight: 44)
                         }
-                    } label: {
-                        HStack(spacing: 10) {
-                            if isPreparingHome { ProgressView().tint(buttonInk) }
-                            Text(isPreparingHome ? "正在准备首页…" : assembly.buttonTitle)
-                        }
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(buttonInk)
-                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
+                        .tint(buttonFill)
+                        .disabled(isPreparingHome || isTurning || !assembly.canAct)
+                        .accessibilityIdentifier("onboarding.next")
                     }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.capsule)
-                    .tint(buttonFill)
-                    .disabled(isPreparingHome || isTurning || !assembly.canAct)
-                    .accessibilityIdentifier("onboarding.next")
                 }
                 .padding(.horizontal, 30).padding(.top, 12).padding(.bottom, 20)
-                }
             }
             .frame(maxWidth: 680).frame(maxWidth: .infinity)
         }
@@ -128,23 +129,22 @@ struct DiaryOnboardingView: View {
         .task {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-onboarding-verify") {
-                for target in 0..<3 {
+                for target in 0..<4 {
                     while !assembly.canAct { try? await Task.sleep(for: .milliseconds(100)); if Task.isCancelled { return } }
                     recordCheck("ONBOARDING_CHECK floating page=\(page) phase=\(assembly.phase)")
                     try? await Task.sleep(for: .seconds(2))
                     assembly.bind()
-                    // Repeated taps must not start another assembly or advance the page.
-                    assembly.bind()
                     while !assembly.showsCopy { try? await Task.sleep(for: .milliseconds(100)); if Task.isCancelled { return } }
                     recordCheck("ONBOARDING_CHECK bound page=\(page) phase=\(assembly.phase)")
                     try? await Task.sleep(for: .seconds(2))
-                    navigate(to: target + 1)
+                    if target < 3 { navigate(to: target + 1) }
                 }
+                navigate(to: 4)
                 recordCheck("ONBOARDING_CHECK styles page=\(page)")
-                try? await Task.sleep(for: .seconds(1))
-                navigate(to: 2)
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: .seconds(2))
+                navigate(to: 3)
                 recordCheck("ONBOARDING_CHECK return page=\(page) phase=\(assembly.phase)")
+
             }
             #endif
         }
@@ -211,11 +211,11 @@ struct DiaryOnboardingView: View {
         try? (old + message + "\n").write(to: url, atomically: true, encoding: .utf8)
     }
     private func navigate(to target: Int) {
-        guard !isTurning, (0...3).contains(target), target != page,
-              page == 3 || assembly.canNavigate else { return }
-        if target == 3 || page == 3 {
-            requestedSpread = min(target, 2)
-            if target < 3 { assembly.settle(on: target) }
+        guard !isTurning, (0..<5).contains(target), target != page,
+              page == 4 || assembly.canNavigate else { return }
+        if target == 4 || page == 4 {
+            requestedSpread = min(target, 3)
+            if target < 4 { assembly.settle(on: target) }
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { page = target }
         } else if assembly.phase == .failed {
             page = target
@@ -230,7 +230,7 @@ struct DiaryOnboardingView: View {
     private var preview: some View {
         DiaryOnboardingBook(requestedSpread: requestedSpread, assembly: assembly,
             onSettled: { displayed in
-                guard (0...2).contains(displayed) else { return }
+                guard (0..<4).contains(displayed) else { return }
                 page = displayed
                 requestedSpread = displayed
                 isTurning = false

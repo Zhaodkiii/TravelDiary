@@ -22,7 +22,6 @@ final class BillingStore: ObservableObject {
     @Published private(set) var busy = false
     @Published var message: String?
     private(set) var owner: String?
-    private var formalAccount = false
     private var engine: SupportNetworkEngine?
     private var subscription: AnyCancellable?
     private var generation = UUID()
@@ -37,12 +36,11 @@ final class BillingStore: ObservableObject {
         subscription = sessions.$state.sink { [weak self] state in
             guard let self else { return }
             let next: String?
-            let formal: Bool
-            if case let .signedIn(session) = state { next = String(session.accountID); formal = !session.isDeviceAccount }
-            else { next = nil; formal = false }
-            guard owner != next || formalAccount != formal else { return }
+            if case let .signedIn(session) = state { next = String(session.accountID) }
+            else { next = nil }
+            guard owner != next else { return }
             generation = UUID(); identityTask?.cancel(); identityTask = nil
-            owner = next; formalAccount = formal
+            owner = next
             membershipPending = false; membership = nil; wallet = nil; catalog = nil; packages = [:]; pending = []; bootstrapInfo = nil; message = nil; busy = false
         }
     }
@@ -63,7 +61,7 @@ final class BillingStore: ObservableObject {
         return try JSONDecoder().decode(T.self, from: response.data)
     }
     func ready(owner expected: String, reverifyAppStore: Bool = false) async throws {
-        guard owner == expected, formalAccount else { throw BillingFailure("请先绑定正式账号，再使用会员与钻石服务") }
+        guard owner == expected else { throw BillingFailure("使用身份已变化，请重新打开购买页面") }
         if let info = bootstrapInfo {
             let formatter = ISO8601DateFormatter()
             formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

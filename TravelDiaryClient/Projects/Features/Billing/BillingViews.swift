@@ -322,7 +322,12 @@ struct MembershipPurchaseScreen: View {
             if let id = reservedGift?.id {
                 let service = PrintOrderService.shared
                 let body = try service.json(["plan_id": id, "sku": package.storeProduct.productIdentifier])
-                let _: Reservation = try await service.request("campaign/annual/", owner: owner, body: body)
+                do {
+                    let _: Reservation = try await service.request("campaign/annual/", owner: owner, body: body)
+                } catch {
+                    self.error = "暂未能确认年费赠礼名额，本次未发起 Apple 付款。请刷新活动后重试。"
+                    return
+                }
             }
             let purchased = try await store.purchaseMembership(package, owner: owner)
             if !purchased { await releaseGift(reservedGift, package: package) }
@@ -362,7 +367,7 @@ struct MembershipPurchaseScreen: View {
                 if packages.isEmpty { error = "暂未获取到可售套餐，请稍后重试。" }
                 let offer: ProAnnualGift? = try? await PrintOrderService.shared.request("campaign/annual/", owner: owner)
                 gift = packages.contains(where: { $0.storeProduct.productIdentifier == offer?.sku && $0.packageType == .annual })
-                    && store.membership?.wallet_domain == "production" && offer?.id != nil ? offer : nil
+                    && store.membership?.wallet_domain == "production" && offer?.id != nil && offer?.validityText != nil ? offer : nil
             }
         } catch is AppStoreVerificationFailure {
             appStoreVerificationFailed = true
@@ -379,7 +384,7 @@ struct MembershipPurchaseScreen: View {
         defer { processing = false }
         do {
             try await store.restoreMembership(owner: owner)
-            error = store.membership?.active == true ? nil : "未发现有效会员，请确认登录原购买账号。"
+            error = store.membership?.active == true ? nil : "未发现有效会员，请确认设备使用原购买时的 Apple 账户，再恢复购买。"
             if store.membership?.active == true { await DiaryProductionService.shared.refresh() }
         } catch is AppStoreVerificationFailure {
             appStoreVerificationFailed = true

@@ -10,6 +10,7 @@ final class DiaryOnboardingAssembly {
         let image: UIImage
         let rect: CGRect
         let photo: Bool
+        let text: Bool
         var floatingIndex: Int?
     }
     struct Paper {
@@ -27,7 +28,79 @@ final class DiaryOnboardingAssembly {
     private var generation = 0
     var reduceMotion = false
 
-    init(initialSpread: Int = 0) { displayed = initialSpread }
+    private static let bundledPlayback: [Paper]? = {
+        guard let root = Bundle.main.url(forResource: "OnboardingThemes", withExtension: "bundle") else { return nil }
+        return try? readPlayback(from: root.appendingPathComponent("Playback"))
+    }()
+
+    init(initialSpread: Int = 0, usePreparedPlayback: Bool = true) {
+        displayed = initialSpread
+        // Fixed onboarding art is baked ahead of shipping, never composed on first launch.
+        if usePreparedPlayback, let cached = Self.bundledPlayback {
+            papers = cached
+            phase = .floating
+        }
+    }
+
+    struct PlaybackIndex: Codable {
+        let version: Int
+        let pages: [Page]
+        struct Page: Codable {
+            let size: CGSize
+            let pieces: [Part]
+        }
+        struct Part: Codable {
+            let id: UUID
+            let rect: CGRect
+            let photo: Bool
+            let text: Bool
+            let floatingIndex: Int?
+        }
+    }
+
+    static func readPlayback(from root: URL) throws -> [Paper] {
+        let index = try JSONDecoder().decode(PlaybackIndex.self, from: Data(contentsOf: root.appendingPathComponent("index.json")))
+        guard index.version == 1, index.pages.count == 8 else { throw DiaryEditorError.invalidDocument }
+        func image(_ name: String) throws -> UIImage {
+            guard let image = UIImage(contentsOfFile: root.appendingPathComponent(name + (name.contains("-piece-") ? ".png" : ".jpg")).path) else {
+                throw DiaryEditorError.missingResource
+            }
+            return image
+        }
+        return try index.pages.enumerated().map { page, info in
+            let pieces = try info.pieces.enumerated().map { part, meta in
+                Piece(id: meta.id, image: try image("\(page)-piece-\(part)"), rect: meta.rect,
+                      photo: meta.photo, text: meta.text, floatingIndex: meta.floatingIndex)
+            }
+            return Paper(size: info.size, background: try image("\(page)-background"),
+                         assembled: try image("\(page)-assembled"), complete: try image("\(page)-complete"), pieces: pieces)
+        }
+    }
+
+    #if DEBUG
+    /// Regenerate after changing the bundled templates or the rendering rules.
+    func exportPlayback(to root: URL) throws {
+        guard papers.count == 8 else { throw DiaryEditorError.invalidDocument }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        func write(_ image: UIImage, _ name: String) throws {
+            let isPiece = name.contains("-piece-")
+            guard let data = isPiece ? image.pngData() : image.jpegData(compressionQuality: 0.9) else { throw DiaryEditorError.missingResource }
+            try data.write(to: root.appendingPathComponent(name + (isPiece ? ".png" : ".jpg")), options: .atomic)
+        }
+        for (page, paper) in papers.enumerated() {
+            try write(paper.background, "\(page)-background")
+            try write(paper.assembled, "\(page)-assembled")
+            try write(paper.complete, "\(page)-complete")
+            for (part, piece) in paper.pieces.enumerated() { try write(piece.image, "\(page)-piece-\(part)") }
+        }
+        let index = PlaybackIndex(version: 1, pages: papers.map { paper in
+            PlaybackIndex.Page(size: paper.size, pieces: paper.pieces.map {
+                PlaybackIndex.Part(id: $0.id, rect: $0.rect, photo: $0.photo, text: $0.text, floatingIndex: $0.floatingIndex)
+            })
+        })
+        try JSONEncoder().encode(index).write(to: root.appendingPathComponent("index.json"), options: .atomic)
+    }
+    #endif
     var showsCopy: Bool { phase == .complete || phase == .failed }
     var canAct: Bool { phase == .floating || phase == .complete || phase == .failed }
     var canNavigate: Bool { canAct }
@@ -44,11 +117,11 @@ final class DiaryOnboardingAssembly {
     func load() async {
         guard papers.isEmpty, phase == .loading else { return }
         do {
-            guard let root = Bundle.main.url(forResource: "OnboardingDali", withExtension: "bundle") else { throw DiaryEditorError.missingResource }
+            guard let root = Bundle.main.url(forResource: "OnboardingThemes", withExtension: "bundle") else { throw DiaryEditorError.missingResource }
             let manifest = try JSONDecoder().decode(PresetManifest.self, from: Data(contentsOf: root.appendingPathComponent("manifest.json")))
             let package = DiaryPresetPackage(root: root, manifest: manifest)
             let sourcePages = Dictionary(uniqueKeysWithValues: try package.pages.map { ($0.id, $0) })
-            guard let units = manifest.readingUnits, units.count == 3, units.allSatisfy({ $0.pageIDs.count == 2 }) else { throw DiaryEditorError.invalidDocument }
+            guard let units = manifest.readingUnits, units.count == 4, units.allSatisfy({ $0.pageIDs.count == 2 }) else { throw DiaryEditorError.invalidDocument }
             let assetIDs = Dictionary(uniqueKeysWithValues: manifest.assetTable.keys.map { ($0, UUID()) })
             var loaded: [Paper] = []
             for pageID in units.flatMap(\.pageIDs) {
@@ -81,6 +154,12 @@ final class DiaryOnboardingAssembly {
     }
     private static func prepare(document: DiaryDocument, images: [UUID: UIImage]) async throws -> Paper {
         guard let content = document.objects[document.rootContentID] else { throw DiaryEditorError.invalidDocument }
+        func photo(_ layer: DiaryLayer, depth: Int = 0) -> Bool {
+            if layer.isContentPhoto || layer.semanticKind == .photo { return true }
+            guard depth < 12, let child = layer.contentID, let object = document.objects[child] else { return false }
+            return object.layers.contains { photo($0, depth: depth + 1) }
+        }
+        func text(_ layer: DiaryLayer) -> Bool { Self.isText(layer) && !photo(layer) }
         let pageRect = CGRect(origin: .zero, size: content.referenceSize)
         func render(ids: Set<UUID>, rect: CGRect, background: Bool, ink: Bool = false) -> UIImage {
             var copy = document
@@ -100,21 +179,37 @@ final class DiaryOnboardingAssembly {
         let visible = content.layers.filter(\.visible)
         let background = render(ids: Set(visible.filter(isBackground).map(\.id)), rect: pageRect, background: true)
         await Task.yield(); try Task.checkCancellation()
-        let assembled = render(ids: Set(visible.filter { !isText($0) }.map(\.id)), rect: pageRect, background: true)
+        let assembled = render(ids: Set(visible.filter { !text($0) }.map(\.id)), rect: pageRect, background: true)
         await Task.yield(); try Task.checkCancellation()
         let complete = render(ids: Set(visible.map(\.id)), rect: pageRect, background: true, ink: true)
         var pieces: [Piece] = []
-        for layer in visible where !isBackground(layer) && !isText(layer) && !layer.isPhotoFrame {
+        for layer in visible where !isBackground(layer) && !layer.isPhotoFrame && !layer.name.contains("品牌") {
             try Task.checkCancellation()
             let frames = visible.filter { $0.isPhotoFrame && $0.frameTargetID == layer.id }
-            let group = [layer] + frames
+            var group = [layer] + frames
+            if text(layer) {
+                func projectedBounds(_ item: DiaryLayer) -> CGRect {
+                    DiaryPageRenderer.effectiveTransform(item, siblings: content.layers).projection.bounds(
+                        DiaryPageRenderer.bounds(item, document: document, siblings: content.layers))
+                }
+                let textBounds = projectedBounds(layer)
+                let backing = visible.filter {
+                    !text($0) && !isBackground($0) && !photo($0) &&
+                    ($0.name.contains("纸")) &&
+                    projectedBounds($0).contains(CGPoint(x: textBounds.midX, y: textBounds.midY))
+                }.min {
+                    let a = projectedBounds($0), b = projectedBounds($1)
+                    return a.width * a.height < b.width * b.height
+                }
+                if let backing { group = [backing, layer] }
+            }
             let bounds = group.reduce(CGRect.null) { rect, item in
                 rect.union(DiaryPageRenderer.effectiveTransform(item, siblings: content.layers).projection.bounds(
                     DiaryPageRenderer.bounds(item, document: document, siblings: content.layers)))
             }.intersection(pageRect)
             guard !bounds.isNull, bounds.width > 1, bounds.height > 1 else { continue }
             pieces.append(Piece(id: layer.id, image: render(ids: Set(group.map(\.id)), rect: bounds, background: false),
-                                rect: bounds, photo: layer.isContentPhoto || layer.semanticKind == .photo))
+                                rect: bounds, photo: photo(layer), text: text(layer)))
             await Task.yield()
         }
         // Two hero photos and one decoration per leaf keep the floating collage legible.
@@ -122,10 +217,14 @@ final class DiaryOnboardingAssembly {
             pieces[$0].rect.width * pieces[$0].rect.height > pieces[$1].rect.width * pieces[$1].rect.height
         }.prefix(2)
         var selected = Array(heroes)
-        if let decoration = pieces.indices.filter({ !pieces[$0].photo }).max(by: {
+        if let decoration = pieces.indices.filter({ !pieces[$0].photo && !pieces[$0].text }).max(by: {
             pieces[$0].rect.width * pieces[$0].rect.height < pieces[$1].rect.width * pieces[$1].rect.height
         }) { selected.append(decoration) }
         for (slot, index) in selected.enumerated() { pieces[index].floatingIndex = slot }
+        let textIndices = pieces.indices.filter { index in
+            pieces[index].text && !visible.contains { $0.id == pieces[index].id && ($0.name.contains("来源") || $0.name.contains("参考")) }
+        }.prefix(2)
+        for (slot, index) in textIndices.enumerated() { pieces[index].floatingIndex = 10 + slot }
         return Paper(size: content.referenceSize, background: background, assembled: assembled, complete: complete, pieces: pieces)
     }
 
@@ -155,7 +254,7 @@ final class DiaryOnboardingAssembly {
         phase = .turning
     }
     func settle(on spread: Int) {
-        guard (0..<3).contains(spread) else { return }
+        guard (0..<4).contains(spread) else { return }
         generation += 1
         let token = generation
         animationTask?.cancel()
@@ -225,17 +324,17 @@ struct DiaryOnboardingBook: View {
 
     var body: some View {
         GeometryReader { geometry in
-            if assembly.papers.count == 6 {
+            if assembly.papers.count == 8 {
                 let size = assembly.papers[0].size
                 let ratio = (2 * size.width / size.height * 0.955 + 0.045) / (1 - 0.955 * DiaryBookSpine.halfGapFraction)
-                let width = min(geometry.size.width, geometry.size.height * 0.62 * ratio)
+                let width = min(geometry.size.width, geometry.size.height * 0.49 * ratio)
                 let height = width / ratio
-                let origin = CGPoint(x: (geometry.size.width - width) / 2, y: geometry.size.height * 0.36)
+                let origin = CGPoint(x: (geometry.size.width - width) / 2, y: geometry.size.height * 0.12)
                 ZStack(alignment: .topLeading) {
                     collageBackdrop(size: geometry.size)
                     ZStack {
                         Image("DiaryBookLeather").resizable()
-                        DiaryPageCurlReader(spreadCount: 3, spread: $spread, reduceMotion: reduceMotion,
+                        DiaryPageCurlReader(spreadCount: 4, spread: $spread, reduceMotion: reduceMotion,
                             allowsPageActions: false, onTransitionChange: { turning, displayed in
                                 if !turning {
                                     assembly.settle(on: displayed)
@@ -250,13 +349,15 @@ struct DiaryOnboardingBook: View {
                     .frame(width: width, height: height)
                     .shadow(color: .black.opacity(0.15), radius: 12, y: 10)
                     .offset(x: origin.x, y: origin.y)
-                    collageLettering(size: geometry.size)
                     floatingMaterials(stage: geometry.size, book: CGRect(origin: origin, size: CGSize(width: width, height: height)))
                 }
             } else if assembly.phase == .failed {
-                Image("OnboardingSpread" + String(requestedSpread)).resizable().scaledToFit()
-                    .frame(maxHeight: .infinity)
-                    .accessibilityLabel("手帐成品预览，动画暂不可用")
+                if let root = Bundle.main.url(forResource: "OnboardingThemes", withExtension: "bundle"),
+                   let image = UIImage(contentsOfFile: root.appendingPathComponent("fallback\(requestedSpread).jpg").path) {
+                    Image(uiImage: image).resizable().scaledToFit()
+                        .frame(maxHeight: .infinity)
+                        .accessibilityLabel("手帐成品预览，动画暂不可用")
+                }
             } else {
                 ProgressView("正在打开手帐…").frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -277,9 +378,6 @@ struct DiaryOnboardingBook: View {
     }
 
     private var collageVisible: Bool { assembly.phase == .floating || assembly.phase == .binding }
-    private var destination: String { ["大理 · 龙龛", "喜洲 · 古镇", "周城 · 扎染"][assembly.displayed] }
-    private var memory: String { ["把一会儿安静，\n留给洱海的风。", "斜阳落在木窗前，\n日子也慢了下来。", "把一片蓝，\n留给慢下来的自己。"][assembly.displayed] }
-
     private func collageBackdrop(size: CGSize) -> some View {
         Canvas { context, bounds in
             for x in stride(from: CGFloat(8), to: bounds.width, by: 18) {
@@ -295,50 +393,6 @@ struct DiaryOnboardingBook: View {
             context.stroke(route, with: .color(.brown.opacity(0.28)), style: StrokeStyle(lineWidth: 1, dash: [4, 6]))
         }
         .mask(LinearGradient(colors: [.clear, .black.opacity(0.8), .black, .clear], startPoint: .top, endPoint: .bottom))
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
-    private func collageLettering(size: CGSize) -> some View {
-        ZStack {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("TRAVEL NOTES").font(.system(size: 10, weight: .medium, design: .serif)).tracking(3)
-                Text(destination).font(.system(size: 23, weight: .semibold, design: .serif))
-            }
-            .foregroundStyle(Color(red: 0.23, green: 0.33, blue: 0.28))
-            .rotationEffect(.degrees(-5))
-            .position(x: size.width * 0.29, y: size.height * 0.065)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("一张照片 · 一段旅程").font(.system(size: 11, weight: .medium)).tracking(1)
-                Text(memory).font(.system(size: 21, weight: .medium, design: .serif)).lineSpacing(6)
-                Text("把喜欢的瞬间，亲手装订成册").font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-            .foregroundStyle(Color(red: 0.27, green: 0.33, blue: 0.28))
-            .padding(18)
-            .background(Color(red: 0.96, green: 0.92, blue: 0.80), in: RoundedRectangle(cornerRadius: 3))
-            .overlay(alignment: .top) {
-                Rectangle().fill(Color(red: 0.67, green: 0.72, blue: 0.53).opacity(0.7))
-                    .frame(width: 65, height: 17).rotationEffect(.degrees(-7)).offset(y: -8)
-            }
-            .shadow(color: .brown.opacity(0.12), radius: 6, y: 5)
-            .rotationEffect(.degrees(-6))
-            .position(x: size.width * 0.43, y: size.height * 0.84)
-
-            Label("沿途收集", systemImage: "camera.macro")
-                .font(.system(size: 12, weight: .medium))
-                .padding(.horizontal, 13).padding(.vertical, 9)
-                .background(Color(red: 0.87, green: 0.90, blue: 0.77), in: Capsule())
-                .rotationEffect(.degrees(8))
-                .position(x: size.width * 0.78, y: size.height * 0.71)
-            Text("✦").font(.system(size: 36)).foregroundStyle(.brown.opacity(0.55))
-                .position(x: size.width * 0.13, y: size.height * 0.72)
-            Text("DALI / YUNNAN").font(.system(size: 10, design: .monospaced)).tracking(2)
-                .foregroundStyle(.brown.opacity(0.7))
-                .rotationEffect(.degrees(4)).position(x: size.width * 0.66, y: size.height * 0.96)
-        }
-        .opacity(collageVisible ? 1 : 0)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: collageVisible)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -359,17 +413,17 @@ struct DiaryOnboardingBook: View {
                                         width: piece.rect.width / paper.size.width * pageWidth,
                                         height: piece.rect.height / paper.size.height * inner.height)
                     let slot = piece.floatingIndex ?? 0
-                    let floatingWidth = stage.width * (piece.photo ? (slot == 0 ? 0.40 : 0.28) : 0.25)
-                    let scale = min(floatingWidth / max(1, target.width), stage.height * 0.43 / max(1, target.height))
-                    let floatingX = stage.width * (side == 0 ? (slot == 1 ? 0.30 : 0.24) : (slot == 1 ? 0.72 : 0.74))
-                    let floatingY = stage.height * (slot == 0 ? (side == 0 ? 0.27 : 0.34) : slot == 1 ? 0.49 : 0.14)
+                    let floatingWidth = stage.width * (piece.text ? 0.42 : piece.photo ? (slot == 0 ? 0.40 : 0.28) : 0.30)
+                    let scale = min(floatingWidth / max(1, target.width), stage.height * (piece.text ? 0.105 : 0.34) / max(1, target.height))
+                    let floatingX = stage.width * (piece.text ? (side == 0 ? 0.29 : 0.72) : side == 0 ? (slot == 1 ? 0.30 : 0.24) : (slot == 1 ? 0.72 : 0.74))
+                    let floatingY = stage.height * (piece.text ? (0.73 + Double(max(0, slot - 10)) * 0.13) : slot == 0 ? (side == 0 ? 0.22 : 0.33) : slot == 1 ? 0.49 : 0.10)
                     Image(uiImage: piece.image).resizable()
                         .frame(width: target.width, height: target.height)
                         .scaleEffect(landed ? 1 : scale)
-                        .rotationEffect(.degrees(landed ? 0 : (side == 0 ? -10 : 9)))
-                        .shadow(color: .black.opacity(landed ? 0 : 0.23), radius: landed ? 0 : 10, x: 0, y: landed ? 0 : 16)
+                        .rotationEffect(.degrees(landed ? 0 : (piece.text ? 0 : side == 0 ? -6 : 6)))
+                        .shadow(color: .black.opacity(landed || piece.text ? 0 : 0.18), radius: landed ? 0 : 10, x: 0, y: landed ? 0 : 16)
                         .position(x: landed ? target.midX : floatingX, y: landed ? target.midY : floatingY)
-                        .opacity(active && (landed || piece.floatingIndex != nil) ? 1 : 0)
+                        .opacity(active && (landed ? !piece.text : piece.floatingIndex != nil) ? 1 : 0)
                         .animation(reduceMotion || assembly.phase != .floating ? nil : .easeInOut(duration: 0.38), value: active)
                         .animation(reduceMotion ? nil : .interpolatingSpring(stiffness: 115, damping: 19).delay(piece.photo ? 0 : 0.18), value: landed)
                 }
